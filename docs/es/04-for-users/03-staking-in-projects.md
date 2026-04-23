@@ -1,0 +1,179 @@
+# Staking en proyectos
+
+**Audiencia:** quien ya tiene GOV y quiere recibir CREDIT como reward.
+**Requisitos previos:** [Directed staking (concepto)](../02-core-concepts/02-directed-staking.md), [Tener GOV](02-holding-gov.md).
+
+## El modelo mental en 3 líneas
+
+1. Eliges **un** proyecto (`projectId`).
+2. Bloqueas GOV por **14 a 365+ días** — multiplier 1x a 4x.
+3. Rondas después, reclamas CREDIT proporcional al burn que ese proyecto generó × cuánto pesa tu stake dentro del proyecto.
+
+## Eligiendo un proyecto
+
+Antes de stakear, verifica en el Registry:
+
+- Status = `Active` (los proyectos `Pending`/`Probation`/`Removed` bloquean stake nuevo).
+- Edad del proyecto (si está en probation inicial por tiempo, el share es /4).
+- Burn histórico en las últimas rondas (señal de tracción real).
+
+Herramientas (vía UI del hub):
+
+```solidity
+// status
+registry.getProject(projectId);            // struct completa
+registry.isActive(projectId);              // bool
+registry.isInProbation(projectId);         // probation inicial por tiempo
+
+// burn historico
+burnTracker.getBurnForProjectInRound(round, projectId);
+
+// competencia
+staking.getTotalWeight(projectId);         // cuanto peso ya tiene el proyecto
+```
+
+## Eligiendo el lock
+
+Función en `Staking._multiplier`:
+
+- `< 14 días`: revierte (`LockTooShort`).
+- `14 días`: multiplier = 1x.
+- `365 días`: multiplier = 4x.
+- Entre 14 y 365 días: lineal.
+- `> 365 días`: aceptado, multiplier satura en 4x (y el lock real se respeta).
+
+```
+  multiplier
+       ^
+   4x  |-----______________________
+       |          _ _ _
+   3x  |     ___-
+       |   _-
+   2x  | _-
+       |_-
+   1x  |
+       +-------------------------------->  lockDuration
+      14d                 365d
+```
+
+**Reglas de bolsillo:**
+
+- Menor lock posible (14d, 1x): solo vale la pena si tienes certeza de salir pronto. APR efectivo bajo.
+- Lock medio (90-180d, 1.6x–2.4x): flexibilidad vs peso, buen default.
+- Lock máximo (365d, 4x): maximiza peso por GOV. Úsalo si confías en el proyecto por un año.
+- Lock > 365d: no agrega peso, solo suma inmovilización. Raramente ventajoso a menos que quieras señalizar commitment extremo.
+
+## La operación `stake`
+
+```solidity
+// Prerequisito: tienes GOV y ya aprobaste el Staking
+GOV.approve(staking, amount);
+
+// Staking
+staking.stake(
+    uint256 projectId,     // el proyecto elegido
+    uint256 amount,        // wei de GOV
+    uint64 lockDuration    // segundos, >= 14 dias
+);
+```
+
+La función revierte si:
+
+- `amount == 0` — `ZeroAmount`.
+- `lockDuration < 14 days` — `LockTooShort`.
+- El proyecto no está `Active` — `ProjectNotActive`.
+- Allowance insuficiente — `ERC20InsufficientAllowance`.
+- Balance insuficiente — `ERC20InsufficientBalance`.
+
+En caso de éxito:
+
+- GOV va al contrato Staking.
+- `positions[you][projectId]` graba `{amount, lockStartAt=now, lockDuration}`.
+- Tres checkpoints se escriben en `block.number`.
+- El peso se calcula como `amount * multiplier(lockDuration) / 1e18`.
+
+## Operaciones subsiguientes
+
+### `increaseStake(projectId, amount)`
+
+Aumenta el amount **sin resetear el lock**. `lockStartAt` y `lockDuration` quedan iguales.
+
+Consecuencia: el peso aumenta proporcionalmente. Si el lock ya expiró, puedes inmediatamente llamar a `unstake` con el nuevo amount — el `increaseStake` no reabre el lock.
+
+### `extendLock(projectId, newLockDuration)`
+
+Aumenta el `lockDuration` (siempre estrictamente mayor que el actual). `lockStartAt` **no** cambia. Aumenta el peso.
+
+Útil cuando tu lock está cerca de expirar y quieres extender la posición sin perder el peso.
+
+### `stake` cuando ya hay posición (consolidación)
+
+Si llamas a `stake` y ya tienes posición en `(user, projectId)`:
+
+- `newAmount = old.amount + amount`.
+- `newLockDuration = max(remaining, lockDuration)` — el mayor entre "lo que quedaba del lock antiguo" y "el nuevo lock pedido".
+- **`lockStartAt` es reseteado** a `block.timestamp`.
+
+Eso es diferente de `increaseStake` — `stake` resetea el lock. Elección consciente:
+
+- `stake`: cuando quieres re-comprometer el tiempo.
+- `increaseStake`: cuando solo quieres aumentar el principal.
+
+## Unstake
+
+```solidity
+staking.unstake(projectId, amount);     // parcial
+staking.unstakeAll(projectId);          // total
+```
+
+Condiciones:
+
+- `amount > 0` y `amount <= position.amount`.
+- **Lock expirado**: `block.timestamp >= lockStartAt + lockDuration`.
+- **O el proyecto es `Removed`** — bypass del lock.
+
+Si el lock aún está vigente y el proyecto no es `Removed`, revierte con `LockNotExpired`.
+
+**Observación importante**: la probation punitiva (`Status.Probation`) **NO** bypassea el lock. Solo `Status.Removed` bypassea.
+
+## Lo que ganas
+
+Tras cada ronda R ser `finalizeRound`eada, puedes reclamar reward:
+
+```
+amount = projectShare(round, projectId)
+       × tuPeso(round)
+       ÷ pesoTotal(round)
+
+projectShare = totalEmission × burnDelProyectoEnR-1 ÷ burnTotalR-1
+             (si no hubo burn: via peso global)
+
+Si el proyecto esta en probation inicial: projectShare /= 4.
+```
+
+La fórmula completa está en [Rewards distribution](../02-core-concepts/04-rewards-distribution.md).
+
+## Simulación hipotética
+
+Alice stakeó 50.000 GOV en el `projectId=42` con lock de 365 días (peso = 200k). El proyecto generó 600k de burn en la ronda R-1, el total de la ronda fue 950k, la emisión de la ronda R es 902k CREDIT. El peso total en el proyecto (incluyendo a Alice) es 400k.
+
+```
+projectShare = 902_000 × 600_000 / 950_000 = 569.684 CREDIT
+aliceShare   = 569.684 × 200.000 / 400.000 = 284.842 CREDIT
+```
+
+Alice reclama 284.842 CREDIT en el round R. Si la ronda es semanal y mantiene la posición por un año con burn similar, captura ~14.8M CREDIT en 52 rondas (ilustrativo — la realidad depende de la dinámica del uso).
+
+## Edge cases útiles
+
+**Stake en más de un proyecto**: cada `projectId` es una posición independiente. Puedes stakear en 5 proyectos diferentes si tienes GOV suficiente.
+
+**Emergency exit por Remoción**: si la DAO remueve el proyecto vía propuesta, tu lock es bypasseado. Emite evento `EarlyUnstakeAllowed` además de `Unstaked` — puedes retirar inmediatamente.
+
+**Extend vs stake**: `extendLock` **no** cambia el amount. `stake` en una posición existente **suma al amount** y puede aumentar el lock. Úsalos según tu necesidad.
+
+**El lock expiró y no retiraste**: tu posición aún genera peso con multiplier original. Si quieres parar de generar peso, haz `unstake` o `unstakeAll`. Ignorar simplemente = peso continúa acumulando.
+
+---
+
+**Siguiente →** [Votar en propuestas](04-voting.md)

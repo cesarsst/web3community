@@ -1,0 +1,14 @@
+'solc --version' running
+'solc @openzeppelin=node_modules/@openzeppelin contracts/Treasury.sol --combined-json abi,ast,bin,bin-runtime,srcmap,srcmap-runtime,userdoc,devdoc,hashes --optimize --optimize-runs 200 --evm-version paris --allow-paths .,/home/ubuntu/web3community/contracts' running
+INFO:Detectors:
+Detector: arbitrary-send-eth
+Treasury.sweepETH(address,uint256) (contracts/Treasury.sol#296-314) sends eth to arbitrary user
+	Dangerous calls:
+	- (ok,None) = to.call{value: amount}() (contracts/Treasury.sol#310)
+Reference: https://github.com/crytic/slither/wiki/Detector-Documentation#functions-that-send-ether-to-arbitrary-destinations
+INFO:Detectors:
+Detector: low-level-calls
+Low level call in Treasury.sweepETH(address,uint256) (contracts/Treasury.sol#296-314):
+	- (ok,None) = to.call{value: amount}() (contracts/Treasury.sol#310)
+Reference: https://github.com/crytic/slither/wiki/Detector-Documentation#low-level-calls
+INFO:Slither:contracts/Treasury.sol analyzed (11 contracts with 101 detectors), 2 result(s) found

@@ -1,0 +1,30 @@
+# syntax=docker/dockerfile:1.6
+#
+# Container do hardhat node para ambiente server/Traefik.
+# No boot:
+#   1. Sobe `hardhat node` bindando em 0.0.0.0:8545
+#   2. Espera o RPC responder
+#   3. Deploya o módulo Ignition (perfil dev.json)
+#   4. Escreve /shared/config.json (chainId + rpcUrl público + addresses)
+#   5. Mantém o node em foreground
+#
+# O /shared é um volume compartilhado com o container do frontend, que serve
+# esse mesmo arquivo como estático em /config.json pra o browser ler em
+# runtime (addresses mudam a cada reboot porque hardhat node é in-memory).
+
+FROM node:20-alpine
+WORKDIR /app
+
+RUN apk add --no-cache bash curl
+
+COPY package.json package-lock.json* ./
+RUN npm ci --no-audit --no-fund
+
+COPY . .
+RUN npx hardhat compile
+
+COPY docker/boot-node.sh /usr/local/bin/boot-node.sh
+RUN chmod +x /usr/local/bin/boot-node.sh
+
+EXPOSE 8545
+CMD ["/usr/local/bin/boot-node.sh"]

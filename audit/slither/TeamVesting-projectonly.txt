@@ -1,0 +1,27 @@
+'solc --version' running
+'solc @openzeppelin=node_modules/@openzeppelin contracts/TeamVesting.sol --combined-json abi,ast,bin,bin-runtime,srcmap,srcmap-runtime,userdoc,devdoc,hashes --optimize --optimize-runs 200 --evm-version paris --allow-paths .,/home/ubuntu/web3community/contracts' running
+INFO:Detectors:
+Detector: incorrect-equality
+TeamVesting.release() (contracts/TeamVesting.sol#241-249) uses a dangerous strict equality:
+	- amount == 0 (contracts/TeamVesting.sol#243)
+Reference: https://github.com/crytic/slither/wiki/Detector-Documentation#dangerous-strict-equalities
+Triage: ACCEPTED. A comparacao `amount == 0` aqui e sobre o retorno de `releasable()` (uint256 puro, sem dependencia de token externo). E o guard canonico para "nada a liberar" — nao ha arredondamento ou manipulacao adversaria que torne essa igualdade perigosa no contexto. Padrao equivalente ao `amount == 0` do Treasury.transfer, tambem aceito no triage.
+INFO:Detectors:
+Detector: timestamp
+TeamVesting.releasable() (contracts/TeamVesting.sol#203-209) uses timestamp for comparisons
+	Dangerous comparisons:
+	- vested <= released (contracts/TeamVesting.sol#205)
+TeamVesting.release() (contracts/TeamVesting.sol#241-249) uses timestamp for comparisons
+	Dangerous comparisons:
+	- amount == 0 (contracts/TeamVesting.sol#243)
+TeamVesting.revoke(address) (contracts/TeamVesting.sol#279-300) uses timestamp for comparisons
+	Dangerous comparisons:
+	- unvested > 0 (contracts/TeamVesting.sol#297)
+	- total > vestedNow (contracts/TeamVesting.sol#290)
+TeamVesting._vestedAmount(uint64) (contracts/TeamVesting.sol#314-327) uses timestamp for comparisons
+	Dangerous comparisons:
+	- timestamp < cliffEnd (contracts/TeamVesting.sol#319)
+	- timestamp >= start + duration (contracts/TeamVesting.sol#323)
+Reference: https://github.com/crytic/slither/wiki/Detector-Documentation#block-timestamp
+Triage: ACCEPTED. Um contrato de vesting e intrinsecamente dependente do tempo — o cronograma cliff/linear e definido em segundos. A janela de manipulacao de timestamp por validadores (~15s em PoS) e irrelevante em escala de cronograma de anos (cliff 12m, duration 48m). Nao ha vetor economico explorando esse drift.
+INFO:Slither:contracts/TeamVesting.sol analyzed (8 contracts with 101 detectors), 7 project-relevant result(s) found

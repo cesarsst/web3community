@@ -1,0 +1,7 @@
+'solc --version' running
+'solc @openzeppelin=node_modules/@openzeppelin contracts/GovernanceToken.sol --combined-json abi,ast,bin,bin-runtime,srcmap,srcmap-runtime,userdoc,devdoc,hashes --optimize --optimize-runs 200 --evm-version paris --allow-paths .,/home/ubuntu/web3community/contracts' running
+INFO:Detectors:
+Detector: naming-convention
+Variable GovernanceToken.CAP_SUPPLY (contracts/GovernanceToken.sol#30) is not in mixedCase
+Reference: https://github.com/crytic/slither/wiki/Detector-Documentation#conformance-to-solidity-naming-conventions
+INFO:Slither:contracts/GovernanceToken.sol analyzed (30 contracts with 101 detectors), 1 result(s) found

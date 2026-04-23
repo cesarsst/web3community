@@ -1,0 +1,86 @@
+'solc --version' running
+'solc @openzeppelin=node_modules/@openzeppelin contracts/TeamVesting.sol --combined-json abi,ast,bin,bin-runtime,srcmap,srcmap-runtime,userdoc,devdoc,hashes --optimize --optimize-runs 200 --evm-version paris --allow-paths .,/home/ubuntu/web3community/contracts' running
+INFO:Detectors:
+Detector: incorrect-equality
+TeamVesting.release() (contracts/TeamVesting.sol#241-249) uses a dangerous strict equality:
+	- amount == 0 (contracts/TeamVesting.sol#243)
+Reference: https://github.com/crytic/slither/wiki/Detector-Documentation#dangerous-strict-equalities
+INFO:Detectors:
+Detector: missing-zero-check
+Ownable2Step.transferOwnership(address).newOwner (node_modules/@openzeppelin/contracts/access/Ownable2Step.sol#35) lacks a zero-check on :
+		- _pendingOwner = newOwner (node_modules/@openzeppelin/contracts/access/Ownable2Step.sol#36)
+Reference: https://github.com/crytic/slither/wiki/Detector-Documentation#missing-zero-address-validation
+INFO:Detectors:
+Detector: timestamp
+TeamVesting.releasable() (contracts/TeamVesting.sol#203-209) uses timestamp for comparisons
+	Dangerous comparisons:
+	- vested <= released (contracts/TeamVesting.sol#205)
+TeamVesting.release() (contracts/TeamVesting.sol#241-249) uses timestamp for comparisons
+	Dangerous comparisons:
+	- amount == 0 (contracts/TeamVesting.sol#243)
+TeamVesting.revoke(address) (contracts/TeamVesting.sol#279-300) uses timestamp for comparisons
+	Dangerous comparisons:
+	- unvested > 0 (contracts/TeamVesting.sol#297)
+	- total > vestedNow (contracts/TeamVesting.sol#290)
+TeamVesting._vestedAmount(uint64) (contracts/TeamVesting.sol#314-327) uses timestamp for comparisons
+	Dangerous comparisons:
+	- timestamp < cliffEnd (contracts/TeamVesting.sol#319)
+	- timestamp >= start + duration (contracts/TeamVesting.sol#323)
+Reference: https://github.com/crytic/slither/wiki/Detector-Documentation#block-timestamp
+INFO:Detectors:
+Detector: assembly
+Address._revert(bytes) (node_modules/@openzeppelin/contracts/utils/Address.sol#146-158) uses assembly
+	- INLINE ASM (node_modules/@openzeppelin/contracts/utils/Address.sol#151-154)
+Reference: https://github.com/crytic/slither/wiki/Detector-Documentation#assembly-usage
+INFO:Detectors:
+Detector: pragma
+2 different versions of Solidity are used:
+	- Version constraint 0.8.24 is used by:
+		-0.8.24 (contracts/TeamVesting.sol#2)
+	- Version constraint ^0.8.20 is used by:
+		-^0.8.20 (node_modules/@openzeppelin/contracts/access/Ownable.sol#4)
+		-^0.8.20 (node_modules/@openzeppelin/contracts/access/Ownable2Step.sol#4)
+		-^0.8.20 (node_modules/@openzeppelin/contracts/token/ERC20/IERC20.sol#4)
+		-^0.8.20 (node_modules/@openzeppelin/contracts/token/ERC20/extensions/IERC20Permit.sol#4)
+		-^0.8.20 (node_modules/@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol#4)
+		-^0.8.20 (node_modules/@openzeppelin/contracts/utils/Address.sol#4)
+		-^0.8.20 (node_modules/@openzeppelin/contracts/utils/Context.sol#4)
+Reference: https://github.com/crytic/slither/wiki/Detector-Documentation#different-pragma-directives-are-used
+INFO:Detectors:
+Detector: dead-code
+Context._contextSuffixLength() (node_modules/@openzeppelin/contracts/utils/Context.sol#25-27) is never used and should be removed
+Context._msgData() (node_modules/@openzeppelin/contracts/utils/Context.sol#21-23) is never used and should be removed
+Reference: https://github.com/crytic/slither/wiki/Detector-Documentation#dead-code
+INFO:Detectors:
+Detector: solc-version
+Version constraint ^0.8.20 contains known severe issues (https://solidity.readthedocs.io/en/latest/bugs.html)
+	- VerbatimInvalidDeduplication
+	- FullInlinerNonExpressionSplitArgumentEvaluationOrder
+	- MissingSideEffectsOnSelectorAccess.
+It is used by:
+	- ^0.8.20 (node_modules/@openzeppelin/contracts/access/Ownable.sol#4)
+	- ^0.8.20 (node_modules/@openzeppelin/contracts/access/Ownable2Step.sol#4)
+	- ^0.8.20 (node_modules/@openzeppelin/contracts/token/ERC20/IERC20.sol#4)
+	- ^0.8.20 (node_modules/@openzeppelin/contracts/token/ERC20/extensions/IERC20Permit.sol#4)
+	- ^0.8.20 (node_modules/@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol#4)
+	- ^0.8.20 (node_modules/@openzeppelin/contracts/utils/Address.sol#4)
+	- ^0.8.20 (node_modules/@openzeppelin/contracts/utils/Context.sol#4)
+Reference: https://github.com/crytic/slither/wiki/Detector-Documentation#incorrect-versions-of-solidity
+INFO:Detectors:
+Detector: low-level-calls
+Low level call in SafeERC20._callOptionalReturnBool(IERC20,bytes) (node_modules/@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol#110-117):
+	- (success,returndata) = address(token).call(data) (node_modules/@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol#115)
+Low level call in Address.sendValue(address,uint256) (node_modules/@openzeppelin/contracts/utils/Address.sol#41-50):
+	- (success,None) = recipient.call{value: amount}() (node_modules/@openzeppelin/contracts/utils/Address.sol#46)
+Low level call in Address.functionCallWithValue(address,bytes,uint256) (node_modules/@openzeppelin/contracts/utils/Address.sol#83-89):
+	- (success,returndata) = target.call{value: value}(data) (node_modules/@openzeppelin/contracts/utils/Address.sol#87)
+Low level call in Address.functionStaticCall(address,bytes) (node_modules/@openzeppelin/contracts/utils/Address.sol#95-98):
+	- (success,returndata) = target.staticcall(data) (node_modules/@openzeppelin/contracts/utils/Address.sol#96)
+Low level call in Address.functionDelegateCall(address,bytes) (node_modules/@openzeppelin/contracts/utils/Address.sol#104-107):
+	- (success,returndata) = target.delegatecall(data) (node_modules/@openzeppelin/contracts/utils/Address.sol#105)
+Reference: https://github.com/crytic/slither/wiki/Detector-Documentation#low-level-calls
+INFO:Detectors:
+Detector: naming-convention
+Function IERC20Permit.DOMAIN_SEPARATOR() (node_modules/@openzeppelin/contracts/token/ERC20/extensions/IERC20Permit.sol#89) is not in mixedCase
+Reference: https://github.com/crytic/slither/wiki/Detector-Documentation#conformance-to-solidity-naming-conventions
+INFO:Slither:contracts/TeamVesting.sol analyzed (8 contracts with 101 detectors), 17 result(s) found

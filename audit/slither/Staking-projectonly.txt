@@ -1,0 +1,38 @@
+'solc --version' running
+'solc @openzeppelin=node_modules/@openzeppelin contracts/Staking.sol --combined-json abi,ast,bin,bin-runtime,srcmap,srcmap-runtime,userdoc,devdoc,hashes --optimize --optimize-runs 200 --evm-version paris --allow-paths .,/home/ubuntu/web3community/contracts' running
+INFO:Detectors:
+Detector: arbitrary-send-erc20
+ProjectRegistry.registerProject(address,string,uint256) (contracts/ProjectRegistry.sol#350-389) uses arbitrary from in transferFrom: GOV_TOKEN.safeTransferFrom(owner,address(this),collateralAmount) (contracts/ProjectRegistry.sol#388)
+Reference: https://github.com/crytic/slither/wiki/Detector-Documentation#arbitrary-from-in-transferfrom
+INFO:Detectors:
+Detector: unused-return
+Staking._writeCheckpoints(address,uint256,uint256) (contracts/Staking.sol#630-644) ignores return value by userT.push(key,_toUint208(newUserWeight)) (contracts/Staking.sol#642)
+Staking._writeCheckpoints(address,uint256,uint256) (contracts/Staking.sol#630-644) ignores return value by projT.push(key,_toUint208(newProjectWeight)) (contracts/Staking.sol#643)
+Reference: https://github.com/crytic/slither/wiki/Detector-Documentation#unused-return
+INFO:Detectors:
+Detector: timestamp
+ProjectRegistry.isInProbation(uint256) (contracts/ProjectRegistry.sol#307-316) uses timestamp for comparisons
+	Dangerous comparisons:
+	- block.timestamp < p.probationEndsAt (contracts/ProjectRegistry.sol#315)
+Staking.isUnlocked(address,uint256) (contracts/Staking.sol#352-358) uses timestamp for comparisons
+	Dangerous comparisons:
+	- block.timestamp >= uint256(p.lockStartAt) + uint256(p.lockDuration) (contracts/Staking.sol#357)
+Staking.stake(uint256,uint256,uint64) (contracts/Staking.sol#395-435) uses timestamp for comparisons
+	Dangerous comparisons:
+	- remaining > newLockDuration (contracts/Staking.sol#417)
+	- unlockAt > nowTs (contracts/Staking.sol#416)
+Staking._unstake(uint256,uint256) (contracts/Staking.sol#539-579) uses timestamp for comparisons
+	Dangerous comparisons:
+	- block.timestamp < unlockAt (contracts/Staking.sol#554)
+Staking._multiplier(uint64) (contracts/Staking.sol#608-618) uses timestamp for comparisons
+	Dangerous comparisons:
+	- duration < MIN_LOCK (contracts/Staking.sol#609)
+	- duration >= MAX_LOCK (contracts/Staking.sol#612)
+Reference: https://github.com/crytic/slither/wiki/Detector-Documentation#block-timestamp
+INFO:Detectors:
+Detector: naming-convention
+Variable ProjectRegistry.GOV_TOKEN (contracts/ProjectRegistry.sol#106) is not in mixedCase
+Variable Staking.GOV_TOKEN (contracts/Staking.sol#117) is not in mixedCase
+Variable Staking.REGISTRY (contracts/Staking.sol#122) is not in mixedCase
+Reference: https://github.com/crytic/slither/wiki/Detector-Documentation#conformance-to-solidity-naming-conventions
+INFO:Slither:contracts/Staking.sol analyzed (15 contracts with 101 detectors), 11 result(s) found

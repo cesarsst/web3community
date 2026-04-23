@@ -1,0 +1,41 @@
+'solc --version' running
+'solc @openzeppelin/=node_modules/@openzeppelin/ contracts/FeeRouter.sol --combined-json abi,ast,bin,bin-runtime,srcmap,srcmap-runtime,userdoc,devdoc,hashes --allow-paths .,/home/ubuntu/web3community/contracts' running
+INFO:Detectors:
+Detector: arbitrary-send-erc20
+FeeRouter.pay(uint256,address,uint256) (contracts/FeeRouter.sol#349-392) uses arbitrary from in transferFrom: IERC20(address(CREDIT)).safeTransferFrom(user,address(this),amount) (contracts/FeeRouter.sol#375)
+ProjectRegistry.registerProject(address,string,uint256) (contracts/ProjectRegistry.sol#350-389) uses arbitrary from in transferFrom: GOV_TOKEN.safeTransferFrom(owner,address(this),collateralAmount) (contracts/ProjectRegistry.sol#388)
+Reference: https://github.com/crytic/slither/wiki/Detector-Documentation#arbitrary-from-in-transferfrom
+INFO:Detectors:
+Detector: arbitrary-send-eth
+Treasury.sweepETH(address,uint256) (contracts/Treasury.sol#296-314) sends eth to arbitrary user
+	Dangerous calls:
+	- (ok,None) = to.call{value: amount}() (contracts/Treasury.sol#310)
+Reference: https://github.com/crytic/slither/wiki/Detector-Documentation#functions-that-send-ether-to-arbitrary-destinations
+INFO:Detectors:
+Detector: timestamp
+BurnTracker.closeRound() (contracts/BurnTracker.sol#393-411) uses timestamp for comparisons
+	Dangerous comparisons:
+	- earlyClose = nowTs < endsAt (contracts/BurnTracker.sol#397)
+BurnTracker.isRoundReadyToClose() (contracts/BurnTracker.sol#467-469) uses timestamp for comparisons
+	Dangerous comparisons:
+	- block.timestamp >= uint256(roundStartedAt) + uint256(roundDuration) (contracts/BurnTracker.sol#468)
+ProjectRegistry.isInProbation(uint256) (contracts/ProjectRegistry.sol#307-316) uses timestamp for comparisons
+	Dangerous comparisons:
+	- block.timestamp < p.probationEndsAt (contracts/ProjectRegistry.sol#315)
+Reference: https://github.com/crytic/slither/wiki/Detector-Documentation#block-timestamp
+INFO:Detectors:
+Detector: low-level-calls
+Low level call in Treasury.sweepETH(address,uint256) (contracts/Treasury.sol#296-314):
+	- (ok,None) = to.call{value: amount}() (contracts/Treasury.sol#310)
+Reference: https://github.com/crytic/slither/wiki/Detector-Documentation#low-level-calls
+INFO:Detectors:
+Detector: naming-convention
+Variable BurnTracker.CREDIT_TOKEN (contracts/BurnTracker.sol#128) is not in mixedCase
+Variable BurnTracker.REGISTRY (contracts/BurnTracker.sol#132) is not in mixedCase
+Variable FeeRouter.CREDIT (contracts/FeeRouter.sol#140) is not in mixedCase
+Variable FeeRouter.BURN_TRACKER (contracts/FeeRouter.sol#145) is not in mixedCase
+Variable FeeRouter.REGISTRY (contracts/FeeRouter.sol#150) is not in mixedCase
+Variable FeeRouter.TREASURY (contracts/FeeRouter.sol#154) is not in mixedCase
+Variable ProjectRegistry.GOV_TOKEN (contracts/ProjectRegistry.sol#106) is not in mixedCase
+Reference: https://github.com/crytic/slither/wiki/Detector-Documentation#conformance-to-solidity-naming-conventions
+INFO:Slither:contracts/FeeRouter.sol analyzed (21 contracts with 101 detectors), 14 result(s) found

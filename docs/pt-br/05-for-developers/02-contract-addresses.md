@@ -1,0 +1,96 @@
+# Endereços dos contratos
+
+**Para quem é:** dev integrando via ABI + endereço on-chain.
+**Pré-requisitos:** nenhum.
+
+## Endereços por rede
+
+### Localhost (hardhat node)
+
+Deploy via `npx hardhat ignition deploy ./ignition/modules/Dao.ts --parameters ignition/parameters/dev.json --network localhost`. Endereços são determinísticos conforme a ordem de deploy do Ignition, mas variam conforme o nonce do deployer. Use o output do deploy.
+
+### Sepolia (testnet)
+
+```
+TBA — endereços publicados em ignition/deployments/ após deploy em rede pública.
+```
+
+Verifique `ignition/deployments/chain-11155111/deployed_addresses.json` no repositório para a lista atualizada.
+
+### Mainnet
+
+```
+TBA — deploy em mainnet requer auditoria externa concluída.
+```
+
+## ABIs
+
+ABIs são geradas pelo Hardhat em `artifacts/contracts/*.sol/*.json`. Cada JSON contém o campo `abi`.
+
+Para TypeScript/Vue apps, use o script `sync-contracts.ts` do frontend (já integrado em `/home/ubuntu/web3community-frontend/`) que copia ABIs + typechain types.
+
+## Lista canônica de contratos
+
+A ordem neste índice corresponde à ordem numérica em `08-contracts-reference/`:
+
+| # | Contrato | Arquivo .sol |
+|---|---|---|
+| 01 | `GovernanceToken` | `contracts/GovernanceToken.sol` |
+| 02 | `CreditToken` | `contracts/CreditToken.sol` |
+| 03 | `ProjectRegistry` | `contracts/ProjectRegistry.sol` |
+| 04 | `Treasury` | `contracts/Treasury.sol` |
+| 05 | `Staking` | `contracts/Staking.sol` |
+| 06 | `BurnTracker` | `contracts/BurnTracker.sol` |
+| 07 | `RewardDistributor` | `contracts/RewardDistributor.sol` |
+| 08 | `FeeRouter` | `contracts/FeeRouter.sol` |
+| 09 | `CommunityTimelock` | `contracts/CommunityTimelock.sol` |
+| 10 | `CommunityGovernor` | `contracts/CommunityGovernor.sol` |
+| 11 | `TeamVesting` | `contracts/TeamVesting.sol` |
+| 12 | `UserSubsidy` | `contracts/UserSubsidy.sol` |
+
+Doc detalhada por contrato em [`08-contracts-reference/`](../08-contracts-reference/).
+
+## Versões de dependências
+
+- **Solidity**: `0.8.24`
+- **OpenZeppelin Contracts**: `5.0.2` (pinado exato)
+- **Hardhat**: versão conforme `package.json` do repo de contratos.
+- **Ignition**: `@nomicfoundation/hardhat-ignition`.
+
+## Endereços dos tokens (após deploy)
+
+Para descobrir endereços de GOV e CREDIT após deploy:
+
+```typescript
+const deployed = require('./ignition/deployments/chain-<chainId>/deployed_addresses.json');
+const GOV    = deployed['CommunityDAOModule#GovernanceToken'];
+const CREDIT = deployed['CommunityDAOModule#CreditToken'];
+const TREASURY = deployed['CommunityDAOModule#Treasury'];
+const REGISTRY = deployed['CommunityDAOModule#ProjectRegistry'];
+const STAKING = deployed['CommunityDAOModule#Staking'];
+const BURN_TRACKER = deployed['CommunityDAOModule#BurnTracker'];
+const REWARD_DISTRIBUTOR = deployed['CommunityDAOModule#RewardDistributor'];
+const FEE_ROUTER = deployed['CommunityDAOModule#FeeRouter'];
+const TIMELOCK = deployed['CommunityDAOModule#CommunityTimelock'];
+const GOVERNOR = deployed['CommunityDAOModule#CommunityGovernor'];
+```
+
+## Contratos não deployados pelo módulo principal
+
+`TeamVesting` e `UserSubsidy` têm módulos Ignition separados (`ignition/modules/TeamVesting.ts` e `ignition/modules/UserSubsidy.ts`) — deployados sob demanda via proposta da DAO, não no bootstrap.
+
+Cada `TeamVesting` é uma instância separada (um por beneficiário). Seus endereços ficam em deployments dedicados.
+
+## Verificação on-chain
+
+Após deploy em rede pública:
+
+```bash
+npx hardhat verify --network sepolia <contract_address> <constructor_args>
+```
+
+Os constructor args podem ser extraídos de `ignition/parameters/production.json` + derivações automatizadas do módulo.
+
+---
+
+**Próximo →** [Submeter um projeto](03-submitting-a-project.md)

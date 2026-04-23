@@ -1,0 +1,9 @@
+{
+  "_comment": "Template para um membro do time. Copie esse arquivo (um por pessoa) e preencha os campos. Valores comentados:  startUnix = timestamp Unix em segundos do inicio do vesting (tipicamente o TGE). Use `date -u -d '2026-05-01 00:00:00' +%s` pra calcular em Linux.  cliffSeconds = 31536000 (365 dias) para cliff de 1 ano.  durationSeconds = 126144000 (4 * 365 dias) para cliff 12m + linear 36m.  allocationWei = quantidade de GOV em unidades minimas (1e18). Exemplos: '1000000000000000000000000' = 1M GOV; '5000000000000000000000000' = 5M GOV. O bucket de time no documento de referencia e 25M GOV total, dividido entre membros.  name = slug sem espaco (ex.: 'alice', 'bob'); vai na tag do mint event e no deploymentId do Ignition.",
+  "name": "example",
+  "beneficiary": "0x0000000000000000000000000000000000000000",
+  "startUnix": "1746057600",
+  "cliffSeconds": "31536000",
+  "durationSeconds": "126144000",
+  "allocationWei": "1000000000000000000000000"
+}

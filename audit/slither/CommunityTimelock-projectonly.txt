@@ -1,0 +1,3 @@
+'solc --version' running
+'solc @openzeppelin/=node_modules/@openzeppelin/ contracts/CommunityTimelock.sol --combined-json abi,ast,bin,bin-runtime,srcmap,srcmap-runtime,userdoc,devdoc,hashes --allow-paths .,/home/ubuntu/web3community/contracts' running
+INFO:Slither:contracts/CommunityTimelock.sol analyzed (12 contracts with 101 detectors), 0 result(s) found

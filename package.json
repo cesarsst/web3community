@@ -1,0 +1,45 @@
+{
+  "name": "web3community",
+  "version": "0.1.0",
+  "description": "DAO e token de recompensa para contribuidores da comunidade Web3Community",
+  "private": true,
+  "license": "MIT",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "compile": "hardhat compile",
+    "clean": "hardhat clean",
+    "test": "hardhat test",
+    "test:gas": "REPORT_GAS=true hardhat test",
+    "coverage": "hardhat coverage",
+    "node": "hardhat node",
+    "deploy:local": "hardhat ignition deploy ./ignition/modules/Dao.ts --network localhost",
+    "deploy:sepolia": "hardhat ignition deploy ./ignition/modules/Dao.ts --network sepolia",
+    "sim": "hardhat run scripts/simulation/economicSim.ts",
+    "lint": "npm run lint:sol && npm run lint:ts",
+    "lint:sol": "bash scripts/lint-sol.sh",
+    "lint:ts": "eslint --no-error-on-unmatched-pattern '{scripts,test,ignition}/**/*.ts' 'hardhat.config.ts'",
+    "format": "prettier --write '**/*.{ts,js,json,md,sol}'",
+    "format:check": "prettier --check '**/*.{ts,js,json,md,sol}'",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@nomicfoundation/hardhat-ignition-ethers": "^0.15.0",
+    "@nomicfoundation/hardhat-toolbox": "^5.0.0",
+    "@types/node": "^20.11.0",
+    "@typescript-eslint/eslint-plugin": "^7.0.0",
+    "@typescript-eslint/parser": "^7.0.0",
+    "dotenv": "^16.4.5",
+    "eslint": "^8.57.0",
+    "eslint-config-prettier": "^9.1.0",
+    "hardhat": "^2.22.0",
+    "prettier": "^3.2.5",
+    "prettier-plugin-solidity": "^1.3.1",
+    "solhint": "^6.2.1",
+    "typescript": "^5.4.0"
+  },
+  "dependencies": {
+    "@openzeppelin/contracts": "5.0.2"
+  }
+}

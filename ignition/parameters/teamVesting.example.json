@@ -1,0 +1,11 @@
+{
+  "_comment": "Template para deploy de UMA instancia de TeamVesting. Um arquivo por membro do time (ou copie e edite os valores para cada deploy). Valores:  tokenAddress = endereco do GovernanceToken; beneficiary = endereco do membro; start = unix timestamp (segundos) do inicio do vesting, tipicamente o TGE; cliff = 31536000 (365 dias) para cliff de 1 ano; duration = 126144000 (4 * 365 dias) para cliff 12m + linear 36m; ownerAddress = CommunityTimelock em prod. Nao ha defaults — todos os campos sao obrigatorios.",
+  "TeamVestingModule": {
+    "tokenAddress": "0x0000000000000000000000000000000000000000",
+    "beneficiary": "0x0000000000000000000000000000000000000000",
+    "start": "0",
+    "cliff": "31536000",
+    "duration": "126144000",
+    "ownerAddress": "0x0000000000000000000000000000000000000000"
+  }
+}

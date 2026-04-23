@@ -1,0 +1,206 @@
+'solc --version' running
+'solc @openzeppelin/=node_modules/@openzeppelin/ contracts/RewardDistributor.sol --combined-json abi,ast,bin,bin-runtime,srcmap,srcmap-runtime,userdoc,devdoc,hashes --allow-paths .,/home/ubuntu/web3community/contracts' running
+INFO:Detectors:
+Detector: arbitrary-send-erc20
+ProjectRegistry.registerProject(address,string,uint256) (contracts/ProjectRegistry.sol#350-389) uses arbitrary from in transferFrom: GOV_TOKEN.safeTransferFrom(owner,address(this),collateralAmount) (contracts/ProjectRegistry.sol#388)
+Reference: https://github.com/crytic/slither/wiki/Detector-Documentation#arbitrary-from-in-transferfrom
+INFO:Detectors:
+Detector: incorrect-exp
+Math.mulDiv(uint256,uint256,uint256) (node_modules/@openzeppelin/contracts/utils/math/Math.sol#123-202) has bitwise-xor operator ^ instead of the exponentiation operator **: 
+	 - inverse = (3 * denominator) ^ 2 (node_modules/@openzeppelin/contracts/utils/math/Math.sol#184)
+Reference: https://github.com/crytic/slither/wiki/Detector-Documentation#incorrect-exponentiation
+INFO:Detectors:
+Detector: divide-before-multiply
+Math.mulDiv(uint256,uint256,uint256) (node_modules/@openzeppelin/contracts/utils/math/Math.sol#123-202) performs a multiplication on the result of a division:
+	- denominator = denominator / twos (node_modules/@openzeppelin/contracts/utils/math/Math.sol#169)
+	- inverse = (3 * denominator) ^ 2 (node_modules/@openzeppelin/contracts/utils/math/Math.sol#184)
+Math.mulDiv(uint256,uint256,uint256) (node_modules/@openzeppelin/contracts/utils/math/Math.sol#123-202) performs a multiplication on the result of a division:
+	- denominator = denominator / twos (node_modules/@openzeppelin/contracts/utils/math/Math.sol#169)
+	- inverse *= 2 - denominator * inverse (node_modules/@openzeppelin/contracts/utils/math/Math.sol#188)
+Math.mulDiv(uint256,uint256,uint256) (node_modules/@openzeppelin/contracts/utils/math/Math.sol#123-202) performs a multiplication on the result of a division:
+	- denominator = denominator / twos (node_modules/@openzeppelin/contracts/utils/math/Math.sol#169)
+	- inverse *= 2 - denominator * inverse (node_modules/@openzeppelin/contracts/utils/math/Math.sol#189)
+Math.mulDiv(uint256,uint256,uint256) (node_modules/@openzeppelin/contracts/utils/math/Math.sol#123-202) performs a multiplication on the result of a division:
+	- denominator = denominator / twos (node_modules/@openzeppelin/contracts/utils/math/Math.sol#169)
+	- inverse *= 2 - denominator * inverse (node_modules/@openzeppelin/contracts/utils/math/Math.sol#190)
+Math.mulDiv(uint256,uint256,uint256) (node_modules/@openzeppelin/contracts/utils/math/Math.sol#123-202) performs a multiplication on the result of a division:
+	- denominator = denominator / twos (node_modules/@openzeppelin/contracts/utils/math/Math.sol#169)
+	- inverse *= 2 - denominator * inverse (node_modules/@openzeppelin/contracts/utils/math/Math.sol#191)
+Math.mulDiv(uint256,uint256,uint256) (node_modules/@openzeppelin/contracts/utils/math/Math.sol#123-202) performs a multiplication on the result of a division:
+	- denominator = denominator / twos (node_modules/@openzeppelin/contracts/utils/math/Math.sol#169)
+	- inverse *= 2 - denominator * inverse (node_modules/@openzeppelin/contracts/utils/math/Math.sol#192)
+Math.mulDiv(uint256,uint256,uint256) (node_modules/@openzeppelin/contracts/utils/math/Math.sol#123-202) performs a multiplication on the result of a division:
+	- denominator = denominator / twos (node_modules/@openzeppelin/contracts/utils/math/Math.sol#169)
+	- inverse *= 2 - denominator * inverse (node_modules/@openzeppelin/contracts/utils/math/Math.sol#193)
+Math.mulDiv(uint256,uint256,uint256) (node_modules/@openzeppelin/contracts/utils/math/Math.sol#123-202) performs a multiplication on the result of a division:
+	- prod0 = prod0 / twos (node_modules/@openzeppelin/contracts/utils/math/Math.sol#172)
+	- result = prod0 * inverse (node_modules/@openzeppelin/contracts/utils/math/Math.sol#199)
+Reference: https://github.com/crytic/slither/wiki/Detector-Documentation#divide-before-multiply
+INFO:Detectors:
+Detector: unused-return
+Staking._writeCheckpoints(address,uint256,uint256) (contracts/Staking.sol#706-725) ignores return value by userT.push(key,_toUint208(newUserWeight)) (contracts/Staking.sol#722)
+Staking._writeCheckpoints(address,uint256,uint256) (contracts/Staking.sol#706-725) ignores return value by projT.push(key,_toUint208(newProjectWeight)) (contracts/Staking.sol#723)
+Staking._writeCheckpoints(address,uint256,uint256) (contracts/Staking.sol#706-725) ignores return value by _globalWeightCheckpoints.push(key,_toUint208(newGlobalWeight)) (contracts/Staking.sol#724)
+Reference: https://github.com/crytic/slither/wiki/Detector-Documentation#unused-return
+INFO:Detectors:
+Detector: calls-loop
+RewardDistributor._projectShare(uint256,uint256) (contracts/RewardDistributor.sol#585-620) has external calls inside a loop: REGISTRY.isInProbation(projectId) (contracts/RewardDistributor.sol#616)
+	Calls stack containing the loop:
+		RewardDistributor.claimMany(uint256[],uint256[])
+		RewardDistributor._claim(address,uint256,uint256)
+		RewardDistributor._calculateClaim(address,uint256,uint256)
+RewardDistributor._projectShare(uint256,uint256) (contracts/RewardDistributor.sol#585-620) has external calls inside a loop: burnPrev = BURN_TRACKER.getBurnForProjectInRound(round - 1,projectId) (contracts/RewardDistributor.sol#597)
+	Calls stack containing the loop:
+		RewardDistributor.claimMany(uint256[],uint256[])
+		RewardDistributor._claim(address,uint256,uint256)
+		RewardDistributor._calculateClaim(address,uint256,uint256)
+RewardDistributor._projectShare(uint256,uint256) (contracts/RewardDistributor.sol#585-620) has external calls inside a loop: globalWeight = STAKING.getGlobalWeightAt(snapBlock) (contracts/RewardDistributor.sol#604)
+	Calls stack containing the loop:
+		RewardDistributor.claimMany(uint256[],uint256[])
+		RewardDistributor._claim(address,uint256,uint256)
+		RewardDistributor._calculateClaim(address,uint256,uint256)
+RewardDistributor._projectShare(uint256,uint256) (contracts/RewardDistributor.sol#585-620) has external calls inside a loop: projectWeight = STAKING.getTotalWeightAt(projectId,snapBlock) (contracts/RewardDistributor.sol#608)
+	Calls stack containing the loop:
+		RewardDistributor.claimMany(uint256[],uint256[])
+		RewardDistributor._claim(address,uint256,uint256)
+		RewardDistributor._calculateClaim(address,uint256,uint256)
+RewardDistributor._calculateClaim(address,uint256,uint256) (contracts/RewardDistributor.sol#562-579) has external calls inside a loop: userWeight = STAKING.getWeightAt(user,projectId,snapBlock) (contracts/RewardDistributor.sol#570)
+	Calls stack containing the loop:
+		RewardDistributor.claimMany(uint256[],uint256[])
+		RewardDistributor._claim(address,uint256,uint256)
+RewardDistributor._calculateClaim(address,uint256,uint256) (contracts/RewardDistributor.sol#562-579) has external calls inside a loop: projectWeight = STAKING.getTotalWeightAt(projectId,snapBlock) (contracts/RewardDistributor.sol#577)
+	Calls stack containing the loop:
+		RewardDistributor.claimMany(uint256[],uint256[])
+		RewardDistributor._claim(address,uint256,uint256)
+RewardDistributor._claim(address,uint256,uint256) (contracts/RewardDistributor.sol#526-547) has external calls inside a loop: CREDIT.mint(user,amount,rewardRound) (contracts/RewardDistributor.sol#545)
+	Calls stack containing the loop:
+		RewardDistributor.claimMany(uint256[],uint256[])
+Reference: https://github.com/crytic/slither/wiki/Detector-Documentation/#calls-inside-a-loop
+INFO:Detectors:
+Detector: timestamp
+BurnTracker.closeRound() (contracts/BurnTracker.sol#393-411) uses timestamp for comparisons
+	Dangerous comparisons:
+	- earlyClose = nowTs < endsAt (contracts/BurnTracker.sol#397)
+BurnTracker.isRoundReadyToClose() (contracts/BurnTracker.sol#467-469) uses timestamp for comparisons
+	Dangerous comparisons:
+	- block.timestamp >= uint256(roundStartedAt) + uint256(roundDuration) (contracts/BurnTracker.sol#468)
+ProjectRegistry.isInProbation(uint256) (contracts/ProjectRegistry.sol#307-316) uses timestamp for comparisons
+	Dangerous comparisons:
+	- block.timestamp < p.probationEndsAt (contracts/ProjectRegistry.sol#315)
+Staking.isUnlocked(address,uint256) (contracts/Staking.sol#387-393) uses timestamp for comparisons
+	Dangerous comparisons:
+	- block.timestamp >= uint256(p.lockStartAt) + uint256(p.lockDuration) (contracts/Staking.sol#392)
+Staking.stake(uint256,uint256,uint64) (contracts/Staking.sol#434-474) uses timestamp for comparisons
+	Dangerous comparisons:
+	- remaining > newLockDuration (contracts/Staking.sol#456)
+	- unlockAt > nowTs (contracts/Staking.sol#455)
+Staking._unstake(uint256,uint256) (contracts/Staking.sol#611-651) uses timestamp for comparisons
+	Dangerous comparisons:
+	- block.timestamp < unlockAt (contracts/Staking.sol#626)
+Staking._multiplier(uint64) (contracts/Staking.sol#680-690) uses timestamp for comparisons
+	Dangerous comparisons:
+	- duration < MIN_LOCK (contracts/Staking.sol#681)
+	- duration >= MAX_LOCK (contracts/Staking.sol#684)
+Reference: https://github.com/crytic/slither/wiki/Detector-Documentation#block-timestamp
+INFO:Detectors:
+Detector: assembly
+Address._revert(bytes) (node_modules/@openzeppelin/contracts/utils/Address.sol#146-158) uses assembly
+	- INLINE ASM (node_modules/@openzeppelin/contracts/utils/Address.sol#151-154)
+Math.mulDiv(uint256,uint256,uint256) (node_modules/@openzeppelin/contracts/utils/math/Math.sol#123-202) uses assembly
+	- INLINE ASM (node_modules/@openzeppelin/contracts/utils/math/Math.sol#130-133)
+	- INLINE ASM (node_modules/@openzeppelin/contracts/utils/math/Math.sol#154-161)
+	- INLINE ASM (node_modules/@openzeppelin/contracts/utils/math/Math.sol#167-176)
+Checkpoints._unsafeAccess(Checkpoints.Checkpoint224[],uint256) (node_modules/@openzeppelin/contracts/utils/structs/Checkpoints.sol#206-214) uses assembly
+	- INLINE ASM (node_modules/@openzeppelin/contracts/utils/structs/Checkpoints.sol#210-213)
+Checkpoints._unsafeAccess(Checkpoints.Checkpoint208[],uint256) (node_modules/@openzeppelin/contracts/utils/structs/Checkpoints.sol#400-408) uses assembly
+	- INLINE ASM (node_modules/@openzeppelin/contracts/utils/structs/Checkpoints.sol#404-407)
+Checkpoints._unsafeAccess(Checkpoints.Checkpoint160[],uint256) (node_modules/@openzeppelin/contracts/utils/structs/Checkpoints.sol#594-602) uses assembly
+	- INLINE ASM (node_modules/@openzeppelin/contracts/utils/structs/Checkpoints.sol#598-601)
+Reference: https://github.com/crytic/slither/wiki/Detector-Documentation#assembly-usage
+INFO:Detectors:
+Detector: pragma
+2 different versions of Solidity are used:
+	- Version constraint 0.8.24 is used by:
+		-0.8.24 (contracts/BurnTracker.sol#2)
+		-0.8.24 (contracts/CreditToken.sol#2)
+		-0.8.24 (contracts/ProjectRegistry.sol#2)
+		-0.8.24 (contracts/RewardDistributor.sol#2)
+		-0.8.24 (contracts/Staking.sol#2)
+	- Version constraint ^0.8.20 is used by:
+		-^0.8.20 (node_modules/@openzeppelin/contracts/access/AccessControl.sol#4)
+		-^0.8.20 (node_modules/@openzeppelin/contracts/access/IAccessControl.sol#4)
+		-^0.8.20 (node_modules/@openzeppelin/contracts/interfaces/draft-IERC6093.sol#3)
+		-^0.8.20 (node_modules/@openzeppelin/contracts/token/ERC20/ERC20.sol#4)
+		-^0.8.20 (node_modules/@openzeppelin/contracts/token/ERC20/IERC20.sol#4)
+		-^0.8.20 (node_modules/@openzeppelin/contracts/token/ERC20/extensions/ERC20Burnable.sol#4)
+		-^0.8.20 (node_modules/@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol#4)
+		-^0.8.20 (node_modules/@openzeppelin/contracts/token/ERC20/extensions/IERC20Permit.sol#4)
+		-^0.8.20 (node_modules/@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol#4)
+		-^0.8.20 (node_modules/@openzeppelin/contracts/utils/Address.sol#4)
+		-^0.8.20 (node_modules/@openzeppelin/contracts/utils/Context.sol#4)
+		-^0.8.20 (node_modules/@openzeppelin/contracts/utils/ReentrancyGuard.sol#4)
+		-^0.8.20 (node_modules/@openzeppelin/contracts/utils/introspection/ERC165.sol#4)
+		-^0.8.20 (node_modules/@openzeppelin/contracts/utils/introspection/IERC165.sol#4)
+		-^0.8.20 (node_modules/@openzeppelin/contracts/utils/math/Math.sol#4)
+		-^0.8.20 (node_modules/@openzeppelin/contracts/utils/math/SafeCast.sol#5)
+		-^0.8.20 (node_modules/@openzeppelin/contracts/utils/structs/Checkpoints.sol#5)
+Reference: https://github.com/crytic/slither/wiki/Detector-Documentation#different-pragma-directives-are-used
+INFO:Detectors:
+Detector: dead-code
+AccessControl._setRoleAdmin(bytes32,bytes32) (node_modules/@openzeppelin/contracts/access/AccessControl.sol#170-174) is never used and should be removed
+Context._contextSuffixLength() (node_modules/@openzeppelin/contracts/utils/Context.sol#25-27) is never used and should be removed
+Context._msgData() (node_modules/@openzeppelin/contracts/utils/Context.sol#21-23) is never used and should be removed
+ReentrancyGuard._reentrancyGuardEntered() (node_modules/@openzeppelin/contracts/utils/ReentrancyGuard.sol#81-83) is never used and should be removed
+Reference: https://github.com/crytic/slither/wiki/Detector-Documentation#dead-code
+INFO:Detectors:
+Detector: solc-version
+Version constraint ^0.8.20 contains known severe issues (https://solidity.readthedocs.io/en/latest/bugs.html)
+	- VerbatimInvalidDeduplication
+	- FullInlinerNonExpressionSplitArgumentEvaluationOrder
+	- MissingSideEffectsOnSelectorAccess.
+It is used by:
+	- ^0.8.20 (node_modules/@openzeppelin/contracts/access/AccessControl.sol#4)
+	- ^0.8.20 (node_modules/@openzeppelin/contracts/access/IAccessControl.sol#4)
+	- ^0.8.20 (node_modules/@openzeppelin/contracts/interfaces/draft-IERC6093.sol#3)
+	- ^0.8.20 (node_modules/@openzeppelin/contracts/token/ERC20/ERC20.sol#4)
+	- ^0.8.20 (node_modules/@openzeppelin/contracts/token/ERC20/IERC20.sol#4)
+	- ^0.8.20 (node_modules/@openzeppelin/contracts/token/ERC20/extensions/ERC20Burnable.sol#4)
+	- ^0.8.20 (node_modules/@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol#4)
+	- ^0.8.20 (node_modules/@openzeppelin/contracts/token/ERC20/extensions/IERC20Permit.sol#4)
+	- ^0.8.20 (node_modules/@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol#4)
+	- ^0.8.20 (node_modules/@openzeppelin/contracts/utils/Address.sol#4)
+	- ^0.8.20 (node_modules/@openzeppelin/contracts/utils/Context.sol#4)
+	- ^0.8.20 (node_modules/@openzeppelin/contracts/utils/ReentrancyGuard.sol#4)
+	- ^0.8.20 (node_modules/@openzeppelin/contracts/utils/introspection/ERC165.sol#4)
+	- ^0.8.20 (node_modules/@openzeppelin/contracts/utils/introspection/IERC165.sol#4)
+	- ^0.8.20 (node_modules/@openzeppelin/contracts/utils/math/Math.sol#4)
+	- ^0.8.20 (node_modules/@openzeppelin/contracts/utils/math/SafeCast.sol#5)
+	- ^0.8.20 (node_modules/@openzeppelin/contracts/utils/structs/Checkpoints.sol#5)
+Reference: https://github.com/crytic/slither/wiki/Detector-Documentation#incorrect-versions-of-solidity
+INFO:Detectors:
+Detector: low-level-calls
+Low level call in SafeERC20._callOptionalReturnBool(IERC20,bytes) (node_modules/@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol#110-117):
+	- (success,returndata) = address(token).call(data) (node_modules/@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol#115)
+Low level call in Address.sendValue(address,uint256) (node_modules/@openzeppelin/contracts/utils/Address.sol#41-50):
+	- (success,None) = recipient.call{value: amount}() (node_modules/@openzeppelin/contracts/utils/Address.sol#46)
+Low level call in Address.functionCallWithValue(address,bytes,uint256) (node_modules/@openzeppelin/contracts/utils/Address.sol#83-89):
+	- (success,returndata) = target.call{value: value}(data) (node_modules/@openzeppelin/contracts/utils/Address.sol#87)
+Low level call in Address.functionStaticCall(address,bytes) (node_modules/@openzeppelin/contracts/utils/Address.sol#95-98):
+	- (success,returndata) = target.staticcall(data) (node_modules/@openzeppelin/contracts/utils/Address.sol#96)
+Low level call in Address.functionDelegateCall(address,bytes) (node_modules/@openzeppelin/contracts/utils/Address.sol#104-107):
+	- (success,returndata) = target.delegatecall(data) (node_modules/@openzeppelin/contracts/utils/Address.sol#105)
+Reference: https://github.com/crytic/slither/wiki/Detector-Documentation#low-level-calls
+INFO:Detectors:
+Detector: naming-convention
+Variable BurnTracker.CREDIT_TOKEN (contracts/BurnTracker.sol#128) is not in mixedCase
+Variable BurnTracker.REGISTRY (contracts/BurnTracker.sol#132) is not in mixedCase
+Variable ProjectRegistry.GOV_TOKEN (contracts/ProjectRegistry.sol#106) is not in mixedCase
+Variable RewardDistributor.CREDIT (contracts/RewardDistributor.sol#138) is not in mixedCase
+Variable RewardDistributor.STAKING (contracts/RewardDistributor.sol#142) is not in mixedCase
+Variable RewardDistributor.BURN_TRACKER (contracts/RewardDistributor.sol#146) is not in mixedCase
+Variable RewardDistributor.REGISTRY (contracts/RewardDistributor.sol#150) is not in mixedCase
+Variable Staking.GOV_TOKEN (contracts/Staking.sol#117) is not in mixedCase
+Variable Staking.REGISTRY (contracts/Staking.sol#122) is not in mixedCase
+Function IERC20Permit.DOMAIN_SEPARATOR() (node_modules/@openzeppelin/contracts/token/ERC20/extensions/IERC20Permit.sol#89) is not in mixedCase
+Reference: https://github.com/crytic/slither/wiki/Detector-Documentation#conformance-to-solidity-naming-conventions
+INFO:Slither:contracts/RewardDistributor.sol analyzed (24 contracts with 101 detectors), 53 result(s) found

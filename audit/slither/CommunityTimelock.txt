@@ -1,0 +1,110 @@
+'solc --version' running
+'solc @openzeppelin/=node_modules/@openzeppelin/ contracts/CommunityTimelock.sol --combined-json abi,ast,bin,bin-runtime,srcmap,srcmap-runtime,userdoc,devdoc,hashes --allow-paths .,/home/ubuntu/web3community/contracts' running
+INFO:Detectors:
+Detector: arbitrary-send-eth
+TimelockController._execute(address,uint256,bytes) (node_modules/@openzeppelin/contracts/governance/TimelockController.sol#412-415) sends eth to arbitrary user
+	Dangerous calls:
+	- (success,returndata) = target.call{value: value}(data) (node_modules/@openzeppelin/contracts/governance/TimelockController.sol#413)
+Reference: https://github.com/crytic/slither/wiki/Detector-Documentation#functions-that-send-ether-to-arbitrary-destinations
+INFO:Detectors:
+Detector: incorrect-equality
+TimelockController.getOperationState(bytes32) (node_modules/@openzeppelin/contracts/governance/TimelockController.sol#207-218) uses a dangerous strict equality:
+	- timestamp == 0 (node_modules/@openzeppelin/contracts/governance/TimelockController.sol#209)
+TimelockController.getOperationState(bytes32) (node_modules/@openzeppelin/contracts/governance/TimelockController.sol#207-218) uses a dangerous strict equality:
+	- timestamp == _DONE_TIMESTAMP (node_modules/@openzeppelin/contracts/governance/TimelockController.sol#211)
+Reference: https://github.com/crytic/slither/wiki/Detector-Documentation#dangerous-strict-equalities
+INFO:Detectors:
+Detector: unused-return
+TimelockController._execute(address,uint256,bytes) (node_modules/@openzeppelin/contracts/governance/TimelockController.sol#412-415) ignores return value by Address.verifyCallResult(success,returndata) (node_modules/@openzeppelin/contracts/governance/TimelockController.sol#414)
+Reference: https://github.com/crytic/slither/wiki/Detector-Documentation#unused-return
+INFO:Detectors:
+Detector: calls-loop
+TimelockController._execute(address,uint256,bytes) (node_modules/@openzeppelin/contracts/governance/TimelockController.sol#412-415) has external calls inside a loop: (success,returndata) = target.call{value: value}(data) (node_modules/@openzeppelin/contracts/governance/TimelockController.sol#413)
+	Calls stack containing the loop:
+		TimelockController.executeBatch(address[],uint256[],bytes[],bytes32,bytes32)
+Reference: https://github.com/crytic/slither/wiki/Detector-Documentation/#calls-inside-a-loop
+INFO:Detectors:
+Detector: reentrancy-events
+Reentrancy in TimelockController.execute(address,uint256,bytes,bytes32,bytes32) (node_modules/@openzeppelin/contracts/governance/TimelockController.sol#358-371):
+	External calls:
+	- _execute(target,value,payload) (node_modules/@openzeppelin/contracts/governance/TimelockController.sol#368)
+		- (success,returndata) = target.call{value: value}(data) (node_modules/@openzeppelin/contracts/governance/TimelockController.sol#413)
+	Event emitted after the call(s):
+	- CallExecuted(id,0,target,value,payload) (node_modules/@openzeppelin/contracts/governance/TimelockController.sol#369)
+Reentrancy in TimelockController.executeBatch(address[],uint256[],bytes[],bytes32,bytes32) (node_modules/@openzeppelin/contracts/governance/TimelockController.sol#385-407):
+	External calls:
+	- _execute(target,value,payload) (node_modules/@openzeppelin/contracts/governance/TimelockController.sol#403)
+		- (success,returndata) = target.call{value: value}(data) (node_modules/@openzeppelin/contracts/governance/TimelockController.sol#413)
+	Event emitted after the call(s):
+	- CallExecuted(id,i,target,value,payload) (node_modules/@openzeppelin/contracts/governance/TimelockController.sol#404)
+Reference: https://github.com/crytic/slither/wiki/Detector-Documentation#reentrancy-vulnerabilities-4
+INFO:Detectors:
+Detector: timestamp
+TimelockController.getOperationState(bytes32) (node_modules/@openzeppelin/contracts/governance/TimelockController.sol#207-218) uses timestamp for comparisons
+	Dangerous comparisons:
+	- timestamp == 0 (node_modules/@openzeppelin/contracts/governance/TimelockController.sol#209)
+	- timestamp == _DONE_TIMESTAMP (node_modules/@openzeppelin/contracts/governance/TimelockController.sol#211)
+	- timestamp > block.timestamp (node_modules/@openzeppelin/contracts/governance/TimelockController.sol#213)
+Reference: https://github.com/crytic/slither/wiki/Detector-Documentation#block-timestamp
+INFO:Detectors:
+Detector: assembly
+Address._revert(bytes) (node_modules/@openzeppelin/contracts/utils/Address.sol#146-158) uses assembly
+	- INLINE ASM (node_modules/@openzeppelin/contracts/utils/Address.sol#151-154)
+Reference: https://github.com/crytic/slither/wiki/Detector-Documentation#assembly-usage
+INFO:Detectors:
+Detector: pragma
+2 different versions of Solidity are used:
+	- Version constraint 0.8.24 is used by:
+		-0.8.24 (contracts/CommunityTimelock.sol#2)
+	- Version constraint ^0.8.20 is used by:
+		-^0.8.20 (node_modules/@openzeppelin/contracts/access/AccessControl.sol#4)
+		-^0.8.20 (node_modules/@openzeppelin/contracts/access/IAccessControl.sol#4)
+		-^0.8.20 (node_modules/@openzeppelin/contracts/governance/TimelockController.sol#4)
+		-^0.8.20 (node_modules/@openzeppelin/contracts/token/ERC1155/IERC1155Receiver.sol#4)
+		-^0.8.20 (node_modules/@openzeppelin/contracts/token/ERC1155/utils/ERC1155Holder.sol#4)
+		-^0.8.20 (node_modules/@openzeppelin/contracts/token/ERC721/IERC721Receiver.sol#4)
+		-^0.8.20 (node_modules/@openzeppelin/contracts/token/ERC721/utils/ERC721Holder.sol#4)
+		-^0.8.20 (node_modules/@openzeppelin/contracts/utils/Address.sol#4)
+		-^0.8.20 (node_modules/@openzeppelin/contracts/utils/Context.sol#4)
+		-^0.8.20 (node_modules/@openzeppelin/contracts/utils/introspection/ERC165.sol#4)
+		-^0.8.20 (node_modules/@openzeppelin/contracts/utils/introspection/IERC165.sol#4)
+Reference: https://github.com/crytic/slither/wiki/Detector-Documentation#different-pragma-directives-are-used
+INFO:Detectors:
+Detector: dead-code
+AccessControl._setRoleAdmin(bytes32,bytes32) (node_modules/@openzeppelin/contracts/access/AccessControl.sol#170-174) is never used and should be removed
+Context._contextSuffixLength() (node_modules/@openzeppelin/contracts/utils/Context.sol#25-27) is never used and should be removed
+Context._msgData() (node_modules/@openzeppelin/contracts/utils/Context.sol#21-23) is never used and should be removed
+Reference: https://github.com/crytic/slither/wiki/Detector-Documentation#dead-code
+INFO:Detectors:
+Detector: solc-version
+Version constraint ^0.8.20 contains known severe issues (https://solidity.readthedocs.io/en/latest/bugs.html)
+	- VerbatimInvalidDeduplication
+	- FullInlinerNonExpressionSplitArgumentEvaluationOrder
+	- MissingSideEffectsOnSelectorAccess.
+It is used by:
+	- ^0.8.20 (node_modules/@openzeppelin/contracts/access/AccessControl.sol#4)
+	- ^0.8.20 (node_modules/@openzeppelin/contracts/access/IAccessControl.sol#4)
+	- ^0.8.20 (node_modules/@openzeppelin/contracts/governance/TimelockController.sol#4)
+	- ^0.8.20 (node_modules/@openzeppelin/contracts/token/ERC1155/IERC1155Receiver.sol#4)
+	- ^0.8.20 (node_modules/@openzeppelin/contracts/token/ERC1155/utils/ERC1155Holder.sol#4)
+	- ^0.8.20 (node_modules/@openzeppelin/contracts/token/ERC721/IERC721Receiver.sol#4)
+	- ^0.8.20 (node_modules/@openzeppelin/contracts/token/ERC721/utils/ERC721Holder.sol#4)
+	- ^0.8.20 (node_modules/@openzeppelin/contracts/utils/Address.sol#4)
+	- ^0.8.20 (node_modules/@openzeppelin/contracts/utils/Context.sol#4)
+	- ^0.8.20 (node_modules/@openzeppelin/contracts/utils/introspection/ERC165.sol#4)
+	- ^0.8.20 (node_modules/@openzeppelin/contracts/utils/introspection/IERC165.sol#4)
+Reference: https://github.com/crytic/slither/wiki/Detector-Documentation#incorrect-versions-of-solidity
+INFO:Detectors:
+Detector: low-level-calls
+Low level call in TimelockController._execute(address,uint256,bytes) (node_modules/@openzeppelin/contracts/governance/TimelockController.sol#412-415):
+	- (success,returndata) = target.call{value: value}(data) (node_modules/@openzeppelin/contracts/governance/TimelockController.sol#413)
+Low level call in Address.sendValue(address,uint256) (node_modules/@openzeppelin/contracts/utils/Address.sol#41-50):
+	- (success,None) = recipient.call{value: amount}() (node_modules/@openzeppelin/contracts/utils/Address.sol#46)
+Low level call in Address.functionCallWithValue(address,bytes,uint256) (node_modules/@openzeppelin/contracts/utils/Address.sol#83-89):
+	- (success,returndata) = target.call{value: value}(data) (node_modules/@openzeppelin/contracts/utils/Address.sol#87)
+Low level call in Address.functionStaticCall(address,bytes) (node_modules/@openzeppelin/contracts/utils/Address.sol#95-98):
+	- (success,returndata) = target.staticcall(data) (node_modules/@openzeppelin/contracts/utils/Address.sol#96)
+Low level call in Address.functionDelegateCall(address,bytes) (node_modules/@openzeppelin/contracts/utils/Address.sol#104-107):
+	- (success,returndata) = target.delegatecall(data) (node_modules/@openzeppelin/contracts/utils/Address.sol#105)
+Reference: https://github.com/crytic/slither/wiki/Detector-Documentation#low-level-calls
+INFO:Slither:contracts/CommunityTimelock.sol analyzed (12 contracts with 101 detectors), 19 result(s) found

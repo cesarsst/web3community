@@ -1,0 +1,17 @@
+'solc --version' running
+'solc @openzeppelin=node_modules/@openzeppelin contracts/ProjectRegistry.sol --combined-json abi,ast,bin,bin-runtime,srcmap,srcmap-runtime,userdoc,devdoc,hashes --optimize --optimize-runs 200 --evm-version paris --allow-paths .,/home/ubuntu/web3community/contracts' running
+INFO:Detectors:
+Detector: arbitrary-send-erc20
+ProjectRegistry.registerProject(address,string,uint256) (contracts/ProjectRegistry.sol#350-389) uses arbitrary from in transferFrom: GOV_TOKEN.safeTransferFrom(owner,address(this),collateralAmount) (contracts/ProjectRegistry.sol#388)
+Reference: https://github.com/crytic/slither/wiki/Detector-Documentation#arbitrary-from-in-transferfrom
+INFO:Detectors:
+Detector: timestamp
+ProjectRegistry.isInProbation(uint256) (contracts/ProjectRegistry.sol#307-316) uses timestamp for comparisons
+	Dangerous comparisons:
+	- block.timestamp < p.probationEndsAt (contracts/ProjectRegistry.sol#315)
+Reference: https://github.com/crytic/slither/wiki/Detector-Documentation#block-timestamp
+INFO:Detectors:
+Detector: naming-convention
+Variable ProjectRegistry.GOV_TOKEN (contracts/ProjectRegistry.sol#106) is not in mixedCase
+Reference: https://github.com/crytic/slither/wiki/Detector-Documentation#conformance-to-solidity-naming-conventions
+INFO:Slither:contracts/ProjectRegistry.sol analyzed (10 contracts with 101 detectors), 3 result(s) found
