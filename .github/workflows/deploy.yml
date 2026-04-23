@@ -1,0 +1,36 @@
+name: Deploy to Production
+
+on:
+  push:
+    branches: [production]
+
+concurrency:
+  group: deploy-web3community
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy via SSH
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          script: |
+            set -e
+            echo "=== Pulling web3community ==="
+            cd /home/ubuntu/web3community
+            git fetch --tags origin
+            git checkout production
+            git pull origin production
+
+            echo "=== Building & deploying ==="
+            cd /home/ubuntu/swarm
+            docker compose -f docker-compose.production.yml build --no-cache --pull web3c-hardhat
+            docker compose -f docker-compose.production.yml up -d web3c-hardhat
+
+            echo "=== Verifying ==="
+            sleep 5
+            docker compose -f docker-compose.production.yml ps web3c-hardhat
