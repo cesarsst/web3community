@@ -70,8 +70,17 @@ describe("CommunityGovernor", function () {
     await timelock.connect(admin).grantRole(CANCELLER_ROLE, await governor.getAddress());
 
     // 5. Treasury gated com GOVERNANCE_ROLE = Timelock (I4).
+    //    O 3o argumento (USDC) e zero — buyback FFP nao e exercido neste
+    //    suite. Para satisfazer o construtor, fornecemos um CREDIT placeholder
+    //    (qualquer endereco nao-zero) — usamos o GOV (mesmo ja deployado)
+    //    apenas como sentinela; o FFP nao opera porque oracle/router/feed
+    //    nao serao setados.
     const Treasury = await ethers.getContractFactory("Treasury");
-    const treasury = await Treasury.deploy(admin.address);
+    const treasury = await Treasury.deploy(
+      admin.address,
+      await gov.getAddress(),
+      ethers.ZeroAddress,
+    );
     await treasury.waitForDeployment();
     const TREASURY_GOV_ROLE = await treasury.GOVERNANCE_ROLE();
     await treasury.connect(admin).grantRole(TREASURY_GOV_ROLE, await timelock.getAddress());

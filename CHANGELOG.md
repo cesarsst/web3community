@@ -9,6 +9,21 @@ de segurança (invariantes, access control, static analysis) ficam em `Security`
 
 ## [Unreleased]
 
+### Changed
+
+- Docs publicas (`/docs`): traducao das 10 paginas multi-idioma que estavam
+  como stub `status: needs-translation` apos o pivot CLP — paridade real
+  alcancada entre pt-br, en e es (50/50/50 markdown). Arquivos traduzidos:
+  `01-getting-started/03-glossary.md`, `02-core-concepts/04-rewards-distribution.md`,
+  `02-core-concepts/07-treasury-and-fees.md`, `03-protocol-overview/01-architecture.md`,
+  `03-protocol-overview/03-economic-flows.md`,
+  `08-contracts-reference/{03-ProjectRegistry,04-Treasury,07-RewardDistributor,07b-RewardDistributorV2,13-LiquidityGauge}.md`.
+  Conteudo cobre FFP buyback, POL, LiquidityGauge, bucket-aware split,
+  ownerRecipient timelock 48h, fallback gauge paused e migration window
+  V1->V2. Frontmatter `needs-translation` removido em todos. `npm run sync:docs`
+  e `npm run typecheck` verdes; `npm run build` produz `DocsView` com
+  conteudo final (1284kB JS contendo as 3 arvores).
+
 ### Security
 
 - `RewardDistributor.MAX_ALPHA` reduzido de `1.1e18` (1.10) para `0.99e18`
@@ -23,6 +38,46 @@ de segurança (invariantes, access control, static analysis) ficam em `Security`
 
 ### Changed
 
+- Docs publicas (`/docs`): atualizacao multi-idioma para refletir o pivot
+  Credit Liquidity Protocol (CLP, Fase 1.1-1.4). pt-BR como fonte de verdade
+  reescrita a partir do codigo; en/es recriadas como stubs
+  `status: needs-translation` com corpo identico ao pt-BR atualizado, para
+  preservar paridade estrita de paths (52/52/52 arquivos). Alteracoes:
+  - **Novos arquivos** em `08-contracts-reference/`:
+    - `13-LiquidityGauge.md` — adapter sobre UniswapV3Staker, bucket LPs
+      (25%), vesting linear 14d, denylist anti self-dealing.
+    - `07b-RewardDistributorV2.md` — distributor bucket-aware (split
+      stakers/LPs/apps/bonders), bounds individuais, IE12 assert, gauge
+      paused fallback, ownerRecipient timelock 48h.
+  - **Reescrita completa** de `08-contracts-reference/04-Treasury.md`:
+    FFP buyback real (Fase 1.1) com TWAP+breach 24h+caps, POL com NFT
+    custodiado (Fase 1.2), ledgers `polRefillBucket` e
+    `pendingGaugeRewards` (Fase 1.4), 4 novas roles, 5 novas funcoes.
+  - **Anotada** `08-contracts-reference/07-RewardDistributor.md` como
+    V1 em modo claim-only durante migration window de 4 rounds; cutoff
+    revoga `MINTER_ROLE`.
+  - **Atualizada** `08-contracts-reference/03-ProjectRegistry.md` com
+    `proposeOwnerRecipient` / `applyOwnerRecipient` /
+    `cancelOwnerRecipient` (timelock 48h), constante
+    `OWNER_RECIPIENT_TIMELOCK`, struct `PendingRecipientChange`.
+  - **Atualizada** `02-core-concepts/04-rewards-distribution.md` com
+    split em 4 buckets, bootstrap apps -> bonders, bucket-aware claim,
+    fluxo LPs no gauge.
+  - **Atualizada** `02-core-concepts/07-treasury-and-fees.md` removendo
+    "buyback stub" e descrevendo FFP real, POL, refill loop, gauge
+    fallback, recomendacao split `(7000, 2000, 1000)`.
+  - **Atualizada** `03-protocol-overview/01-architecture.md` com
+    diagrama incluindo LiquidityGauge + RewardDistributorV2 + FFP/POL,
+    grafo de roles pos-CLP (REWARD_NOTIFIER plural,
+    POL_REFILL_DEPOSITOR, GAUGE_FALLBACK_DEPOSITOR), tabela "quem chama
+    quem" expandida com 8 fluxos novos.
+  - **Atualizada** `03-protocol-overview/03-economic-flows.md` com
+    o agente "LP" como 5o ator, 3 loops economicos do Treasury (FFP,
+    POL refill, fallback gauge), invariante de saude expandida com
+    MA90 e POL TVL.
+  - **Atualizada** `01-getting-started/03-glossary.md` com 11 termos
+    novos: Bonders, Bucket, CLP, FFP, LiquidityGauge, MA90,
+    ownerRecipient, POL, polRefillBucket, RewardDistributorV2.
 - `ignition/modules/Dao.ts` agora suporta deploy opcional de `TeamVesting`
   e `UserSubsidy` via env vars (`DEPLOY_TEAM_VESTING`, `DEPLOY_USER_SUBSIDY`),
   ambas default `false`. Motivacao: facilitar deploy all-in-one em
@@ -72,6 +127,402 @@ de segurança (invariantes, access control, static analysis) ficam em `Security`
 
 ### Added
 
+- **Fase 1.4 do pivot CLP — `RewardDistributorV2` (bucket-aware split).**
+  Reescrita do distributor de emissao para suportar split entre **4 buckets**
+  por rodada — fecha o flywheel da Fase 1 (FFP + POL + Gauge + Bucket Split).
+  Decisoes operacionais congeladas em
+  `audit/economist/2026-04-24-clp-pivot.md` Anexo E (E.1-E.8). **Re-deploy
+  paralelo** ao V1: V1 vira claim-only durante migration window de 4 rounds
+  (governance revoga `MINTER_ROLE` no CREDIT do V1 apos cutoff).
+  **Contratos**:
+  - `contracts/RewardDistributorV2.sol` (novo): split default
+    `[5500, 2500, 1500, 500]` (stakers/LPs/apps/bonders) tunavel via
+    `setBucketBps` com bounds individuais (E.8: stakers >= 30%, LPs >= 5%,
+    apps <= 25% IE4b, bonders <= 20%) e soma exata 10000. `finalizeRound`
+    aplica formula V1 (`min(max(alpha*burn, floor), capMax)`) **antes** do
+    split, depois distribui:
+    - Stakers (lazy): pull-based via `claim`/`claimMany` consumindo
+      `bucketEmissionByRound[round][BUCKET_STAKERS]` como base.
+    - LPs (push): mint para self + `forceApprove` + `gauge.notifyRewardAmount`.
+      Quando `gauge.paused()`, fallback para
+      `Treasury.depositPendingGaugeRewards` (red flag E.3 #2 — sem fallback,
+      pause do gauge travaria `finalizeRound` da rodada inteira).
+    - Apps (push retrospectivo): loop em `1..totalProjects` com burn no
+      round R-1 e mint direto para `REGISTRY.ownerRecipient(p)`. Em
+      bootstrap (`totalBurnPrev == 0`), bucket apps redistribui para bonders.
+    - Bonders (push earmark): mint para Treasury +
+      `depositPolRefill` — refill earmarkado do POL na Fase 1, sera
+      reciclado para `BondDepository` na Fase 3.
+      Invariantes economicas reafirmadas: **IE3 fortalecida** (cap antes do
+      split, nenhum bucket excede `bucketBps[i] × capMax`), **IE4b codificada**
+      (`bucketBps[apps] <= 2500`), **IE12 criada** (soma dos 4 buckets ==
+      `totalEmission` com tolerancia 3 wei via assert em `finalizeRound`).
+  - 7 custom errors novos: `BucketBpsSumInvalid`, `BucketBpsOutOfBounds`,
+    `EmissionMismatch`, `InvalidGaugeIncentiveDuration` (alem de reusar
+    `RoundNotClosed`/`RoundAlreadyFinalized`/`OutOfOrderFinalize`/
+    `InvalidAlpha`/`InvalidCapMax`/`AlreadyClaimed` etc do V1).
+  - 8 eventos novos: `RoundFinalizedV2`, `BucketEmissionMinted`,
+    `GaugePauseFallback`, `BucketBpsUpdated`, `Claimed`, `AlphaUpdated`,
+    `CapMaxUpdated`, `GaugePoolIdUpdated`, `GaugeIncentiveDurationUpdated`.
+  - **Interfaces novas**:
+    - `contracts/interfaces/ITreasuryRewards.sol` — slim interface consumida
+      pelo V2 (`depositPolRefill`, `depositPendingGaugeRewards`).
+    - `contracts/interfaces/ILiquidityGaugeRewards.sol` — slim interface
+      consumida pelo V2 e Treasury (`notifyRewardAmount`, `paused`).
+- **Treasury — extensao Fase 1.4**: 2 novas roles
+  (`POL_REFILL_DEPOSITOR_ROLE`, `GAUGE_FALLBACK_DEPOSITOR_ROLE`),
+  ledgers `polRefillBucket` e `pendingGaugeRewards`, e 5 novas funcoes:
+  - `depositPolRefill(amount)` — accumula bucket bonders no ledger
+    contabil interno (CREDIT cunhado para o Treasury pelo V2 antes do call).
+  - `addPOLFromRefill(creditAmount, usdcAmount, ...)` — drena o ledger
+    casado com USDC do balance livre do Treasury para injecao em
+    `polTokenId` (reusa `_orderTokens` + `_provisionLiquidity`). CEI:
+    debita ledger ANTES da chamada externa (idempotencia em revert).
+    Reverte com `PolRefillBucketInsufficient` se `creditAmount > polRefillBucket`.
+  - `depositPendingGaugeRewards(amount)` — fallback contabil quando
+    `gauge.paused()` no `finalizeRound` (red flag E.3 #2).
+  - `flushPendingGaugeRewards(duration)` — drena ledger para o gauge via
+    `notifyRewardAmount` apos despausar. Reverte com `LiquidityGaugePaused`
+    se gauge ainda paused; `LiquidityGaugeNotSet` se `liquidityGauge` zero;
+    `NoPendingGaugeRewards` se ledger vazio.
+  - `setLiquidityGauge(gauge, poolId)` — configura destino do flush.
+    Eventos novos: `PolRefillDeposited`, `PolRefillUsed`, `PendingGaugeDeposited`,
+    `PendingGaugeFlushed`, `LiquidityGaugeSet`. Errors: `PolRefillBucketInsufficient`,
+    `LiquidityGaugeNotSet`, `LiquidityGaugePaused`, `NoPendingGaugeRewards`.
+- **ProjectRegistry — `ownerRecipient` com timelock 48h**: red flag E.3 #1
+  do parecer (sem timelock, owner do projeto poderia hot-swap o recipient
+  entre `finalizeRound` e indexacao off-chain, desviando o bucket apps
+  inteiro). Implementa pattern `propose` -> aguarda `OWNER_RECIPIENT_TIMELOCK`
+  (48h) -> `apply` permissionless. View `ownerRecipient(projectId)` retorna
+  o recipient explicito ou faz fallback para `project.owner`. Funcoes:
+  `proposeOwnerRecipient(projectId, newRecipient)` (only owner),
+  `applyOwnerRecipient(projectId)` (permissionless apos `effectiveAt`),
+  `cancelOwnerRecipient(projectId)` (owner OU governance — escape hatch).
+  Eventos: `OwnerRecipientProposed`, `OwnerRecipientApplied`,
+  `OwnerRecipientCancelled`. Errors: `OwnerRecipientTimelockActive`,
+  `NoPendingOwnerRecipient`.
+- **Mock novo**: `contracts/test/LiquidityGaugeRewardsMock.sol` — mock minimo
+  da interface `ILiquidityGaugeRewards` para testes da Fase 1.4 (bypass do
+  gauge real que tem dependencias pesadas com UniswapV3Staker + NPM canonico).
+- **Testes novos**: 3 suites totalizando 71 tests:
+  - `test/RewardDistributorV2.test.ts` (40 tests): construction bounds,
+    `setBucketBps` com 4 bounds individuais + soma, finalize com 4 buckets
+    distribuidos, IE12 (soma == totalEmission), apps mint para
+    `ownerRecipient`, gauge paused -> fallback Treasury, bonders -> POL
+    refill, claim usando bucket stakers (nao totalEmission), probation
+    penalty, claimMany batch, previews, governance setters.
+  - `test/Treasury.polRefill.test.ts` (18 tests): cobre `depositPolRefill`,
+    `addPOLFromRefill` (CEI + integracao NPM), `depositPendingGaugeRewards`,
+    `flushPendingGaugeRewards` (com gauge mock), `setLiquidityGauge`, gating
+    de roles, errors.
+  - `test/ProjectRegistry.timelock.test.ts` (13 tests): `ownerRecipient`
+    fallback, propose com 48h delay, sobrescrita de pending, apply
+    permissionless apos `effectiveAt`, revert antes do timelock, cancel
+    pelo owner E pela governance, integracao com ownership transfer.
+- **Coverage Fase 1.4**: V2 95% lines, Treasury 100% lines, Registry 100%
+  lines. Suite total: 765 passing (anterior 694 + 71 novos), zero regressao.
+
+- **Fase 1.3 do pivot CLP — `LiquidityGauge` (incentivos LP).** Adapter
+  sobre o `UniswapV3Staker` canonico (Uniswap Foundation, mainnet
+  `0xe34139463bA50bD61336E0c446Bd8C0867c6fE65`) que distribui o **bucket
+  de 25% da emissao de CREDIT** para LPs externos do par CREDIT/USDC.
+  Parametros operacionais congelados em
+  `audit/economist/2026-04-24-clp-pivot.md` Anexo D (D.1–D.13).
+  **Contratos**:
+  - `contracts/LiquidityGauge.sol` (novo): adapter com 2 roles
+    (`GOVERNANCE_ROLE` para whitelist/denylist/pause/vesting params;
+    `REWARD_NOTIFIER_ROLE` plural para Treasury manual + futuro
+    RewardDistributor automatico, D.7), whitelist governance-tunable de
+    pools (D.1, seed CREDIT/USDC 0.3%), stake/unstake mecanico delegado
+    ao staker oficial (D.2 — gauge mantem ledger interno do real owner e
+    repassa NFT via safeTransferFrom com IncentiveKey no calldata, staker
+    faz auto-stake on receive), reward proporcional a `liquidity in-range`
+    (D.3, padrao staker oficial, secondsInsideX128), **vesting linear de
+    14 dias** em `unstake()` (D.4 — `harvest(user, maxAmount)` saca a
+    fracao ja vestida, suporta saque parcial e compactacao em-loco de
+    positions exauridas; multiplas positions do mesmo user acumulam),
+    `notifyRewardAmount(poolId, amount, duration)` cria nova incentive no
+    staker (D.5 — modelo simplificado de 1 incentive ativa por pool por
+    vez, rollover via `endIncentive` + nova notify), sem boost cap (D.6),
+    `pause()/unpause()` bloqueia entrada mas mantem
+    `unstake/harvest/emergencyUnstake` operacionais (D.8 + IE10),
+    `emergencyUnstake(tokenId)` fail-safe sempre permitido que devolve
+    NFT incondicionalmente e descarta reward do ciclo atual (mas NAO
+    afeta VestingPositions in-flight), **denylist anti self-dealing**
+    (D.9 — Treasury/POL nao pode stakear no gauge para evitar protocolo
+    pagar rewards a si mesmo), `endIncentive(poolId)` apos expiry com
+    refund para o gauge, `governanceRescueRewards(to, amount)` para
+    drenar saldo orfao (refund + forfeits de emergencyUnstake).
+    Implementa `IERC721Receiver` para aceitar NFT em ambos sentidos
+    (gauge faz pull do user E recebe de volta do staker em
+    `withdrawToken`).
+  - 11 custom errors: `ZeroAddress`, `ZeroAmount`, `InvalidPool`,
+    `PoolDisabled`, `NoActiveIncentive`, `Denylisted`, `StakeNotFound`,
+    `NotStakeOwner`, `InvalidVestingDuration`, `InsufficientBalance`,
+    `InvalidIncentiveDuration`, `IncentiveNotExpired`, `IncentiveOverlap`.
+  - 10 eventos: `PoolAdded`, `PoolEnabledSet`, `RewardNotified`,
+    `IncentiveEnded`, `Staked`, `Unstaked`, `EmergencyUnstaked`,
+    `Harvested`, `VestingDurationSet`, `DenylistSet`, `RewardsRescued`.
+
+  **Interface nova**:
+  `contracts/interfaces/IUniswapV3Staker.sol` — 7 funcoes consumidas
+  (`createIncentive`, `endIncentive`, `stakeToken`, `unstakeToken`,
+  `claimReward`, `rewards`, `withdrawToken`) + struct `IncentiveKey`.
+  Nao importa de `@uniswap/v3-staker` por incompatibilidade de pragma
+  (0.7.6 vs 0.8.24); selectors validados contra ABI do staker canonico.
+
+  **Mocks novos**:
+  - `contracts/test/UniswapV3StakerMock.sol` — simula
+    createIncentive/endIncentive/stake/unstake/claim/rewards/withdraw com
+    contabilidade observavel. Helpers `accrueRewards(rewardToken, owner,
+amount)` para injetar ganhos atribuiveis e `setForceFailUnstake(bool)`
+    para exercitar try/catch em `emergencyUnstake`. Implementa
+    `onERC721Received` espelhando o staker real (decoder de IncentiveKey
+    em `data` faz auto-stake on receive).
+  - `contracts/test/NonfungiblePositionManagerERC721Mock.sol` — mock
+    **ERC-721 real** (herda OZ `ERC721`) com helper `mintTo(to, tokenId)`.
+    Necessario para o flow `safeTransferFrom` (user -> gauge -> staker
+    -> user); o `NonfungiblePositionManagerMock` previo (Fase 1.2) NAO e
+    ERC-721 real entao nao serve para o gauge. Stubs das funcoes de
+    `INonfungiblePositionManager` revertem com `NOT_IMPLEMENTED` para
+    sinalizar uso indevido.
+
+  **Testes**: `test/LiquidityGauge.test.ts` com 64 testes cobrindo
+  constructor (zero addresses, roles), todos os setters governance-only,
+  `notifyRewardAmount` (zero amount, duration <
+  `INCENTIVE_DURATION_MIN`, unknown poolId, overlap, replacement apos
+  expiry), `stake` (denylisted/D.9, paused, unknown pool, disabled pool,
+  no active incentive, happy path com transferencia do NFT ao staker e
+  registro do Stake), `unstake` (stake unknown, not owner, happy path com
+  vesting position criada, zero rewards path), `emergencyUnstake` (forfeit
+  de rewards, paused-still-works, vesting in-flight intacto, try/catch
+  fail-safe quando staker reverte unstake), **vesting linear** (t=0d
+  harvest 0, t=7d ~50%, t=14d 100%, partial cap, multiplas positions
+  acumulam corretamente, harvest funciona pausado), `endIncentive` (gates
+  de expiry e role, refund para o gauge), `governanceRescueRewards`
+  (zero address, zero amount, amount > balance via `InsufficientBalance`,
+  exact amount, max sentinel), token ordering CREDIT<USDC e CREDIT>USDC,
+  e `onERC721Received` retorna selector canonico. **Coverage**:
+  `LiquidityGauge.sol` 99.32% lines / 92.24% branches / 95.45% functions
+  (linha unica nao coberta era `pendingRewardsAtStaker`, agora coberta);
+  `IUniswapV3Staker.sol` 100%. Suite total **692 passing** (630 + 62
+  novos antes de adicionar 2 testes de view -> 64), sem regressao.
+
+  **Slither**: 0 high/medium atribuiveis. Achados informacionais:
+  `reentrancy-benign` em `unstake` (escrita de VestingPosition apos call
+  ao staker — protegido por `nonReentrant`, staker e contrato canonico
+  trusted), `timestamp` em comparacoes de vesting/incentive (intencional,
+  padrao do projeto com `not-rely-on-time: off` no solhint),
+  `dangerous strict equality` em `== 0` (padrao aceitavel),
+  `naming-convention` em `CREDIT_TOKEN`/`UNISWAP_V3_STAKER`/
+  `POSITION_MANAGER` (consistente com `Staking.GOV_TOKEN` —
+  `solhint-disable` inline), pragma OZ `^0.8.20` e dead-code de OZ
+  identicos aos das fases anteriores.
+
+  **Documentacao operacional**:
+  `docs/governance/fase1-3-liquidity-gauge.md` — sequencia da proposta
+  DAO de bootstrap (deploy gauge -> grantRole REWARD_NOTIFIER ao
+  Treasury -> addPool(creditUsdcPool) -> setDenylist(treasury, true)
+  para D.9 enforcement -> Treasury aprova CREDIT e chama
+  notifyRewardAmount), pre-requisitos (POL ja bootstrappado da Fase 1.2,
+  pool inicializado, staker canonico conhecido na rede-alvo), fluxo do
+  usuario, cenarios (emergencyUnstake fail-safe, pool removida da
+  whitelist drena ate unstake, pause global, mudanca de
+  vestingDuration nao retroativa), riscos conhecidos
+  (R1 two-sided risk POL/FFP/Gauge do Anexo C, R2 mercenary capital
+  com vesting 14d, R3 POL self-staking defesa em profundidade,
+  R4 LP fora de range, R5 incentive overlap), e proximas decisoes
+  pendentes do user (endereco do staker em Sepolia — nao ha staker
+  oficial; valor inicial da primeira incentive — Treasury manual ate
+  Fase 1.4; ERC-4626 wrapper para composability — Fase 2).
+
+  **Pendencias para o user**:
+  (1) Confirmar plano de deploy do `UniswapV3Staker` em Sepolia (nao ha
+  instancia oficial — deployar uma?);
+  (2) Aprovar valor inicial da primeira incentive (proposta DAO manual
+  ate Fase 1.4 RewardDistributor refator);
+  (3) Avaliar se POL self-staking deve ter denylist secundaria (Staking,
+  RewardDistributor, FeeRouter) por defesa em profundidade na proposta
+  de bootstrap.
+
+- **Fase 1.2 do pivot CLP — `Treasury` POL (Protocol Owned Liquidity).**
+  Treasury vira LP permanente do pool CREDIT/USDC na Uniswap V3 (fee tier
+  3000, full range), dando substancia ao floor defendido pelo FFP da Fase
+  1.1 — sem liquidez no pool, `executeBuyback` swappa contra book vazio.
+  Parametros operacionais congelados em
+  `audit/economist/2026-04-24-pol-params.md`. **Contratos**:
+  - `contracts/Treasury.sol` ganha 4 funcoes governance-only +
+    nonReentrant: `addPOL(creditAmount, usdcAmount, amount0Min,
+amount1Min, deadline)` (primeira chamada cunha NFT via
+    `INonfungiblePositionManager.mint`, subsequentes usam
+    `increaseLiquidity` no mesmo `polTokenId`); `removePOL(liquidity,
+amount0Min, amount1Min, deadline)` (decreaseLiquidity + collect em
+    sequencia, NAO queima o NFT — posicao persiste com liq=0 para
+    reuso); `collectPOLFees(amount0Max, amount1Max)` (claim de fees
+    para Treasury, sem auto-compound — Decisao 4 do parecer §4); e o
+    setter `setPositionManager(npm)`.
+  - 2 views novas: `polPosition()` (tokenId, liquidity, ticks, owed) e
+    `polTokensOrdered()` (token0, token1, creditIsToken0) — esta
+    ultima crucial para o proponente da DAO calcular `amount0Min`/
+    `amount1Min` na ordem do pool (Uniswap V3 ordena tokens por
+    address ascendente).
+  - Storage adicional: `INonfungiblePositionManager public
+positionManager`, `uint256 public polTokenId` (0 = nao seedada).
+    Constants `POL_TICK_LOWER = -887220`, `POL_TICK_UPPER = 887220`
+    (full range no fee tier 3000, tickSpacing 60).
+  - 3 eventos novos: `POLAdded(tokenId, liquidity, creditAmount,
+usdcAmount)`, `POLRemoved(tokenId, liquidityRemoved, amount0Out,
+amount1Out)`, `POLFeesCollected(tokenId, amount0, amount1)`. Setter
+    reusa `BuybackInfraUpdated("positionManager", ...)`.
+  - 1 custom error nova: `POLNotInitialized()` (chamadas a
+    `removePOL`/`collectPOLFees`/`polPosition` antes de `addPOL` inicial).
+  - Helper interno `_orderTokens(creditAmount, usdcAmount)` retorna
+    `(token0, token1, amount0, amount1)` corretos para o NPM
+    independente de qual token tem endereco menor — testado com CREDIT
+    < USDC E CREDIT > USDC.
+  - Helper `_provisionLiquidity(...)` despacha entre `mint`/
+    `increaseLiquidity` e helper `_approveNPM(...)` faz forceApprove
+    set-and-reset. Ambos extraidos para manter `addPOL` <= 50 linhas
+    (solhint function-max-lines).
+
+  **Interface nova**:
+  `contracts/interfaces/INonfungiblePositionManager.sol` — 5 funcoes
+  consumidas (mint, increaseLiquidity, decreaseLiquidity, collect,
+  positions) + 4 structs. Nao importa de `@uniswap/v3-periphery` por
+  incompatibilidade de pragma (0.7.6 vs 0.8.24); selectors validados
+  contra ABI canonica do NPM.
+
+  **Mock novo**:
+  `contracts/test/NonfungiblePositionManagerMock.sol` — simula
+  mint/increase/decrease/collect/positions com ledger interno
+  (`StoredPosition` por tokenId, distribuicao proporcional em
+  decrease, transfer em collect). Helper de teste `accrueFees`
+  injeta fees pendentes para exercitar `collectPOLFees`. Helpers
+  `setForceSlippageRevert`/`setOverrideAmounts` para casos
+  adversariais.
+
+  **Testes**: `test/Treasury.pol.test.ts` com 31 testes cobrindo
+  ciclo completo (add inicial -> add incremento -> collectFees ->
+  removePOL parcial -> removePOL total), token ordering com CREDIT <
+  USDC E CREDIT > USDC (fixture itera deploys de USDC mock ate
+  satisfazer ordering desejada), todos os caminhos tristes
+  (BuybackInfraMissing, POLNotInitialized, ZeroAmount,
+  AccessControlUnauthorizedAccount, slippage do NPM repassado),
+  verificacao de eventos com `withArgs`, e estado pos-operacao
+  (polTokenId persiste apos full remove, balances do Treasury,
+  approvals zerados). **Coverage**: `Treasury.sol` mantem 100% lines
+  e funcs (90.56% branch, +0.x absoluto vs Fase 1.1);
+  `INonfungiblePositionManager.sol` 100%. Suite total 630 passing
+  (599 + 31 novos), sem regressao.
+
+  **Slither**: 0 high/medium novos atribuiveis a esta mudanca. Os
+  achados em `_provisionLiquidity` (reentrancy-no-eth com escrita
+  de `polTokenId` apos `mint`) e em `polPosition`/`removePOL`
+  (unused-return) sao falsos positivos justificados em comentarios
+  inline — `addPOL` tem `nonReentrant`, `polPosition` e `view`, e
+  os retornos ignorados de `decreaseLiquidity`/`positions` sao
+  deliberados (decrease registra debito que `collect` saca; view
+  ignora campos irrelevantes).
+
+  **Documentacao operacional**:
+  `docs/governance/fase1-2-pol.md` — sequencia da proposta DAO de
+  seed atomica (grantRole MINTER_ROLE -> mint(treasury) -> revoke ->
+  addPOL via Timelock.executeBatch), pre-requisitos (pool criado e
+  initialized off-chain antes da proposta), token ordering, cenarios
+  esperados (spot crash, token deplete em buyback two-sided risk
+  §8 do parecer, spot rally), politica de exit (75% supermaioria
+  para >25% — pendente de proposal type no Governor), soft cap 50%
+  (governance norm, sem hard cap on-chain).
+
+  **Pendencias para o user**:
+  (1) Decidir caminho de bootstrap USDC e tamanho do seed inicial
+  ($200k mínimo / $500k preferido);
+  (2) Confirmar texto da proposta DAO atomica de seed;
+  (3) Validar interface `INonfungiblePositionManager` contra a ABI do
+  NPM canonico na rede alvo (selectors). NPM mainnet:
+  `0xC36442b4a4522E871399CD717aBDD847Ab11FE88`; Sepolia:
+  `0x1238536071E1c677A632429e3655c799b22cDA52`.
+
+- **Fase 1.1 do pivot CLP — `Treasury.executeBuyback` real (FFP).**
+  Substitui o stub anterior por um buyback-and-burn defensivo do floor
+  price segundo o modelo FFP (Floating com Floor Price defendido) do
+  parecer `audit/economist/2026-04-24-credit-peg.md`. **Contratos**:
+  refator profundo de `contracts/Treasury.sol` (986 LOC) — construtor
+  passa de `(admin)` para `(admin, creditToken, usdcToken)` com ambos
+  os tokens imutaveis; novo `executeBuyback(usdcAmount, minCreditOut)`
+  governance-gated + nonReentrant que valida 5 pre-condicoes (spot <
+  floor; breach >= 24h consecutivas; Chainlink USDC em [0.99, 1.01]
+  com staleness < 6h; cap por evento 20% reservas; cap mensal 30%
+  snapshot inicio do mes) antes de fazer swap UniV3 USDC->CREDIT e
+  queimar o CREDIT recebido via `ICreditTokenBurnable.burn`; nova
+  `recordDailyPrice()` permissionless com cooldown 22h alimentando ring
+  buffer de 90 slots para MA90; 9 setters governance-only com bounds
+  sanitarios para parametros do FFP (defaults congelados em
+  `floorMultiplierBps=5000`, `floorAbsoluteUsd=1e17`,
+  `triggerDurationSecs=24h`, `twapWindowSecs=30min`,
+  `chainlinkSanity=[9900, 10100]`, `capPerEventBps=2000`,
+  `capMonthlyBps=3000`, `slippageMaxBps=100`); novos custom errors
+  (`BuybackInfraMissing`, `SpotAboveFloor`,
+  `BreachDurationInsufficient`, `UsdcDepegDetected`, `ChainlinkStale`,
+  `CapPerEventExceeded`, `CapMonthlyExceeded`,
+  `RecordCooldownActive`, `ParamOutOfBounds`, `InvalidOraclePrice`,
+  `InvalidChainlinkAnswer`); eventos `BuybackExecuted`,
+  `DailyPriceRecorded`, `BuybackParamsUpdated`,
+  `BuybackInfraUpdated`. **Interfaces minimas pinadas**:
+  `contracts/interfaces/ICreditPriceOracle.sol`,
+  `contracts/interfaces/IUniswapV3Pool.sol`,
+  `contracts/interfaces/IUniswapV3SwapRouter.sol`,
+  `contracts/interfaces/IChainlinkAggregator.sol`,
+  `contracts/interfaces/ICreditTokenBurnable.sol` — todas com surface
+  enxuta (so funcoes consumidas) para evitar dependency hell de
+  `@uniswap/v3-*`. **Mocks de teste**:
+  `contracts/test/UniswapV3PoolMock.sol`,
+  `contracts/test/UniswapV3SwapRouterMock.sol`,
+  `contracts/test/ChainlinkAggregatorMock.sol`. **Cobertura**: 35
+  testes em `test/Treasury.buyback.test.ts` (constructor + infra,
+  bounds dos 9 setters, recordDailyPrice + ring buffer + cooldown,
+  happy path, 13 caminhos sad cobrindo cada precondicao,
+  rollover de mes); suite completa do projeto subiu para 599 testes
+  passando (de 568). `Treasury.test.ts`, `CommunityGovernor.test.ts`,
+  `FeeRouter.test.ts` adaptados para o construtor 3-arg passando
+  `creditToken` real e `usdcToken=address(0)` (buyback FFP fica
+  desabilitado por construcao quando USDC nao configurado — ver
+  NatSpec do construtor). **Ignition**: `ignition/modules/Dao.ts`
+  expoe parametro `usdcAddress` (default `address(0)` aceito em
+  dev/testnet; producao deve sobrescrever via
+  `ignition/parameters/production.json` apontando para o USDC
+  oficial). **Slither**: limpo (so detecta padroes ja existentes do
+  projeto — `timestamp` em comparacoes intencionais, `low-level-calls`
+  em `sweepETH`, `naming-convention` para imutaveis, `missing-inheritance`
+  informacional). **Documentacao**:
+  `docs/governance/fase1-1-buyback-ffp.md` (runbook operacional com
+  pre-condicoes, bootstrap dos 90 dias do MA, parametros e bounds, 4
+  cenarios esperados, checklist pos-deploy, caminhos sad). **Esta
+  entrada documenta a IMPLEMENTACAO em codigo**; o ciclo de
+  governanca (concessao de `BURNER_ROLE`, setters de infra, primeira
+  proposta de buyback) sera disparado em propostas separadas quando o
+  user decidir submeter.
+- `scripts/governance/propose-fase0-default-split.ts`,
+  `scripts/governance/execute-fase0-default-split.ts`,
+  `test/governance/Fase0DefaultSplit.test.ts` e
+  `docs/governance/fase0-default-split.md` — pacote operacional da **Fase 0
+  do pivot CLP**: proposta DAO unica que executa
+  `FeeRouter.setDefaultSplit({burnBps: 7000, treasuryBps: 2000, rebateBps: 1000})`,
+  destravando o pre-requisito C4 (Treasury sem receita recorrente) do
+  parecer `audit/economist/2026-04-24-clp-pivot.md`. O script de propose
+  tem modo `DRY_RUN=true` (imprime calldata + proposalId computado via
+  `Governor.hashProposal` sem submeter); o script de execute identifica
+  automaticamente o estado da proposta e executa a transicao apropriada
+  (`Succeeded -> queue`, `Queued+ETA maturado -> execute`, `Executed -> noop`).
+  Teste de integracao cobre o ciclo completo (propose → vote → queue →
+  execute → verifica `defaultSplit() == (7000, 2000, 1000)` + evento
+  `DefaultSplitUpdated`), sobrescrita do split antigo e caminho triste
+  (proposer sem voting power -> `GovernorInsufficientProposerVotes`).
+  Nenhum contrato Solidity foi alterado — a proposta usa a funcao
+  `setDefaultSplit` ja existente. **Esta entrada documenta a PREPARACAO
+  da proposta**; a execucao on-chain real movera esta entrada para a
+  versao publicada quando o user disparar o ciclo via Governor. Modelo de
+  peg adotado: FFP (`audit/economist/2026-04-24-credit-peg.md`).
 - `contracts/test/ReentrantCallMock.sol` — ERC-20 malicioso generico que
   durante `_update` executa um `call(target, data)` arbitrario. Permite
   armar reentradas cross-function sem precisar de um mock especifico por

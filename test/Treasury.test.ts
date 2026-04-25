@@ -42,9 +42,23 @@ describe("Treasury", function () {
     const gov = await GovernanceToken.deploy("Web3Community Governance", "GOV", admin.address);
     await gov.waitForDeployment();
 
-    // Treasury: admin inicial = signer[0] (em prod seria o Timelock)
+    // CREDIT (necessario para o 3o arg do constructor; nao consumido neste suite).
+    const CreditToken = await ethers.getContractFactory("CreditToken");
+    const credit = await CreditToken.deploy("Credit", "CREDIT", admin.address);
+    await credit.waitForDeployment();
+
+    // Treasury: admin inicial = signer[0] (em prod seria o Timelock).
+    // 3-arg constructor (Fase 1.1 do pivot CLP): (admin, creditToken, usdcToken).
+    // USDC = ZeroAddress aceito (buyback FFP fica desativado por construcao —
+    // este suite nao exercita buyback real, apenas verifica access control e
+    // guards das funcoes existentes; o teste dedicado a FFP esta em
+    // test/Treasury.buyback.test.ts).
     const Treasury = await ethers.getContractFactory("Treasury");
-    const treasury = await Treasury.deploy(admin.address);
+    const treasury = await Treasury.deploy(
+      admin.address,
+      await credit.getAddress(),
+      ethers.ZeroAddress,
+    );
     await treasury.waitForDeployment();
 
     const DEFAULT_ADMIN_ROLE = await treasury.DEFAULT_ADMIN_ROLE();
@@ -89,11 +103,19 @@ describe("Treasury", function () {
     });
 
     it("reverts when admin is zero address", async function () {
+      const { gov } = await loadFixture(deployFixture);
       const Treasury = await ethers.getContractFactory("Treasury");
-      await expect(Treasury.deploy(ethers.ZeroAddress)).to.be.revertedWithCustomError(
-        Treasury,
-        "ZeroAddress",
-      );
+      await expect(
+        Treasury.deploy(ethers.ZeroAddress, await gov.getAddress(), ethers.ZeroAddress),
+      ).to.be.revertedWithCustomError(Treasury, "ZeroAddress");
+    });
+
+    it("reverts when creditToken is zero address", async function () {
+      const [admin] = await ethers.getSigners();
+      const Treasury = await ethers.getContractFactory("Treasury");
+      await expect(
+        Treasury.deploy(admin.address, ethers.ZeroAddress, ethers.ZeroAddress),
+      ).to.be.revertedWithCustomError(Treasury, "ZeroAddress");
     });
 
     it("supports IAccessControl interface", async function () {
@@ -396,53 +418,12 @@ describe("Treasury", function () {
     });
   });
 
-  describe("executeBuyback (stub)", function () {
-    it("emits BuybackRequested and does NOT move funds", async function () {
-      const { treasury, usdc, governance } = await loadFixture(deployFixture);
-      const stable = await usdc.getAddress();
-      const amountIn = 10_000n * 10n ** 6n;
-      const minGovOut = 100n * 10n ** 18n;
-      const swapData = "0xdeadbeef";
-
-      const balBefore = await treasury.balanceOf(stable);
-
-      await expect(
-        treasury.connect(governance).executeBuyback(stable, amountIn, minGovOut, swapData),
-      )
-        .to.emit(treasury, "BuybackRequested")
-        .withArgs(stable, amountIn, minGovOut, swapData);
-
-      expect(await treasury.balanceOf(stable)).to.equal(balBefore);
-    });
-
-    it("reverts when caller lacks GOVERNANCE_ROLE", async function () {
-      const { treasury, usdc, other, GOVERNANCE_ROLE } = await loadFixture(deployFixture);
-      await expect(treasury.connect(other).executeBuyback(await usdc.getAddress(), 1n, 1n, "0x"))
-        .to.be.revertedWithCustomError(treasury, "AccessControlUnauthorizedAccount")
-        .withArgs(other.address, GOVERNANCE_ROLE);
-    });
-
-    it("reverts on zero stable", async function () {
-      const { treasury, governance } = await loadFixture(deployFixture);
-      await expect(
-        treasury.connect(governance).executeBuyback(ethers.ZeroAddress, 1n, 1n, "0x"),
-      ).to.be.revertedWithCustomError(treasury, "ZeroAddress");
-    });
-
-    it("reverts on zero amountIn", async function () {
-      const { treasury, usdc, governance } = await loadFixture(deployFixture);
-      await expect(
-        treasury.connect(governance).executeBuyback(await usdc.getAddress(), 0n, 1n, "0x"),
-      ).to.be.revertedWithCustomError(treasury, "ZeroAmount");
-    });
-
-    it("reverts on zero minGovOut", async function () {
-      const { treasury, usdc, governance } = await loadFixture(deployFixture);
-      await expect(
-        treasury.connect(governance).executeBuyback(await usdc.getAddress(), 1n, 0n, "0x"),
-      ).to.be.revertedWithCustomError(treasury, "ZeroAmount");
-    });
-  });
+  // Suite de `executeBuyback` (Fase 1.1 do pivot CLP — modelo FFP) vive em
+  // test/Treasury.buyback.test.ts. O stub v1 foi substituido por uma
+  // implementacao real (swap USDC->CREDIT + burn), com pre-condicoes
+  // numericas (floor, breach 24h, Chainlink sanity, caps). Manter os
+  // testes do FFP em arquivo separado evita inflar este suite com mocks
+  // de Uniswap/Chainlink usados so la.
 
   describe("ETH handling", function () {
     it("accepts ETH via receive() and emits ETHReceived", async function () {
@@ -524,7 +505,7 @@ describe("Treasury", function () {
         () => treasury.connect(other).transfer(tokenAddr, recipient1.address, 1n),
         () => treasury.connect(other).batchTransfer(tokenAddr, [recipient1.address], [1n]),
         () => treasury.connect(other).payRebates(tokenAddr, [recipient1.address], [1n], 1n),
-        () => treasury.connect(other).executeBuyback(tokenAddr, 1n, 1n, "0x"),
+        () => treasury.connect(other).executeBuyback(1n, 1n),
         () => treasury.connect(other).sweepETH(recipient1.address, 1n),
       ];
 
@@ -667,19 +648,15 @@ describe("Treasury", function () {
     });
 
     it("blocks cross-function reentry into executeBuyback", async function () {
-      const { treasury, mock, governance, recipient1, usdc } =
-        await loadFixture(deployCrossFnFixture);
+      const { treasury, mock, governance, recipient1 } = await loadFixture(deployCrossFnFixture);
       const mockAddr = await mock.getAddress();
 
-      // executeBuyback nao faz call externo, mas seu guard compartilha o
-      // flag com os demais `nonReentrant`. Chamar durante `transfer` em
-      // execucao deve reverter em linha 271.
-      const reentryData = treasury.interface.encodeFunctionData("executeBuyback", [
-        await usdc.getAddress(),
-        100n,
-        1n,
-        "0x",
-      ]);
+      // executeBuyback faz call externo (oracle/router/burn), mas seu guard
+      // compartilha o flag com os demais `nonReentrant`. Chamar durante
+      // `transfer` em execucao deve reverter no entry-check do guard *antes*
+      // de qualquer leitura de oracle. Assinatura nova (Fase 1.1):
+      // (uint256 usdcAmount, uint256 minCreditOut).
+      const reentryData = treasury.interface.encodeFunctionData("executeBuyback", [100n, 1n]);
       await mock.armCall(
         await treasury.getAddress(),
         reentryData,

@@ -73,9 +73,16 @@ describe("FeeRouter", function () {
     const REG_GOV_ROLE = await registry.GOVERNANCE_ROLE();
     await registry.connect(admin).grantRole(REG_GOV_ROLE, governance.address);
 
-    // 4. Treasury.
+    // 4. Treasury (3-arg constructor: admin, creditToken, usdcToken).
+    //    USDC nao e usado pelo FeeRouter; passamos `address(0)` como USDC,
+    //    que e aceito pelo construtor (buyback FFP fica desabilitado por
+    //    construcao ate ser configurado via governance — ver Treasury.sol).
     const Treasury = await ethers.getContractFactory("Treasury");
-    const treasury = await Treasury.deploy(admin.address);
+    const treasury = await Treasury.deploy(
+      admin.address,
+      await credit.getAddress(),
+      ethers.ZeroAddress,
+    );
     await treasury.waitForDeployment();
 
     // 5. BurnTracker.

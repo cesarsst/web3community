@@ -124,6 +124,46 @@ contract ProjectRegistry is AccessControl {
     mapping(uint256 => address) private _pendingOwners;
 
     // ------------------------------------------------------------------
+    // Storage adicionado na Fase 1.4 do pivot CLP — ownerRecipient timelocked
+    // ------------------------------------------------------------------
+    //
+    // Motivacao (red flag E.3 #1 do parecer 2026-04-24-clp-pivot.md): com a
+    // introducao do bucket "apps" em `RewardDistributorV2.finalizeRound`, o
+    // distributor mint CREDIT direto para `ownerRecipient(projectId)`. Se o
+    // setter fosse imediato, o owner do projeto poderia hot-swap o recipient
+    // entre `finalizeRound` e o instante em que a tx e indexada off-chain,
+    // desviando rewards para outro endereco. A mitigacao e um timelock
+    // operacional de 48h: setter so propoe a mudanca; aplicacao e separada e
+    // qualquer um pode trigger apos `effectiveAt`.
+    //
+    // Storage segue ao final do layout original (este contrato NAO e proxy,
+    // mas mantemos a convencao de auditabilidade — append-only).
+
+    /// @notice Pending update de ownerRecipient com timelock de 48h.
+    /// @param newRecipient Endereco que sera ativado em `effectiveAt`.
+    /// @param effectiveAt Unix timestamp (seg) em que {applyOwnerRecipient}
+    ///                    pode ser chamado por qualquer um. `0` indica
+    ///                    "sem proposta pendente".
+    struct PendingRecipientChange {
+        address newRecipient;
+        uint64 effectiveAt;
+    }
+
+    /// @notice Recipient ativo por projeto. Default `address(0)` significa
+    ///         "use `owner` como fallback" (ver {ownerRecipient(uint256)}).
+    ///         Quando setado via {applyOwnerRecipient}, vira o destino canonico
+    ///         dos rewards do bucket "apps" da Fase 1.4.
+    mapping(uint256 projectId => address recipient) private _ownerRecipient;
+
+    /// @notice Proposta pendente por projectId. Apenas uma proposta ativa por
+    ///         vez — nova {proposeOwnerRecipient} sobrescreve.
+    mapping(uint256 projectId => PendingRecipientChange) public pendingOwnerRecipient;
+
+    /// @notice Delay operacional do timelock para setar o ownerRecipient.
+    ///         48 horas — congelado no parecer 2026-04-24-clp-pivot.md (E.3).
+    uint64 public constant OWNER_RECIPIENT_TIMELOCK = 48 hours;
+
+    // ------------------------------------------------------------------
     // Events
     // ------------------------------------------------------------------
 
@@ -175,6 +215,34 @@ contract ProjectRegistry is AccessControl {
     event ProbationDurationUpdated(uint64 oldDuration, uint64 newDuration);
 
     // ------------------------------------------------------------------
+    // Events — ownerRecipient timelock (Fase 1.4)
+    // ------------------------------------------------------------------
+
+    /// @notice Emitido quando uma proposta de mudanca do ownerRecipient e
+    ///         registrada. Aplicacao requer aguardar `effectiveAt`.
+    /// @param projectId ID do projeto.
+    /// @param proposer Endereco que registrou a proposta (owner do projeto).
+    /// @param newRecipient Endereco proposto.
+    /// @param effectiveAt Timestamp UNIX (seg) a partir do qual
+    ///                    {applyOwnerRecipient} pode ser chamado.
+    event OwnerRecipientProposed(
+        uint256 indexed projectId,
+        address indexed proposer,
+        address indexed newRecipient,
+        uint64 effectiveAt
+    );
+
+    /// @notice Emitido em {applyOwnerRecipient} quando a proposta e ativada.
+    /// @param projectId ID do projeto.
+    /// @param oldRecipient Endereco antes da aplicacao (pode ser `address(0)`
+    ///                     se ainda usava o owner como fallback).
+    /// @param newRecipient Novo endereco ativo (canonico).
+    event OwnerRecipientApplied(uint256 indexed projectId, address indexed oldRecipient, address indexed newRecipient);
+
+    /// @notice Emitido em {cancelOwnerRecipient}.
+    event OwnerRecipientCancelled(uint256 indexed projectId, address indexed canceller);
+
+    // ------------------------------------------------------------------
     // Errors
     // ------------------------------------------------------------------
 
@@ -217,6 +285,15 @@ contract ProjectRegistry is AccessControl {
 
     /// @notice Chamador nao e o pending owner registrado para o projeto.
     error NotPendingOwner(uint256 projectId, address caller);
+
+    /// @notice Tentativa de aplicar ownerRecipient antes do `effectiveAt`.
+    /// @param effectiveAt Timestamp UNIX (seg) a partir do qual a aplicacao
+    ///                    e valida.
+    /// @param nowTs `block.timestamp` atual.
+    error OwnerRecipientTimelockActive(uint64 effectiveAt, uint64 nowTs);
+
+    /// @notice Nao ha proposta pendente para o projectId.
+    error NoPendingOwnerRecipient(uint256 projectId);
 
     // ------------------------------------------------------------------
     // Constructor
@@ -603,5 +680,120 @@ contract ProjectRegistry is AccessControl {
     function _requireProject(uint256 projectId) private view returns (Project storage) {
         _requireExists(projectId);
         return _projects[projectId];
+    }
+
+    // ------------------------------------------------------------------
+    // ownerRecipient timelock — Fase 1.4 (red flag E.3 #1)
+    // ------------------------------------------------------------------
+
+    /**
+     * @notice Endereco canonico para receber rewards do bucket "apps" da
+     *         Fase 1.4. Consultado pelo `RewardDistributorV2` em cada
+     *         `finalizeRound`.
+     * @dev Quando nunca foi setado para o projectId, retorna o `owner` atual
+     *      do projeto como fallback — preserva compatibilidade com o modelo
+     *      anterior (rewards iam para o owner via `payRebates` do Treasury).
+     *      Para projetos que jamais existiram, retorna `address(0)`.
+     * @param projectId ID do projeto.
+     * @return recipient Endereco canonico (nunca `address(0)` para projetos
+     *                   existentes).
+     */
+    function ownerRecipient(uint256 projectId) external view returns (address recipient) {
+        if (!_exists(projectId)) {
+            return address(0);
+        }
+        address explicit = _ownerRecipient[projectId];
+        if (explicit != address(0)) {
+            return explicit;
+        }
+        return _projects[projectId].owner;
+    }
+
+    /**
+     * @notice Inicia uma proposta de mudanca do ownerRecipient. A proposta
+     *         so pode ser aplicada via {applyOwnerRecipient} apos
+     *         {OWNER_RECIPIENT_TIMELOCK} (48h) terem decorrido.
+     * @dev `onlyOwner` (do projeto). Sobrescreve qualquer proposta pendente
+     *      previa — o relogio reinicia. Reverte se projeto Removed (recipient
+     *      fica congelado, simetrico a {updateMetadata}).
+     *
+     *      Justificativa do timelock (E.3 #1 do parecer
+     *      2026-04-24-clp-pivot.md): com a Fase 1.4, `RewardDistributorV2`
+     *      mint CREDIT direto para `ownerRecipient` na finalizacao da rodada.
+     *      Sem janela de espera, owner poderia hot-swap entre `finalizeRound`
+     *      e o instante observavel off-chain, desviando rewards. 48h e
+     *      compativel com o ciclo operacional da DAO (proposta + execucao
+     *      do Timelock principal levam ~2d).
+     * @param projectId ID do projeto.
+     * @param newRecipient Endereco proposto. `address(0)` reseta para o
+     *                     fallback (= owner atual do projeto).
+     */
+    function proposeOwnerRecipient(uint256 projectId, address newRecipient) external {
+        Project storage p = _requireProject(projectId);
+        if (p.status == Status.Removed) {
+            revert ProjectAlreadyRemoved(projectId);
+        }
+        if (p.owner != msg.sender) {
+            revert NotProjectOwner(projectId, msg.sender);
+        }
+
+        uint64 effectiveAt = uint64(block.timestamp) + OWNER_RECIPIENT_TIMELOCK;
+        pendingOwnerRecipient[projectId] = PendingRecipientChange({
+            newRecipient: newRecipient,
+            effectiveAt: effectiveAt
+        });
+
+        emit OwnerRecipientProposed(projectId, msg.sender, newRecipient, effectiveAt);
+    }
+
+    /**
+     * @notice Aplica a proposta pendente de ownerRecipient. Permissionless —
+     *         qualquer um pode chamar apos `effectiveAt`. Reverte se nao
+     *         houver proposta pendente.
+     * @dev O design permissionless e deliberado: o owner ja sinalizou intencao
+     *      em {proposeOwnerRecipient}, e atrasar a aplicacao apenas penaliza o
+     *      proprio owner. Bots ou keepers podem aplicar sem custo de
+     *      governanca.
+     *      Se a proposta foi `address(0)`, o efeito e "limpar o explicit
+     *      recipient" (volta ao fallback = owner do projeto).
+     * @param projectId ID do projeto.
+     */
+    function applyOwnerRecipient(uint256 projectId) external {
+        _requireExists(projectId);
+        PendingRecipientChange memory pending = pendingOwnerRecipient[projectId];
+        if (pending.effectiveAt == 0) {
+            revert NoPendingOwnerRecipient(projectId);
+        }
+        uint64 nowTs = uint64(block.timestamp);
+        if (nowTs < pending.effectiveAt) {
+            revert OwnerRecipientTimelockActive(pending.effectiveAt, nowTs);
+        }
+
+        address oldRecipient = _ownerRecipient[projectId];
+        _ownerRecipient[projectId] = pending.newRecipient;
+        delete pendingOwnerRecipient[projectId];
+
+        emit OwnerRecipientApplied(projectId, oldRecipient, pending.newRecipient);
+    }
+
+    /**
+     * @notice Cancela uma proposta pendente. Pode ser chamado pelo owner do
+     *         projeto OU por qualquer portador de `GOVERNANCE_ROLE` (escape
+     *         hatch caso a proposta seja maliciosa e o owner esteja
+     *         comprometido).
+     * @dev Reverte se nao ha proposta pendente. Cancelamento e idempotente
+     *      apos clearing.
+     * @param projectId ID do projeto.
+     */
+    function cancelOwnerRecipient(uint256 projectId) external {
+        Project storage p = _requireProject(projectId);
+        if (pendingOwnerRecipient[projectId].effectiveAt == 0) {
+            revert NoPendingOwnerRecipient(projectId);
+        }
+        if (p.owner != msg.sender && !hasRole(GOVERNANCE_ROLE, msg.sender)) {
+            revert NotProjectOwner(projectId, msg.sender);
+        }
+        delete pendingOwnerRecipient[projectId];
+        emit OwnerRecipientCancelled(projectId, msg.sender);
     }
 }

@@ -5,40 +5,54 @@
 
 ## The DAO's vault
 
-The `Treasury` is the central multi-asset vault. Three fundamental properties:
+`Treasury` is the central multi-asset vault. Three foundational properties:
 
-1. **Receives passively**. There is no `deposit` function. Anyone transfers ERC-20 (or ETH via `receive`) directly to the Treasury's address.
-2. **Only releases via governance**. All outflow functions (`transfer`, `batchTransfer`, `payRebates`, `executeBuyback`, `sweepETH`) require `GOVERNANCE_ROLE`.
-3. **No pause**. Deliberately, there is no function to freeze outflows. Any unilateral power to freeze the treasury would be a capture vector.
+1. **Receives passively**. There is no `deposit` function. Anyone transfers ERC-20 (or ETH via `receive`) directly to the Treasury address.
+2. **Releases only via governance**. Every outflow function requires `GOVERNANCE_ROLE`.
+3. **No pause**. Deliberately no function to freeze outflows. Any unilateral power to freeze the treasury would be a capture vector.
+
+From the CLP pivot (Phase 1, April/2026) onwards, the Treasury also performs four additional economic functions:
+
+| Function | CLP phase | Summary |
+|---|---|---|
+| **FFP buyback** | 1.1 | Real USDC -> CREDIT swap + immediate burn, defending the floor |
+| **POL** | 1.2 | Protocol-owned liquidity in the CREDIT/USDC pool (custodied NFT, full range) |
+| **Bonders bucket** | 1.4 | Receives 5% of per-round emission as the `polRefillBucket` ledger |
+| **Gauge fallback** | 1.4 | Accumulates the LPs bucket in `pendingGaugeRewards` while gauge is paused |
 
 The Treasury receives:
 
-- **CREDIT genesis mint** (10M in production). That is the only "programmatic" inflow; subsequent ones are via explicit transfer.
-- **`treasuryBps` slice** of `FeeRouter`'s split (default 0 in production, but adjustable via governance).
-- **Slash collateral** from projects removed with `slash == true`.
-- **Returned subsidies** when a `UserSubsidy` campaign is closed with leftovers.
-- **Any donation / buyback / app fee** the DAO decides to accept.
+- **Genesis CREDIT mint** (10M in production). Sole "programmatic" initial input.
+- **`treasuryBps` slice** of the FeeRouter's split (default 0; CLP recommendation: raise to `(7000, 2000, 1000)` to fund USDC for POL refill).
+- **Slash collateral** of removed projects.
+- **Returned subsidies** from `UserSubsidy.closeCampaign` campaigns.
+- **Bonders bucket** from `RewardDistributorV2` (5% of per-round emission — `polRefillBucket` ledger).
+- **LPs bucket** when gauge paused (`pendingGaugeRewards` ledger).
+- **Any donation** the DAO chooses to accept.
 
 ## What the DAO does with the Treasury
 
 Typical operations, all via proposal:
 
-- **Pay rebates to apps** (`payRebates(token, apps[], amounts[], round)`) — batch transfer with `RebatesPaid` event for traceability.
-- **Sponsor `UserSubsidy` campaigns** — transfer CREDIT to the subsidy contract before `createCampaign`.
-- **Fund `TeamVesting`** — transfer GOV to a vesting instance that later releases to the beneficiary.
-- **Buyback GOV with stable** — `executeBuyback` (v1 stub — only emits event; DEX integration will come in a later phase).
-- **Fund off-chain operations** (marketing, audits, etc.) — `transfer` to an operational multisig.
+- **Pay rebates to apps** (`payRebates(token, apps[], amounts[], round)`).
+- **Sponsor `UserSubsidy` campaigns** — transfer CREDIT before `createCampaign`.
+- **Fund `TeamVesting`** — transfer GOV to a beneficiary's vesting.
+- **Execute FFP buyback** — `executeBuyback(usdcAmount, minCreditOut)` swap USDC -> CREDIT + immediate burn (Phase 1.1).
+- **Add POL** — `addPOL(creditAmount, usdcAmount, ...)` provisions liquidity in the CREDIT/USDC pair (Phase 1.2).
+- **Refill POL with bonders bucket** — `addPOLFromRefill(creditAmount, usdcAmount, ...)` matches CREDIT from the ledger with USDC from the free balance.
+- **Drain gauge fallback** — `flushPendingGaugeRewards(duration)` ships the accumulated ledger back to the gauge after unpause.
+- **Fund off-chain operations** — `transfer` to an operational multisig.
 
 ## Fees — the FeeRouter
 
-**Single** payment interface between users and apps. Main function:
+**Sole** payment interface between users and apps. Main function:
 
 ```solidity
 function pay(uint256 projectId, address user, uint256 amount)
     external returns (uint256 burned, uint256 toTreasury, uint256 toApp);
 ```
 
-The `user` must have given `approve(feeRouter, amount)` on CREDIT **beforehand**. `msg.sender` is whoever initiated the tx — it can be the user themselves, the app, a relayer, a smart wallet.
+The `user` must have called `approve(feeRouter, amount)` on CREDIT **before**. `msg.sender` is whoever initiates the tx — could be the user themselves, the app, a relayer, a smart wallet.
 
 ## Default split — 95 / 0 / 5
 
@@ -46,28 +60,30 @@ In production (`ignition/parameters/production.json`):
 
 ```
 burnBps     = 9500   (95% burned via BurnTracker)
-treasuryBps = 0      (nothing to Treasury in the default)
-rebateBps   = 500    (5% to appRecipient)
+treasuryBps = 0      (nothing to Treasury by default)
+rebateBps   = 500    (5% to the appRecipient)
 ```
 
-The sum must be exactly 10_000 (`_BPS_DENOMINATOR`). Different splits are rejected with `InvalidSplit`.
+Sum must be exactly 10_000 (`_BPS_DENOMINATOR`). Different splits are rejected with `InvalidSplit`.
 
-Design decision: 0% to treasury in the default **to not erode the burn incentive**. The Treasury receives revenue via other paths (already minted genesis, slash, donations, managed buyback). If in the future the DAO wants to capture a direct cut, it simply proposes `setDefaultSplit({burnBps: 9000, treasuryBps: 500, rebateBps: 500})` — the architecture allows it.
+Design decision: 0% to treasury by default **so the burn incentive is not eroded**. The Treasury earns revenue through other paths (already-minted genesis, slash, donations, managed buyback). If at some point the DAO wants to capture a direct slice, just propose `setDefaultSplit({burnBps: 9000, treasuryBps: 500, rebateBps: 500})` — the architecture allows it.
 
-### Structural consequence — Treasury without recurring revenue under the default
+### Structural consequence — Treasury without recurring revenue by default
 
-With `treasuryBps = 0` in production, the Treasury **does not accumulate automatic operational revenue**. The recurring inflows are only:
+With `treasuryBps = 0` in production, the Treasury **does not accumulate automatic operational revenue**. The recurring split inputs are zero — only:
 
-- Slash of collateral from projects removed with `slash == true` (eventual, depends on misconduct).
-- Leftovers from `UserSubsidy.closeCampaign` campaigns (eventual, depends on campaigns existing).
-- External donations and ETH sent directly to the address.
+- Slash of collateral from `removeProject(slash = true)` (eventual).
+- Leftovers of `UserSubsidy.closeCampaign` campaigns (eventual).
+- External donations and direct ETH.
+- Bonders bucket and gauge fallback (Phase 1.4) — those **accumulate in separate ledgers** (`polRefillBucket` and `pendingGaugeRewards`), not in the free balance. The bonders bucket is earmarked for POL refill; only that.
 
-All of these are **eventual**, not recurring. Consequences:
+**For Phase 1.4 (CLP) to operate fully — i.e., for `addPOLFromRefill` to have USDC to match the CREDIT in the bonders bucket —, the Treasury needs USDC to flow in recurrently.** The only structural source for that is to raise `treasuryBps > 0` in `FeeRouter`. The parecer's operational recommendation is `(7000, 2000, 1000)` (70% burn / 20% treasury / 10% rebate), which:
 
-1. `executeBuyback` is a **v1 stub** (does not execute a swap — see "Buyback — v1 stub" below) and, even after being integrated with a DEX, will need stables/CREDIT in the Treasury to be backed. Without a recurring source, any operational buyback depends on external donations or on an active split change.
-2. Recurring payments (retroactive rebates, emergency fund, audit/operations payment) depend on the genesis (10M CREDIT) or on new proposals minting GOV for sale.
+- Reduces burn from 95% to 70% — more CREDIT in circulation.
+- Routes 20% to the Treasury in USDC/CREDIT (depending on payer and form).
+- Keeps 10% rebate for apps.
 
-**To activate a treasury with recurring cash flow before enabling real buyback on mainnet, the DAO must approve a `setDefaultSplit` proposal that raises `treasuryBps > 0`.** Concrete value to be decided by the DAO; `(9000, 500, 500)` (90% burn / 5% treasury / 5% rebate, all in bps/10000) is a reasonable calibration that preserves the deflationary incentive and the app incentive, but only the DAO decides. This proposal is a **prerequisite** for any sustainable buyback program and is listed as a pre-mainnet dependency in README §7.
+That decision belongs to the DAO via `setDefaultSplit`. Without it, the bonders bucket keeps accumulating CREDIT in the ledger without governance being able to drain it (USDC would be missing).
 
 ## Per-project override
 
@@ -77,13 +93,13 @@ Some projects can negotiate different splits via proposal:
 feeRouter.setProjectSplit(projectId, Split({burnBps, treasuryBps, rebateBps}));
 ```
 
-The flag `hasProjectSplit[projectId]` signals that an override exists. `clearProjectSplit` removes it.
+The flag `hasProjectSplit[projectId]` signals an active override. `clearProjectSplit` removes.
 
-Typical use: a high-volume app that would accept a higher effective fee (because it has another revenue source) can negotiate `8000/1500/500` (15% treasury), more aggressively funding the vault.
+Typical use: a high-volume app willing to accept a higher effective fee (because it has another revenue source) can negotiate `8000/1500/500` (15% treasury), funding the vault more aggressively.
 
 ## Rebate recipient
 
-By default, the rebate goes to `ProjectRegistry.getProject(projectId).owner`. If the owner transfers the project, the destination changes automatically — **dynamic lookup**.
+By default, the rebate goes to `ProjectRegistry.getProject(projectId).owner`. If the owner transfers the project, the destination switches automatically — **dynamic lookup**.
 
 The current owner can set an explicit address via:
 
@@ -91,9 +107,9 @@ The current owner can set an explicit address via:
 feeRouter.setAppRecipient(projectId, recipient);
 ```
 
-Useful when the owner is a multisig and the rebate should land on a separate operational wallet. Passing `address(0)` resets to dynamic lookup.
+Useful when the owner is a multisig and the rebate should land in a separate operational wallet. Passing `address(0)` resets to dynamic lookup.
 
-**Not governance-gated** — it is owner-gated. Operational cash rotation does not need a proposal.
+**Not governance-gated** — owner-gated. Operational cash rotation does not need a proposal.
 
 ## Dust handling
 
@@ -105,12 +121,12 @@ toTreasury = amount * treasuryBps / 10_000
 toApp      = amount - burned - toTreasury   <- residue lands here
 ```
 
-Instead of rounding each slice separately (loses wei), `toApp` captures the residue. Consequence: the app may receive 1-2 wei more than the nominal. Acceptable and auditable.
+Instead of rounding each portion separately (losing wei), `toApp` captures the residue. Consequence: the app may receive 1-2 wei more than the nominal calculation. Acceptable and auditable.
 
-## Full flow of a payment
+## Full payment flow
 
 ```
-user has 1000 CREDIT                 FeeRouter
+user has 1000 CREDIT                FeeRouter
 user calls approve(feeRouter, 1000) --- allowance OK
 user calls pay(projectId, user, 1000)
                                       |
@@ -120,7 +136,7 @@ user calls pay(projectId, user, 1000)
                                       |
                                       v
                       transferFrom(user, this, 1000)
-                      FeeRouter has 1000 CREDIT
+                      FeeRouter holds 1000 CREDIT
                                       |
                                       | split = 9500/0/500
                                       v
@@ -129,13 +145,13 @@ user calls pay(projectId, user, 1000)
           +---------------------------+----------------------------+
           |                           |                            |
           v                           v                            v
-   approve(tracker, 950)       (no transfer to                transfer(appRecipient, 50)
-   tracker.burnAndRecord        Treasury in this split)
+   approve(tracker, 950)       (no Treasury transfer        transfer(appRecipient, 50)
+   tracker.burnAndRecord       in this split)
                                                               appRecipient is
                                                               projectOwner by default
                                       |
    tracker calls                      |
-   credit.burnByRole(router, 950)     |
+   credit.burnByRole(router, 950)    |
                                       |
    CREDIT.totalSupply -= 950          |
    burnByRoundProject[R][pid] += 950  |
@@ -144,19 +160,92 @@ user calls pay(projectId, user, 1000)
                               Paid event emitted
 ```
 
-After the tx: **FeeRouter has 0 CREDIT**. It never custodies between calls. Every `pay` is atomic.
+After the tx: **FeeRouter holds 0 CREDIT**. It never custodies between calls. Each `pay` is atomic.
 
 ## ETH outflows
 
-The Treasury accepts ETH via `receive` and can withdraw via `sweepETH(to, amount)`. Uses `call{value}` (not `transfer`/`send`) for compatibility with destinations that are contracts with heavy `receive`. If the destination rejects, it reverts with `ETHTransferFailed`.
+The Treasury accepts ETH via `receive` and can withdraw via `sweepETH(to, amount)`. Uses `call{value}` (not `transfer`/`send`) for compatibility with destinations that are contracts with heavy `receive`. If the destination rejects, reverts with `ETHTransferFailed`.
 
-The use is **courtesy** — the protocol operates primarily in ERC-20 (CREDIT, GOV, stables). ETH is accepted so donations are not stuck but is not the main flow.
+The use is **courtesy** — the protocol operates primarily in ERC-20 (CREDIT, GOV, stables). ETH is accepted not to leave donations stuck but isn't the main flow.
 
-## Buyback — v1 stub
+## Buyback — real FFP (Phase 1.1)
 
-`executeBuyback(stable, amountIn, minGovOut, swapData)` in v1 **does not execute a swap**. It only emits `BuybackRequested`. Reason: proper modeling of slippage, TWAP, and frontrunning resistance requires a careful choice between DEX (Uniswap v3 vs Balancer) and goes in a separate phase.
+From the CLP pivot onwards, `executeBuyback(uint256 usdcAmount, uint256 minCreditOut)` **executes a real swap** USDC -> CREDIT via Uniswap V3 + immediate burn. Floor price defence under the Floating-with-Floor-Price (FFP) model. Details in [Treasury](../08-contracts-reference/04-Treasury.md).
 
-In the meantime, the DAO can approve the intent on-chain. Off-chain workers watch the event and process manually (or via a future integration contract).
+Pre-conditions verified on-chain (all required):
+
+1. **Infra set** — `priceOracle`, `swapRouter` and `chainlinkUsdcFeed` configured via governance. Without that, `BuybackInfraMissing`.
+2. **Spot < floor** — CREDIT TWAP (read from `priceOracle`) below `currentFloorPrice()`.
+3. **Breach lasted >= 24h** — `block.timestamp - lastFloorBreachTimestamp >= triggerDurationSecs`. Updated by `recordDailyPrice` (permissionless, 22h cooldown).
+4. **USDC not depegged** — Chainlink USDC/USD between `[0.99, 1.01]` (band configurable in bps).
+5. **Per-event cap** — `usdcAmount <= 20%` of Treasury USDC reserves (instantaneous snapshot).
+6. **Monthly cap** — month's cumulative spend `<= 30%` of the snapshot taken on the first buyback of the month.
+
+The bought CREDIT is **always burned** (`CreditToken.burnByRole(self, creditOut, "treasury:buyback")`). Never accumulated. Reason: accumulation would create an endogenous capture agent inside the protocol.
+
+`recordDailyPrice` is the keeper function that feeds the 90-sample ring buffer (`dailyPrices[90]`) and updates the breach checkpoint. MA90 bootstrap requires 90 consecutive invocations (~90 days). Before that, `currentFloorPrice` returns only `floorAbsoluteUsd` (default $0.10) — deliberate design so bootstrap isn't blocked.
+
+## POL (Protocol-Owned Liquidity, Phase 1.2)
+
+The Treasury custodies an NFT position in the CREDIT/USDC 0.3% pool. Full-tick range (`-887220, 887220`). Decision (see `audit/economist/2026-04-24-pol-params.md`):
+
+- No active rebalancing (concentrated would require off-chain management).
+- Capital-efficient enough for early-stage markets.
+- Trivially auditable (fixed ticks).
+
+API:
+
+- `addPOL(creditAmount, usdcAmount, amount0Min, amount1Min, deadline)` — first time `mint`, then `increaseLiquidity` on the same `polTokenId`.
+- `removePOL(liquidityAmount, ...)` — `decreaseLiquidity` + `collect`. Does NOT burn the NFT (position remains available for reuse).
+- `collectPOLFees(amount0Max, amount1Max)` — collects accrued fees, no auto-compound.
+- `polTokensOrdered()` view — returns the actual `(token0, token1)` order in the pool, useful for the DAO proposer to compute `amount{0,1}Min`.
+
+The "supermajority 75% for removals > 25%" policy is the responsibility of `CommunityGovernor` (proposal type), not this contract.
+
+## Bonders bucket and POL refill (Phase 1.4)
+
+In each `RewardDistributorV2.finalizeRound`, 5% (default) of the emission is minted directly to the Treasury and accounted for in `polRefillBucket`:
+
+```
+RewardDistributorV2.finalizeRound(R)
+  -> CREDIT.mint(treasury, bondersAmount, "rewardRound:bonders")
+  -> Treasury.depositPolRefill(bondersAmount)
+     - polRefillBucket += bondersAmount
+```
+
+When governance decides to refill the POL, it proposes `addPOLFromRefill(creditAmount, usdcAmount, ...)`:
+
+```
+Treasury.addPOLFromRefill (Timelock executes the proposal)
+  -> debit polRefillBucket (CEI: before the external call)
+  -> _orderTokens + _approveNPM + _provisionLiquidity
+  -> NPM.increaseLiquidity (or mint on first run)
+```
+
+USDC comes from the Treasury's free balance — depends on `treasuryBps > 0` in `FeeRouter` (see previous section).
+
+Phase 3 of the CLP roadmap recycles this bucket into a `BondDepository` — users swap ETH/CREDIT for vested CREDIT and the protocol accumulates POL via bonds. For now, the ledger sustains POL directly.
+
+## Gauge paused fallback (Phase 1.4)
+
+If the `LiquidityGauge` is paused at the time of `finalizeRound`, V2 cannot call `notifyRewardAmount`. To avoid freezing the entire round finalisation, V2 falls back:
+
+```
+RewardDistributorV2.finalizeRound(R) with gauge.paused() == true
+  -> CREDIT.mint(treasury, lpsAmount, "rewardRound:lps:fallback")
+  -> Treasury.depositPendingGaugeRewards(lpsAmount)
+     - pendingGaugeRewards += lpsAmount
+  -> emit GaugePauseFallback(R, lpsAmount)
+```
+
+After unpausing the gauge, governance calls `Treasury.flushPendingGaugeRewards(duration)`:
+
+```
+Treasury.flushPendingGaugeRewards (Timelock executes)
+  -> requires gauge unpaused, ledger > 0
+  -> approve(gauge, amount), gauge.notifyRewardAmount(poolId, amount, duration)
+  -> reset approve
+```
 
 ## Summary
 
@@ -164,11 +253,14 @@ In the meantime, the DAO can approve the intent on-chain. Off-chain workers watc
 |---|---|---|
 | Treasury | Multi-asset custody | `GOVERNANCE_ROLE` on outflows |
 | FeeRouter | Payment interface | `GOVERNANCE_ROLE` on setters, public on `pay` |
-| Default split | 95% burn / 0% treasury / 5% rebate | Adjustable by proposal |
+| Default split | 95% burn / 0% treasury / 5% rebate (CLP recommendation: `(7000, 2000, 1000)`) | Adjustable by proposal |
 | Per-project split | Override via `setProjectSplit` | `GOVERNANCE_ROLE` |
 | Rebate recipient | Project owner (dynamic) or explicit | Project owner (setter) |
-| Buyback | Stub — event-only in v1 | `GOVERNANCE_ROLE` |
+| FFP buyback | Real (Phase 1.1) — USDC->CREDIT swap + burn | `GOVERNANCE_ROLE` |
+| POL | Own CREDIT/USDC liquidity, full range | `GOVERNANCE_ROLE` |
+| Bonders bucket | 5% emission -> POL refill ledger | `POL_REFILL_DEPOSITOR_ROLE` (V2) |
+| Gauge fallback | Paused ledger -> manual flush | `GAUGE_FALLBACK_DEPOSITOR_ROLE` (V2) + governance |
 
 ---
 
-**Next →** [Architecture](../03-protocol-overview/01-architecture.md)
+**Next ->** [Architecture](../03-protocol-overview/01-architecture.md)

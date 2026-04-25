@@ -165,6 +165,17 @@ const CommunityDAOModule = buildModule("CommunityDAOModule", (m) => {
   // Genesis
   const genesisAmount = m.getParameter<bigint>("genesisAmount", 10_000_000n * 10n ** 18n);
 
+  // USDC para o Treasury (FFP buyback — Fase 1.1 do pivot CLP).
+  // Em producao, e o endereco do USDC oficial da rede alvo
+  // (Sepolia/Mainnet). Em dev/teste, pode apontar para um ERC20Mock
+  // deployado a parte ou para o proprio CREDIT (placeholder, sem efeito
+  // ate `priceOracle`/`swapRouter` serem configurados via governance).
+  // Default = ZeroAddress NAO e aceito pelo construtor do Treasury — em
+  // dev/teste, sobrescrever via `ignition/parameters/dev.json` apontando
+  // para um mock; em prod, via `production.json` apontando para o USDC
+  // oficial.
+  const usdcAddress = m.getParameter<string>("usdcAddress", ethers.ZeroAddress);
+
   // ------------------------------------------------------------------
   // Optional aux contracts (Fase E)
   // ------------------------------------------------------------------
@@ -227,8 +238,13 @@ const CommunityDAOModule = buildModule("CommunityDAOModule", (m) => {
     { id: "phaseA_ProjectRegistry" },
   );
 
-  // 5. Treasury (admin = deployer).
-  const treasury = m.contract("Treasury", [deployer], { id: "phaseA_Treasury" });
+  // 5. Treasury (admin = deployer; CREDIT imutavel; USDC imutavel mas
+  //    aceito como zero em dev/testnet — buyback FFP fica desativado por
+  //    construcao ate USDC ser conhecido + oracle/router setados via
+  //    governance, ver `contracts/Treasury.sol` constructor NatSpec).
+  const treasury = m.contract("Treasury", [deployer, credit, usdcAddress], {
+    id: "phaseA_Treasury",
+  });
 
   // 6. Staking (depende de gov + registry; sem admin).
   const staking = m.contract("Staking", [gov, registry], { id: "phaseA_Staking" });
