@@ -72,6 +72,65 @@ de segurança (invariantes, access control, static analysis) ficam em `Security`
 
 ### Added
 
+- **Fase 1.1 do pivot CLP — `Treasury.executeBuyback` real (FFP).**
+  Substitui o stub anterior por um buyback-and-burn defensivo do floor
+  price segundo o modelo FFP (Floating com Floor Price defendido) do
+  parecer `audit/economist/2026-04-24-credit-peg.md`. **Contratos**:
+  refator profundo de `contracts/Treasury.sol` (986 LOC) — construtor
+  passa de `(admin)` para `(admin, creditToken, usdcToken)` com ambos
+  os tokens imutaveis; novo `executeBuyback(usdcAmount, minCreditOut)`
+  governance-gated + nonReentrant que valida 5 pre-condicoes (spot <
+  floor; breach >= 24h consecutivas; Chainlink USDC em [0.99, 1.01]
+  com staleness < 6h; cap por evento 20% reservas; cap mensal 30%
+  snapshot inicio do mes) antes de fazer swap UniV3 USDC->CREDIT e
+  queimar o CREDIT recebido via `ICreditTokenBurnable.burn`; nova
+  `recordDailyPrice()` permissionless com cooldown 22h alimentando ring
+  buffer de 90 slots para MA90; 9 setters governance-only com bounds
+  sanitarios para parametros do FFP (defaults congelados em
+  `floorMultiplierBps=5000`, `floorAbsoluteUsd=1e17`,
+  `triggerDurationSecs=24h`, `twapWindowSecs=30min`,
+  `chainlinkSanity=[9900, 10100]`, `capPerEventBps=2000`,
+  `capMonthlyBps=3000`, `slippageMaxBps=100`); novos custom errors
+  (`BuybackInfraMissing`, `SpotAboveFloor`,
+  `BreachDurationInsufficient`, `UsdcDepegDetected`, `ChainlinkStale`,
+  `CapPerEventExceeded`, `CapMonthlyExceeded`,
+  `RecordCooldownActive`, `ParamOutOfBounds`, `InvalidOraclePrice`,
+  `InvalidChainlinkAnswer`); eventos `BuybackExecuted`,
+  `DailyPriceRecorded`, `BuybackParamsUpdated`,
+  `BuybackInfraUpdated`. **Interfaces minimas pinadas**:
+  `contracts/interfaces/ICreditPriceOracle.sol`,
+  `contracts/interfaces/IUniswapV3Pool.sol`,
+  `contracts/interfaces/IUniswapV3SwapRouter.sol`,
+  `contracts/interfaces/IChainlinkAggregator.sol`,
+  `contracts/interfaces/ICreditTokenBurnable.sol` — todas com surface
+  enxuta (so funcoes consumidas) para evitar dependency hell de
+  `@uniswap/v3-*`. **Mocks de teste**:
+  `contracts/test/UniswapV3PoolMock.sol`,
+  `contracts/test/UniswapV3SwapRouterMock.sol`,
+  `contracts/test/ChainlinkAggregatorMock.sol`. **Cobertura**: 35
+  testes em `test/Treasury.buyback.test.ts` (constructor + infra,
+  bounds dos 9 setters, recordDailyPrice + ring buffer + cooldown,
+  happy path, 13 caminhos sad cobrindo cada precondicao,
+  rollover de mes); suite completa do projeto subiu para 599 testes
+  passando (de 568). `Treasury.test.ts`, `CommunityGovernor.test.ts`,
+  `FeeRouter.test.ts` adaptados para o construtor 3-arg passando
+  `creditToken` real e `usdcToken=address(0)` (buyback FFP fica
+  desabilitado por construcao quando USDC nao configurado — ver
+  NatSpec do construtor). **Ignition**: `ignition/modules/Dao.ts`
+  expoe parametro `usdcAddress` (default `address(0)` aceito em
+  dev/testnet; producao deve sobrescrever via
+  `ignition/parameters/production.json` apontando para o USDC
+  oficial). **Slither**: limpo (so detecta padroes ja existentes do
+  projeto — `timestamp` em comparacoes intencionais, `low-level-calls`
+  em `sweepETH`, `naming-convention` para imutaveis, `missing-inheritance`
+  informacional). **Documentacao**:
+  `docs/governance/fase1-1-buyback-ffp.md` (runbook operacional com
+  pre-condicoes, bootstrap dos 90 dias do MA, parametros e bounds, 4
+  cenarios esperados, checklist pos-deploy, caminhos sad). **Esta
+  entrada documenta a IMPLEMENTACAO em codigo**; o ciclo de
+  governanca (concessao de `BURNER_ROLE`, setters de infra, primeira
+  proposta de buyback) sera disparado em propostas separadas quando o
+  user decidir submeter.
 - `scripts/governance/propose-fase0-default-split.ts`,
   `scripts/governance/execute-fase0-default-split.ts`,
   `test/governance/Fase0DefaultSplit.test.ts` e
