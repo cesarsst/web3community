@@ -72,6 +72,101 @@ de segurança (invariantes, access control, static analysis) ficam em `Security`
 
 ### Added
 
+- **Fase 1.4 do pivot CLP — `RewardDistributorV2` (bucket-aware split).**
+  Reescrita do distributor de emissao para suportar split entre **4 buckets**
+  por rodada — fecha o flywheel da Fase 1 (FFP + POL + Gauge + Bucket Split).
+  Decisoes operacionais congeladas em
+  `audit/economist/2026-04-24-clp-pivot.md` Anexo E (E.1-E.8). **Re-deploy
+  paralelo** ao V1: V1 vira claim-only durante migration window de 4 rounds
+  (governance revoga `MINTER_ROLE` no CREDIT do V1 apos cutoff).
+  **Contratos**:
+  - `contracts/RewardDistributorV2.sol` (novo): split default
+    `[5500, 2500, 1500, 500]` (stakers/LPs/apps/bonders) tunavel via
+    `setBucketBps` com bounds individuais (E.8: stakers >= 30%, LPs >= 5%,
+    apps <= 25% IE4b, bonders <= 20%) e soma exata 10000. `finalizeRound`
+    aplica formula V1 (`min(max(alpha*burn, floor), capMax)`) **antes** do
+    split, depois distribui:
+    - Stakers (lazy): pull-based via `claim`/`claimMany` consumindo
+      `bucketEmissionByRound[round][BUCKET_STAKERS]` como base.
+    - LPs (push): mint para self + `forceApprove` + `gauge.notifyRewardAmount`.
+      Quando `gauge.paused()`, fallback para
+      `Treasury.depositPendingGaugeRewards` (red flag E.3 #2 — sem fallback,
+      pause do gauge travaria `finalizeRound` da rodada inteira).
+    - Apps (push retrospectivo): loop em `1..totalProjects` com burn no
+      round R-1 e mint direto para `REGISTRY.ownerRecipient(p)`. Em
+      bootstrap (`totalBurnPrev == 0`), bucket apps redistribui para bonders.
+    - Bonders (push earmark): mint para Treasury +
+      `depositPolRefill` — refill earmarkado do POL na Fase 1, sera
+      reciclado para `BondDepository` na Fase 3.
+      Invariantes economicas reafirmadas: **IE3 fortalecida** (cap antes do
+      split, nenhum bucket excede `bucketBps[i] × capMax`), **IE4b codificada**
+      (`bucketBps[apps] <= 2500`), **IE12 criada** (soma dos 4 buckets ==
+      `totalEmission` com tolerancia 3 wei via assert em `finalizeRound`).
+  - 7 custom errors novos: `BucketBpsSumInvalid`, `BucketBpsOutOfBounds`,
+    `EmissionMismatch`, `InvalidGaugeIncentiveDuration` (alem de reusar
+    `RoundNotClosed`/`RoundAlreadyFinalized`/`OutOfOrderFinalize`/
+    `InvalidAlpha`/`InvalidCapMax`/`AlreadyClaimed` etc do V1).
+  - 8 eventos novos: `RoundFinalizedV2`, `BucketEmissionMinted`,
+    `GaugePauseFallback`, `BucketBpsUpdated`, `Claimed`, `AlphaUpdated`,
+    `CapMaxUpdated`, `GaugePoolIdUpdated`, `GaugeIncentiveDurationUpdated`.
+  - **Interfaces novas**:
+    - `contracts/interfaces/ITreasuryRewards.sol` — slim interface consumida
+      pelo V2 (`depositPolRefill`, `depositPendingGaugeRewards`).
+    - `contracts/interfaces/ILiquidityGaugeRewards.sol` — slim interface
+      consumida pelo V2 e Treasury (`notifyRewardAmount`, `paused`).
+- **Treasury — extensao Fase 1.4**: 2 novas roles
+  (`POL_REFILL_DEPOSITOR_ROLE`, `GAUGE_FALLBACK_DEPOSITOR_ROLE`),
+  ledgers `polRefillBucket` e `pendingGaugeRewards`, e 5 novas funcoes:
+  - `depositPolRefill(amount)` — accumula bucket bonders no ledger
+    contabil interno (CREDIT cunhado para o Treasury pelo V2 antes do call).
+  - `addPOLFromRefill(creditAmount, usdcAmount, ...)` — drena o ledger
+    casado com USDC do balance livre do Treasury para injecao em
+    `polTokenId` (reusa `_orderTokens` + `_provisionLiquidity`). CEI:
+    debita ledger ANTES da chamada externa (idempotencia em revert).
+    Reverte com `PolRefillBucketInsufficient` se `creditAmount > polRefillBucket`.
+  - `depositPendingGaugeRewards(amount)` — fallback contabil quando
+    `gauge.paused()` no `finalizeRound` (red flag E.3 #2).
+  - `flushPendingGaugeRewards(duration)` — drena ledger para o gauge via
+    `notifyRewardAmount` apos despausar. Reverte com `LiquidityGaugePaused`
+    se gauge ainda paused; `LiquidityGaugeNotSet` se `liquidityGauge` zero;
+    `NoPendingGaugeRewards` se ledger vazio.
+  - `setLiquidityGauge(gauge, poolId)` — configura destino do flush.
+    Eventos novos: `PolRefillDeposited`, `PolRefillUsed`, `PendingGaugeDeposited`,
+    `PendingGaugeFlushed`, `LiquidityGaugeSet`. Errors: `PolRefillBucketInsufficient`,
+    `LiquidityGaugeNotSet`, `LiquidityGaugePaused`, `NoPendingGaugeRewards`.
+- **ProjectRegistry — `ownerRecipient` com timelock 48h**: red flag E.3 #1
+  do parecer (sem timelock, owner do projeto poderia hot-swap o recipient
+  entre `finalizeRound` e indexacao off-chain, desviando o bucket apps
+  inteiro). Implementa pattern `propose` -> aguarda `OWNER_RECIPIENT_TIMELOCK`
+  (48h) -> `apply` permissionless. View `ownerRecipient(projectId)` retorna
+  o recipient explicito ou faz fallback para `project.owner`. Funcoes:
+  `proposeOwnerRecipient(projectId, newRecipient)` (only owner),
+  `applyOwnerRecipient(projectId)` (permissionless apos `effectiveAt`),
+  `cancelOwnerRecipient(projectId)` (owner OU governance — escape hatch).
+  Eventos: `OwnerRecipientProposed`, `OwnerRecipientApplied`,
+  `OwnerRecipientCancelled`. Errors: `OwnerRecipientTimelockActive`,
+  `NoPendingOwnerRecipient`.
+- **Mock novo**: `contracts/test/LiquidityGaugeRewardsMock.sol` — mock minimo
+  da interface `ILiquidityGaugeRewards` para testes da Fase 1.4 (bypass do
+  gauge real que tem dependencias pesadas com UniswapV3Staker + NPM canonico).
+- **Testes novos**: 3 suites totalizando 71 tests:
+  - `test/RewardDistributorV2.test.ts` (40 tests): construction bounds,
+    `setBucketBps` com 4 bounds individuais + soma, finalize com 4 buckets
+    distribuidos, IE12 (soma == totalEmission), apps mint para
+    `ownerRecipient`, gauge paused -> fallback Treasury, bonders -> POL
+    refill, claim usando bucket stakers (nao totalEmission), probation
+    penalty, claimMany batch, previews, governance setters.
+  - `test/Treasury.polRefill.test.ts` (18 tests): cobre `depositPolRefill`,
+    `addPOLFromRefill` (CEI + integracao NPM), `depositPendingGaugeRewards`,
+    `flushPendingGaugeRewards` (com gauge mock), `setLiquidityGauge`, gating
+    de roles, errors.
+  - `test/ProjectRegistry.timelock.test.ts` (13 tests): `ownerRecipient`
+    fallback, propose com 48h delay, sobrescrita de pending, apply
+    permissionless apos `effectiveAt`, revert antes do timelock, cancel
+    pelo owner E pela governance, integracao com ownership transfer.
+- **Coverage Fase 1.4**: V2 95% lines, Treasury 100% lines, Registry 100%
+  lines. Suite total: 765 passing (anterior 694 + 71 novos), zero regressao.
+
 - **Fase 1.3 do pivot CLP — `LiquidityGauge` (incentivos LP).** Adapter
   sobre o `UniswapV3Staker` canonico (Uniswap Foundation, mainnet
   `0xe34139463bA50bD61336E0c446Bd8C0867c6fE65`) que distribui o **bucket
@@ -125,7 +220,7 @@ de segurança (invariantes, access control, static analysis) ficam em `Security`
   - `contracts/test/UniswapV3StakerMock.sol` — simula
     createIncentive/endIncentive/stake/unstake/claim/rewards/withdraw com
     contabilidade observavel. Helpers `accrueRewards(rewardToken, owner,
-    amount)` para injetar ganhos atribuiveis e `setForceFailUnstake(bool)`
+amount)` para injetar ganhos atribuiveis e `setForceFailUnstake(bool)`
     para exercitar try/catch em `emergencyUnstake`. Implementa
     `onERC721Received` espelhando o staker real (decoder de IncentiveKey
     em `data` faz auto-stake on receive).

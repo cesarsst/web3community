@@ -11,6 +11,7 @@ import {INonfungiblePositionManager} from "./interfaces/INonfungiblePositionMana
 import {IChainlinkAggregator} from "./interfaces/IChainlinkAggregator.sol";
 import {ICreditPriceOracle} from "./interfaces/ICreditPriceOracle.sol";
 import {ICreditTokenBurnable} from "./interfaces/ICreditTokenBurnable.sol";
+import {ILiquidityGaugeRewards} from "./interfaces/ILiquidityGaugeRewards.sol";
 
 /**
  * @title Treasury
@@ -89,6 +90,21 @@ contract Treasury is AccessControl, ReentrancyGuard {
     /// @notice Role concedida ao `TimelockController` em producao. Unica role
     ///         capaz de mover fundos (ERC-20 e ETH) do treasury.
     bytes32 public constant GOVERNANCE_ROLE = keccak256("GOVERNANCE_ROLE");
+
+    /// @notice Role concedida ao `RewardDistributorV2` (Fase 1.4). Autoriza
+    ///         {depositPolRefill} — caminho exclusivo de acumulacao do bucket
+    ///         "bonders" (5% da emissao por rodada) earmarkado para refill
+    ///         do POL via {addPOLFromRefill}. Plural por design: outras
+    ///         fontes futuras (ex.: BondDepository) podem receber a role
+    ///         sem alteracao deste contrato.
+    bytes32 public constant POL_REFILL_DEPOSITOR_ROLE = keccak256("POL_REFILL_DEPOSITOR_ROLE");
+
+    /// @notice Role concedida ao `RewardDistributorV2` (Fase 1.4). Autoriza
+    ///         {depositPendingGaugeRewards} — fallback para o bucket "LPs"
+    ///         (25% da emissao) quando o `LiquidityGauge` esta paused no
+    ///         momento de `finalizeRound`. Sem este caminho, pause do gauge
+    ///         travaria a finalizacao da rodada inteira.
+    bytes32 public constant GAUGE_FALLBACK_DEPOSITOR_ROLE = keccak256("GAUGE_FALLBACK_DEPOSITOR_ROLE");
 
     // ------------------------------------------------------------------
     // Constants — bounds sanitarios para parametros do FFP (Fase 1.1)
@@ -276,6 +292,38 @@ contract Treasury is AccessControl, ReentrancyGuard {
     uint256 public polTokenId;
 
     // ------------------------------------------------------------------
+    // Storage — Fase 1.4 (bucket-aware split: bonders -> POL refill,
+    //                     gauge paused fallback)
+    // ------------------------------------------------------------------
+
+    /// @notice Ledger interno do bucket "bonders" (5% da emissao por rodada
+    ///         no split default). Acumula CREDIT cunhado pelo
+    ///         `RewardDistributorV2` em cada `finalizeRound`. Drenado via
+    ///         {addPOLFromRefill} quando governance casa o lado USDC do
+    ///         Treasury para refill do POL.
+    /// @dev Aproximacao auditavel: `polRefillBucket <= IERC20(CREDIT).balanceOf(this)`
+    ///      em todo momento (invariante off-chain monitoravel — nao
+    ///      enforced on-chain pois Treasury aceita CREDIT de outras fontes,
+    ///      e enforce estrito tornaria todo deposit de CREDIT que nao seja
+    ///      bucket bonders contabilizado erroneamente).
+    uint256 public polRefillBucket;
+
+    /// @notice Ledger interno do fallback de rewards para LPs quando o
+    ///         `LiquidityGauge` esta paused no momento de `finalizeRound`.
+    ///         Drenado via {flushPendingGaugeRewards} apos despausar.
+    uint256 public pendingGaugeRewards;
+
+    /// @notice `LiquidityGauge` configurado para drenar `pendingGaugeRewards`.
+    ///         Setado via {setLiquidityGauge} pelo governance. `address(0)`
+    ///         desabilita {flushPendingGaugeRewards}.
+    ILiquidityGaugeRewards public liquidityGauge;
+
+    /// @notice PoolId default usado em {flushPendingGaugeRewards} quando
+    ///         governance nao especifica explicitamente. Setado junto com o
+    ///         gauge via {setLiquidityGauge}.
+    uint256 public liquidityGaugePoolId;
+
+    // ------------------------------------------------------------------
     // Events — originais (Fase 1.0)
     // ------------------------------------------------------------------
 
@@ -360,6 +408,38 @@ contract Treasury is AccessControl, ReentrancyGuard {
     event POLFeesCollected(uint256 indexed tokenId, uint256 amount0, uint256 amount1);
 
     // ------------------------------------------------------------------
+    // Events — Fase 1.4 (bucket bonders + gauge fallback)
+    // ------------------------------------------------------------------
+
+    /// @notice Emitido em {depositPolRefill}. Acumula no ledger interno.
+    /// @param amount Quantidade de CREDIT (em wei) depositada nesta chamada.
+    /// @param newBucketTotal Saldo do `polRefillBucket` apos a operacao.
+    event PolRefillDeposited(uint256 amount, uint256 newBucketTotal);
+
+    /// @notice Emitido em {addPOLFromRefill} quando governance casa o bucket
+    ///         com USDC e injeta na posicao POL.
+    /// @param creditUsed Quantidade de CREDIT consumida do bucket.
+    /// @param usdcUsed Quantidade de USDC consumida do balance livre do Treasury.
+    /// @param newBucketTotal Saldo do `polRefillBucket` apos a operacao.
+    event PolRefillUsed(uint256 creditUsed, uint256 usdcUsed, uint256 newBucketTotal);
+
+    /// @notice Emitido em {depositPendingGaugeRewards}.
+    /// @param amount Quantidade adicionada ao ledger.
+    /// @param newPendingTotal Saldo de `pendingGaugeRewards` apos a operacao.
+    event PendingGaugeDeposited(uint256 amount, uint256 newPendingTotal);
+
+    /// @notice Emitido em {flushPendingGaugeRewards}.
+    /// @param amount Quantidade total drenada para o gauge.
+    /// @param poolId Pool alvo no gauge.
+    /// @param duration Duracao da incentive criada (seg).
+    event PendingGaugeFlushed(uint256 amount, uint256 indexed poolId, uint32 duration);
+
+    /// @notice Emitido em {setLiquidityGauge}.
+    /// @param gauge Endereco do `LiquidityGauge` (`address(0)` desabilita).
+    /// @param poolId PoolId default usado por {flushPendingGaugeRewards}.
+    event LiquidityGaugeSet(address indexed gauge, uint256 poolId);
+
+    // ------------------------------------------------------------------
     // Errors — originais
     // ------------------------------------------------------------------
 
@@ -415,6 +495,26 @@ contract Treasury is AccessControl, ReentrancyGuard {
     /// @notice {removePOL} ou {collectPOLFees} chamado antes de a posicao
     ///         POL existir (`polTokenId == 0`).
     error POLNotInitialized();
+
+    // ------------------------------------------------------------------
+    // Errors — Fase 1.4 (bucket bonders + gauge fallback)
+    // ------------------------------------------------------------------
+
+    /// @notice Tentativa de {addPOLFromRefill} com `creditAmount` superior
+    ///         ao saldo atual de `polRefillBucket`.
+    error PolRefillBucketInsufficient(uint256 requested, uint256 available);
+
+    /// @notice {flushPendingGaugeRewards} chamado mas `liquidityGauge` ainda
+    ///         nao foi configurado via {setLiquidityGauge}.
+    error LiquidityGaugeNotSet();
+
+    /// @notice {flushPendingGaugeRewards} chamado enquanto o gauge esta
+    ///         paused — a chamada falharia no proprio gauge; failed-fast aqui
+    ///         para mensagem mais clara.
+    error LiquidityGaugePaused();
+
+    /// @notice {flushPendingGaugeRewards} chamado com ledger zerado.
+    error NoPendingGaugeRewards();
 
     // ------------------------------------------------------------------
     // Constructor
@@ -1180,6 +1280,176 @@ contract Treasury is AccessControl, ReentrancyGuard {
     function setPositionManager(INonfungiblePositionManager manager) external onlyRole(GOVERNANCE_ROLE) {
         positionManager = manager;
         emit BuybackInfraUpdated("positionManager", address(manager), 0);
+    }
+
+    // ------------------------------------------------------------------
+    // Fase 1.4 — bucket bonders (POL refill) + gauge fallback
+    // ------------------------------------------------------------------
+
+    /**
+     * @notice Configura o `LiquidityGauge` e o `poolId` default usados em
+     *         {flushPendingGaugeRewards}. Setar gauge para `address(0)`
+     *         desabilita o caminho de flush.
+     * @dev `onlyRole(GOVERNANCE_ROLE)`. O Treasury NAO valida o estado do
+     *      gauge no setter — pause/whitelist e responsabilidade do
+     *      `RewardDistributorV2` ou do proprio gauge no flush.
+     * @param gauge Endereco do `LiquidityGauge` (interface slim
+     *              {ILiquidityGaugeRewards}).
+     * @param poolId PoolId default. Em producao Fase 1.4 = poolId 1
+     *               (CREDIT/USDC 0.3%).
+     */
+    function setLiquidityGauge(ILiquidityGaugeRewards gauge, uint256 poolId) external onlyRole(GOVERNANCE_ROLE) {
+        liquidityGauge = gauge;
+        liquidityGaugePoolId = poolId;
+        emit LiquidityGaugeSet(address(gauge), poolId);
+    }
+
+    /**
+     * @notice Acumula `amount` no ledger interno `polRefillBucket`. Chamado
+     *         pelo `RewardDistributorV2` apos cunhar CREDIT diretamente para
+     *         este Treasury — o ledger e contabil, nao move tokens aqui.
+     * @dev `onlyRole(POL_REFILL_DEPOSITOR_ROLE)` + `nonReentrant`. Reverte
+     *      com {ZeroAmount} se `amount == 0`. Sem checagem on-chain de saldo
+     *      real (CREDIT eh mintado pelo distributor *antes* desta chamada
+     *      dentro da mesma tx; bookkeeping aqui e ledger off-balance):
+     *      qualquer mismatch entre o ledger e o saldo real cai em
+     *      {addPOLFromRefill} via `creditAmount > polRefillBucket`, que
+     *      reverte. Atomicidade do `finalizeRound` (com `nonReentrant` no
+     *      lado do distributor) garante que mint+depositPolRefill nao podem
+     *      ser interleaved.
+     * @param amount Quantidade (em CREDIT wei) a acumular.
+     */
+    function depositPolRefill(uint256 amount) external onlyRole(POL_REFILL_DEPOSITOR_ROLE) nonReentrant {
+        if (amount == 0) {
+            revert ZeroAmount();
+        }
+        uint256 newTotal = polRefillBucket + amount;
+        polRefillBucket = newTotal;
+        emit PolRefillDeposited(amount, newTotal);
+    }
+
+    /**
+     * @notice Usa `creditAmount` do `polRefillBucket` casado com `usdcAmount`
+     *         do saldo livre do Treasury para injetar liquidez na posicao
+     *         POL existente (ou criar posicao nova caso `polTokenId == 0`).
+     * @dev `onlyRole(GOVERNANCE_ROLE)` + `nonReentrant`. Reverte com
+     *      {PolRefillBucketInsufficient} se `creditAmount > polRefillBucket`,
+     *      e com {BuybackInfraMissing} se infra POL nao setada.
+     *
+     *      Reusa internamente o pipeline de {addPOL} ({_orderTokens} +
+     *      {_approveNPM} + {_provisionLiquidity}). USDC vem do balance do
+     *      Treasury (alimentado por `treasuryBps` do FeeRouter — split
+     *      `(7000, 2000, 1000)` deve estar live; vide gate documental no
+     *      `docs/governance/fase1-4-bucket-split.md`).
+     *
+     *      Decremento do bucket acontece ANTES do call externo (CEI). Se o
+     *      NPM consumir menos que `creditAmount` por slippage, o saldo nao
+     *      utilizado fica disponivel no balance livre do Treasury (nao
+     *      retorna ao bucket). Esta semantica e auditavel via os eventos
+     *      `POLAdded` (consumed) e `PolRefillUsed` (debited).
+     *
+     * @param creditAmount Quantidade de CREDIT a debitar do bucket. Deve ser
+     *                     `<= polRefillBucket`.
+     * @param usdcAmount Quantidade de USDC a casar.
+     * @param amount0Min Slippage protection na ordem `(token0, token1)` do pool.
+     * @param amount1Min Slippage protection na ordem `(token0, token1)` do pool.
+     * @param deadline UNIX timestamp limite para o NPM.
+     */
+    function addPOLFromRefill(
+        uint256 creditAmount,
+        uint256 usdcAmount,
+        uint256 amount0Min,
+        uint256 amount1Min,
+        uint256 deadline
+    ) external onlyRole(GOVERNANCE_ROLE) nonReentrant {
+        if (creditAmount == 0 && usdcAmount == 0) {
+            revert ZeroAmount();
+        }
+        if (USDC_TOKEN == address(0) || address(positionManager) == address(0)) {
+            revert BuybackInfraMissing();
+        }
+        uint256 bucket = polRefillBucket;
+        if (creditAmount > bucket) {
+            revert PolRefillBucketInsufficient(creditAmount, bucket);
+        }
+
+        // Effects ANTES da interacao externa (CEI).
+        uint256 newBucket = bucket - creditAmount;
+        polRefillBucket = newBucket;
+
+        (address token0, address token1, uint256 d0, uint256 d1) = _orderTokens(creditAmount, usdcAmount);
+        _approveNPM(token0, token1, d0, d1);
+        (uint256 currentTokenId, uint128 liq, uint256 a0, uint256 a1) = _provisionLiquidity(
+            token0,
+            token1,
+            d0,
+            d1,
+            amount0Min,
+            amount1Min,
+            deadline
+        );
+        _approveNPM(token0, token1, 0, 0);
+
+        (uint256 cConsumed, uint256 uConsumed) = (CREDIT_TOKEN < USDC_TOKEN) ? (a0, a1) : (a1, a0);
+
+        emit POLAdded(currentTokenId, liq, cConsumed, uConsumed);
+        emit PolRefillUsed(creditAmount, usdcAmount, newBucket);
+    }
+
+    /**
+     * @notice Acumula `amount` em `pendingGaugeRewards` quando o
+     *         `RewardDistributorV2` detecta `gauge.paused() == true` no
+     *         momento de `finalizeRound`. CREDIT ja foi cunhado para este
+     *         Treasury antes da chamada (analogamente a {depositPolRefill}).
+     * @dev `onlyRole(GAUGE_FALLBACK_DEPOSITOR_ROLE)` + `nonReentrant`. Sem
+     *      caminho de drenagem alem de {flushPendingGaugeRewards} —
+     *      governance e responsavel por chamar `flush` apos despausar o
+     *      gauge. Vide red flag E.3 #2 do parecer 2026-04-24-clp-pivot.md.
+     * @param amount Quantidade (em CREDIT wei) a acumular.
+     */
+    function depositPendingGaugeRewards(uint256 amount) external onlyRole(GAUGE_FALLBACK_DEPOSITOR_ROLE) nonReentrant {
+        if (amount == 0) {
+            revert ZeroAmount();
+        }
+        uint256 newTotal = pendingGaugeRewards + amount;
+        pendingGaugeRewards = newTotal;
+        emit PendingGaugeDeposited(amount, newTotal);
+    }
+
+    /**
+     * @notice Drena `pendingGaugeRewards` para o `liquidityGauge` via
+     *         `notifyRewardAmount(poolId, amount, duration)`.
+     * @dev `onlyRole(GOVERNANCE_ROLE)` + `nonReentrant`. Reverte se gauge
+     *      nao setado, gauge esta paused, ou ledger zerado. Usa o `poolId`
+     *      configurado em {setLiquidityGauge}; `duration` e parametro
+     *      explicito da chamada para que governance escolha (compativel
+     *      com {INCENTIVE_DURATION_MIN} do gauge). Approves CREDIT para o
+     *      gauge (modelo pull do gauge).
+     * @param duration Duracao da incentive (seg).
+     */
+    function flushPendingGaugeRewards(uint32 duration) external onlyRole(GOVERNANCE_ROLE) nonReentrant {
+        ILiquidityGaugeRewards gauge = liquidityGauge;
+        if (address(gauge) == address(0)) {
+            revert LiquidityGaugeNotSet();
+        }
+        if (gauge.paused()) {
+            revert LiquidityGaugePaused();
+        }
+        uint256 amount = pendingGaugeRewards;
+        if (amount == 0) {
+            revert NoPendingGaugeRewards();
+        }
+        uint256 poolId = liquidityGaugePoolId;
+
+        // Effects.
+        pendingGaugeRewards = 0;
+
+        // Interactions.
+        IERC20(CREDIT_TOKEN).forceApprove(address(gauge), amount);
+        gauge.notifyRewardAmount(poolId, amount, duration);
+        IERC20(CREDIT_TOKEN).forceApprove(address(gauge), 0);
+
+        emit PendingGaugeFlushed(amount, poolId, duration);
     }
 
     // ------------------------------------------------------------------
