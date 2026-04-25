@@ -11,8 +11,9 @@ Whitelist on-chain de projetos/apps do ecossistema. Fonte única da verdade para
 - Quanto GOV foi lockado como colateral (skin in the game).
 - Status do projeto (`Pending`, `Active`, `Probation`, `Removed`).
 - URI de metadata off-chain.
+- **`ownerRecipient`** — destinatário canônico do bucket apps do `RewardDistributorV2` (Fase 1.4), com timelock de 48h.
 
-Consumido por `Staking`, `BurnTracker`, `RewardDistributor` e `FeeRouter` para gating e lookup de owner.
+Consumido por `Staking`, `BurnTracker`, `RewardDistributor`/`RewardDistributorV2` e `FeeRouter` para gating e lookup de owner/recipient.
 
 ## Herança
 
@@ -24,6 +25,14 @@ Usa `SafeERC20` para movimentação de GOV.
 
 ## Parâmetros e storage
 
+### Constants
+
+| Nome | Valor |
+|---|---|
+| `OWNER_RECIPIENT_TIMELOCK` | `48 hours` |
+
+### Storage
+
 | Nome | Tipo | Descrição |
 |---|---|---|
 | `GOV_TOKEN` | `IERC20` immutable | Endereço do GovernanceToken |
@@ -32,6 +41,17 @@ Usa `SafeERC20` para movimentação de GOV.
 | `_nextProjectId` | `uint256` private | Próximo ID (começa em 1) |
 | `_projects` | mapping | `projectId → Project` |
 | `_pendingOwners` | mapping | `projectId → pendingOwner` |
+| `_ownerRecipient` | mapping | `projectId → recipient explícito` (Fase 1.4) |
+| `pendingOwnerRecipient` | mapping | `projectId → PendingRecipientChange` |
+
+### Struct `PendingRecipientChange`
+
+```solidity
+struct PendingRecipientChange {
+    address newRecipient;  // address(0) = "limpar explicit"
+    uint64 effectiveAt;    // block.timestamp + 48h no propose
+}
+```
 
 ### Struct `Project`
 
@@ -136,6 +156,29 @@ Aceita a transferência (chamado pelo `pendingOwner`).
 - **Reverte**: `NotPendingOwner`.
 - **Eventos**: `OwnershipTransferAccepted(projectId, previous, new)`.
 
+### ownerRecipient timelock (Fase 1.4)
+
+#### `proposeOwnerRecipient(uint256 projectId, address newRecipient)` — owner do projeto
+
+Inicia proposta de mudança do `ownerRecipient`. Reseta clock de 48h. `newRecipient = address(0)` reseta para fallback (= owner do projeto).
+
+- **Reverte**: `ProjectAlreadyRemoved`, `NotProjectOwner`.
+- **Eventos**: `OwnerRecipientProposed(projectId, owner, newRecipient, effectiveAt)`.
+
+#### `applyOwnerRecipient(uint256 projectId)` — permissionless
+
+Aplica proposta após `effectiveAt`. Bots/keepers podem chamar.
+
+- **Reverte**: `NoPendingOwnerRecipient`, `OwnerRecipientTimelockActive(effectiveAt, now)`.
+- **Eventos**: `OwnerRecipientApplied(projectId, oldRecipient, newRecipient)`.
+
+#### `cancelOwnerRecipient(uint256 projectId)` — owner do projeto OU `GOVERNANCE_ROLE`
+
+Cancela proposta pendente. Escape hatch caso owner esteja comprometido.
+
+- **Reverte**: `NoPendingOwnerRecipient`, `NotProjectOwner` (se caller não é owner nem governance).
+- **Eventos**: `OwnerRecipientCancelled(projectId, canceller)`.
+
 ### Views
 
 - `govToken() → address` — endereço do token de colateral.
@@ -144,6 +187,7 @@ Aceita a transferência (chamado pelo `pendingOwner`).
 - `isActive(projectId) → bool` — retorna `false` para inexistente (não reverte).
 - `isInProbation(projectId) → bool` — probation **inicial por tempo** apenas; `false` para Probation punitiva.
 - `pendingOwner(projectId) → address`.
+- `ownerRecipient(projectId) → address` — recipient explícito ou fallback para `project.owner`. `address(0)` se projeto inexistente.
 
 ## Eventos
 
@@ -163,6 +207,8 @@ Todos listados acima. Campos `projectId`, `owner`, `currentOwner`, `pendingOwner
 | `InvalidStatus(projectId, current, expected)` | Transição inválida |
 | `NotProjectOwner(projectId, caller)` | Caller não é owner |
 | `NotPendingOwner(projectId, caller)` | Caller não é pending |
+| `NoPendingOwnerRecipient(projectId)` | apply/cancel sem proposta pendente |
+| `OwnerRecipientTimelockActive(effectiveAt, now)` | apply antes do `effectiveAt` |
 
 ## Invariantes
 
@@ -188,6 +234,14 @@ Se v2 precisar, adicione funções novas sem quebrar layout.
 ### Probation → Active preserva ancoramento
 
 `reactivate` **não** recalcula `activatedAt` / `probationEndsAt`. Se o projeto ainda estiver dentro da janela inicial de probation, a penalidade de reward se mantém.
+
+### Por que `ownerRecipient` tem timelock de 48h
+
+Com a Fase 1.4 do CLP, o `RewardDistributorV2` mint CREDIT direto para `ownerRecipient(projectId)` ao finalizar a rodada. Sem timelock, o owner poderia fazer hot-swap entre `finalizeRound` e indexação off-chain, desviando o bucket apps inteiro para um endereço hostil sem que stakers/auditores percebam a tempo.
+
+48h é compatível com o ciclo operacional da DAO (proposta + execução do Timelock principal levam ~2 dias). `cancelOwnerRecipient` está disponível tanto para o owner quanto para `GOVERNANCE_ROLE` — escape hatch caso a chave do owner seja comprometida e a proposta seja maliciosa.
+
+`ownerRecipient` retorna o explícito quando setado, ou cai para `project.owner` como fallback — preserva compatibilidade com projetos antigos que jamais chamaram `proposeOwnerRecipient`.
 
 ---
 

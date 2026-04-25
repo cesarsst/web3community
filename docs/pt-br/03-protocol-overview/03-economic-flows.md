@@ -7,14 +7,17 @@
 
 A única fonte de **valor externo** no sistema é o usuário final que paga por CREDIT. Ele paga porque precisa usar os apps. Se ninguém quer usar os apps, ninguém compra CREDIT, e o sistema morre — essa é a invariante dura.
 
-O caminho típico:
+A liquidez do par CREDIT/USDC é construída por duas vias complementares no Credit Liquidity Protocol (CLP):
+
+1. **POL** — Protocol-Owned Liquidity. O próprio Treasury custodia uma posição NFT no pool. Construída por (a) seed inicial do genesis CREDIT + USDC do Treasury, (b) refill via bucket bonders + USDC do `treasuryBps`.
+2. **LPs externos** — usuários que provisionam liquidez no pool e stakeiam o NFT no `LiquidityGauge`. Recebem incentives em CREDIT (bucket LPs do V2, default 25% da emissão).
+
+O caminho típico de um pagamento:
 
 ```
    [ Usuario Charlie ]
         |
-        |  1. Compra 1000 CREDIT na DEX externa por $X em USDC
-        |     (liquidez fornecida por quem tem CREDIT e quer sair,
-        |      ou por liquidity mining off-protocol — nao esta aqui dentro)
+        |  1. Compra 1000 CREDIT na DEX (POL + LPs externos fornecem liquidez)
         |
         v
    [ Carteira Charlie tem 1000 CREDIT ]
@@ -25,37 +28,43 @@ O caminho típico:
         v
    [ FeeRouter ]
         |
-        | split 95/0/5 default
+        | split default 95/0/5 (recomendacao CLP: 70/20/10)
         |
-        +-------> 950 CREDIT queimados (via BurnTracker)
+        +-------> burnBps queimados (via BurnTracker)
         |         - CREDIT.totalSupply diminui
         |         - burn registrado no BurnTracker para o Chat App
         |
-        +-------> 50 CREDIT -> app owner (rebate direto)
+        +-------> treasuryBps -> Treasury (USDC funding para refill POL)
+        |
+        +-------> rebateBps -> app owner (rebate direto)
 ```
 
-**O valor real entrou no protocolo na etapa 1.** Todas as etapas subsequentes redistribuem esse valor. Nenhuma delas cria valor do nada.
+**O valor real entrou no protocolo na etapa 1.** Todas as etapas subsequentes redistribuem esse valor.
 
-## Os 4 agentes e por que cada um está no jogo
+## Os 5 agentes e por que cada um está no jogo
+
+Com o pivot CLP, o **LP** entra como agente formal — antes era apenas externo, agora recebe bucket dedicado.
 
 ```
-   +----------------+     +-----------------+     +----------------+     +-------------+
-   | Usuario final  |     |      App        |     |     Staker     |     |   Holder    |
-   |   (Charlie)    |     |   (ChatApp)     |     |    (Alice)     |     |  sem stake  |
-   +--------+-------+     +--------+--------+     +--------+-------+     +------+------+
-            |                      |                       |                    |
-     paga em CREDIT         recebe rebate +          trava GOV num         poder de voto
-     usa o app              captura rewards          projectId +           no Governor
-                            se stakar no proprio     ganha CREDIT
-                            projeto                  na rodada R+1
-            |                      |                       |                    |
-     extrai valor           captura caixa             ganha CREDIT         mantem direito
-     de servico             operacional +             recem-emitido        sobre mudancas
-     (fora do               emissao direcionada                            de parametros
-     protocolo)
+   +----------+    +-------------+    +----------+    +----------+    +------------+
+   | Usuario  |    |    App      |    |  Staker  |    |    LP    |    |   Holder   |
+   | final    |    | (ChatApp)   |    |  (Alice) |    |   (Bob)  |    |  sem stake |
+   +----+-----+    +------+------+    +----+-----+    +----+-----+    +-----+------+
+        |                 |                |               |                |
+   paga em CREDIT    recebe rebate    trava GOV em    LP no pool       poder de voto
+   usa o app         + bucket apps    projectId       CREDIT/USDC      no Governor
+                     (push direto     ganha bucket    + stake NFT
+                      retrospectivo   stakers         em LiquidityGauge
+                      por burn)       (claim)         ganha bucket LPs
+                                                      (vesting 14d)
+        |                 |                |               |                |
+   extrai valor      captura caixa    ganha CREDIT    ganha CREDIT     mantem direito
+   de servico        operacional +    recem-emitido   recem-emitido    sobre mudancas
+   (fora do          emissao push     em claim        em harvest       de parametros
+   protocolo)        (apps bucket)    (stakers)       (LPs bucket)
 ```
 
-Perceba: **não há yield "do ar"**. O CREDIT emitido para Alice existe porque Charlie queimou CREDIT. O rebate para o ChatApp existe porque Charlie pagou. Nenhum ator recebe valor que não veio de algum ator a montante.
+Perceba: **não há yield "do ar"**. O CREDIT emitido para Alice (staker), Bob (LP) e ChatApp (apps bucket) existe porque Charlie queimou CREDIT. Nenhum ator recebe valor que não veio de algum ator a montante.
 
 ## As 3 fontes de receita de um app
 
@@ -167,23 +176,30 @@ Circulação:
 - **Holder → TeamVesting (via Timelock)**: vesting contracts que liberam gradualmente.
 - **Holder → Governor**: `delegate` não move GOV, só confere poder de voto.
 
-## O papel do Treasury nesse fluxo
+## O papel do Treasury nesse fluxo (pós-CLP)
 
 O Treasury é o **amortecedor** do sistema. Ele:
 
 - Recebe o genesis de CREDIT (10M).
-- Pode receber `treasuryBps` dos pagamentos (0% no default).
+- Pode receber `treasuryBps` dos pagamentos (recomendação CLP: subir de 0% para 20%).
 - Recebe colateral de projetos removidos com slash.
-- Pode ser financiado por buyback de GOV (via `executeBuyback`, stub no v1).
+- **Recebe bucket bonders** do `RewardDistributorV2` (5% da emissão por rodada — ledger `polRefillBucket`).
+- **Pode receber bucket LPs** quando gauge paused (ledger `pendingGaugeRewards`).
 
 E distribui, via propostas:
 
+- **Executa FFP buyback** — swap USDC → CREDIT + queima imediata, defendendo o floor.
+- **Provisiona POL** — `addPOL` / `addPOLFromRefill`.
 - Subsídios para usuários novos (`UserSubsidy`).
 - Vesting para o time (`TeamVesting`).
 - Pagamento de rebates batch para apps.
 - Financiamento de operações off-chain.
 
-O Treasury **não** é distribuído automaticamente. Tudo sai por proposta.
+O Treasury **não** é distribuído automaticamente — tudo sai por proposta. Mas a partir do CLP, o Treasury executa três loops econômicos (em vez de só custodiar):
+
+1. **Loop FFP**: `recordDailyPrice` (keeper) → MA90 cresce → spot < floor por 24h → governance propõe `executeBuyback` → swap USDC→CREDIT → queima → `totalSupply` cai → preço pressionado pra cima.
+2. **Loop POL refill**: `treasuryBps` traz USDC → bucket bonders traz CREDIT → governance propõe `addPOLFromRefill` → liquidez no pool aumenta → slippage menor para holders.
+3. **Loop fallback gauge**: `RewardDistributorV2` detecta gauge paused → mint para Treasury → governance despausa gauge → `flushPendingGaugeRewards` envia CREDIT acumulado de volta como incentive.
 
 ## Invariante econômica de saúde
 
@@ -194,6 +210,11 @@ burn_R >= burn_{R-1}
 ```
 
 Ou seja: o protocolo está saudável enquanto o uso real está se mantendo ou crescendo. Se burn cai, emissão cai junto, mas a razão `emissão/burn` permanece constante em `alpha`. O sintoma terminal é burn absoluto indo a zero por muitas rodadas consecutivas.
+
+Pós-CLP, dois sinais adicionais:
+
+- **MA90 do CREDIT crescente** — indica precificação saudável; floor relativo (`0.5 × MA90`) acompanha. Se spot cai abaixo do floor por 24h, FFP buyback é proposto.
+- **POL TVL crescente** — Treasury acumula liquidez própria. Maior POL = menor slippage para holders e menor dependência de LPs externos para sair.
 
 Métricas completas em [Métricas que importam](../06-for-investors/04-metrics-that-matter.md).
 

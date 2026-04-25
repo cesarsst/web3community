@@ -1,105 +1,114 @@
 # Flujo de valor
 
-**Audiencia:** lector que quiere entender por donde entra, transita y sale el valor real del protocolo.
-**Requisitos previos:** [Burn-to-mint](../02-core-concepts/03-burn-to-mint.md), [Treasury y fees](../02-core-concepts/07-treasury-and-fees.md).
+**Para quién es:** lector que quiere entender por dónde el valor real entra, transita y sale del protocolo.
+**Prerrequisitos:** [Burn-to-mint](../02-core-concepts/03-burn-to-mint.md), [Treasury y fees](../02-core-concepts/07-treasury-and-fees.md).
 
-## De donde viene el valor real
+## De dónde viene el valor real
 
-La unica fuente de **valor externo** en el sistema es el usuario final que paga por CREDIT. Paga porque necesita usar las apps. Si nadie quiere usar las apps, nadie compra CREDIT, y el sistema muere — esa es la invariante dura.
+La única fuente de **valor externo** en el sistema es el usuario final que paga por CREDIT. Paga porque necesita usar las apps. Si nadie quiere usar las apps, nadie compra CREDIT, y el sistema muere — esa es la invariante dura.
 
-El camino tipico:
+La liquidez del par CREDIT/USDC se construye por dos vías complementarias en el Credit Liquidity Protocol (CLP):
+
+1. **POL** — Protocol-Owned Liquidity. El propio Treasury custodia una posición NFT en el pool. Construida por (a) seed inicial del genesis CREDIT + USDC del Treasury, (b) refill vía bucket bonders + USDC del `treasuryBps`.
+2. **LPs externos** — usuarios que provisionan liquidez en el pool y stakean el NFT en el `LiquidityGauge`. Reciben incentives en CREDIT (bucket LPs del V2, default 25% de la emisión).
+
+El camino típico de un pago:
 
 ```
    [ Usuario Charlie ]
         |
-        |  1. Compra 1000 CREDIT en DEX externa por $X en USDC
-        |     (liquidez aportada por quien tiene CREDIT y quiere salir,
-        |      o por liquidity mining off-protocol — no esta aqui dentro)
+        |  1. Compra 1000 CREDIT en la DEX (POL + LPs externos proveen liquidez)
         |
         v
    [ Wallet de Charlie tiene 1000 CREDIT ]
         |
-        |  2. Usa el Chat App. App cobra 1000 CREDIT por el servicio.
+        |  2. Usa el Chat App. La app cobra 1000 CREDIT por el servicio.
         |     Charlie firma approve(feeRouter, 1000) + feeRouter.pay(...)
         |
         v
    [ FeeRouter ]
         |
-        | split 95/0/5 default
+        | split por defecto 95/0/5 (recomendacion CLP: 70/20/10)
         |
-        +-------> 950 CREDIT quemados (via BurnTracker)
+        +-------> burnBps quemados (via BurnTracker)
         |         - CREDIT.totalSupply disminuye
-        |         - burn registrado en BurnTracker para el Chat App
+        |         - burn registrado en el BurnTracker para el Chat App
         |
-        +-------> 50 CREDIT -> app owner (rebate directo)
+        +-------> treasuryBps -> Treasury (USDC funding para refill POL)
+        |
+        +-------> rebateBps -> app owner (rebate directo)
 ```
 
-**El valor real entro en el protocolo en el paso 1.** Todos los pasos subsiguientes redistribuyen ese valor. Ninguno de ellos crea valor de la nada.
+**El valor real entró en el protocolo en la etapa 1.** Todas las etapas siguientes redistribuyen ese valor.
 
-## Los 4 agentes y por que cada uno esta en el juego
+## Los 5 agentes y por qué cada uno está en el juego
+
+Con el pivote CLP, el **LP** entra como agente formal — antes era sólo externo, ahora recibe bucket dedicado.
 
 ```
-   +----------------+     +-----------------+     +----------------+     +-------------+
-   | Usuario final  |     |      App        |     |     Staker     |     |   Holder    |
-   |   (Charlie)    |     |   (ChatApp)     |     |    (Alice)     |     |  sem stake  |
-   +--------+-------+     +--------+--------+     +--------+-------+     +------+------+
-            |                      |                       |                    |
-     paga en CREDIT         recibe rebate +          lockea GOV en un     poder de voto
-     usa la app             captura rewards          projectId +           en el Governor
-                            si stakea en el propio   gana CREDIT
-                            proyecto                 en la ronda R+1
-            |                      |                       |                    |
-     extrae valor           captura caja              gana CREDIT          mantiene derecho
-     de servicio            operacional +             recien emitido       sobre cambios
-     (fuera del             emision dirigida                               de parametros
-     protocolo)
+   +----------+    +-------------+    +----------+    +----------+    +------------+
+   | Usuario  |    |    App      |    |  Staker  |    |    LP    |    |   Holder   |
+   | final    |    | (ChatApp)   |    |  (Alice) |    |   (Bob)  |    |  sin stake |
+   +----+-----+    +------+------+    +----+-----+    +----+-----+    +-----+------+
+        |                 |                |               |                |
+   paga en CREDIT    recibe rebate    lockea GOV en   LP en el pool    poder de voto
+   usa la app        + bucket apps    projectId       CREDIT/USDC      en el Governor
+                     (push directo    gana bucket     + stakea NFT
+                      retrospectivo   stakers         en LiquidityGauge
+                      por burn)       (claim)         gana bucket LPs
+                                                      (vesting 14d)
+        |                 |                |               |                |
+   extrae valor      captura caja     gana CREDIT     gana CREDIT      mantiene derecho
+   de un servicio    operacional +    recien-emitido  recien-emitido   sobre cambios
+   (fuera del        emision push     en claim        en harvest       de parametros
+   protocolo)        (apps bucket)    (stakers)       (LPs bucket)
 ```
 
-Nota: **no hay yield "del aire"**. El CREDIT emitido para Alice existe porque Charlie quemo CREDIT. El rebate para el ChatApp existe porque Charlie pago. Ningun actor recibe valor que no venga de algun actor aguas arriba.
+Notá: **no hay yield "del aire"**. El CREDIT minteado para Alice (staker), Bob (LP) y ChatApp (apps bucket) existe porque Charlie quemó CREDIT. Ningún actor recibe valor que no provino de algún actor aguas arriba.
 
 ## Las 3 fuentes de ingreso de una app
 
-El split default de 5% directo parece poco. Pero la cuenta cierra — si la app tambien stakea en su propio proyecto — por tres vectores simultaneos:
+El split por defecto de 5% directo parece poco. Pero la cuenta cierra — si la app también stakeó en su propio proyecto — por tres vectores simultáneos:
 
 ### (A) Rebate directo
 
-5% de cada pago. Instantaneo, en CREDIT. Es el flujo de caja operacional.
+5% de cada pago. Instantáneo, en CREDIT. Es el flujo de caja operacional.
 
-### (B) Emision via stake en el propio `projectId`
+### (B) Emisión vía stake en el propio `projectId`
 
-Si la app adquirio GOV (por ejemplo, comprando en DEX o recibiendo via propuesta de distribucion) y stakeo en `projectId = propio`, captura parte del share de rewards de ese proyecto en la ronda siguiente.
+Si la app adquirió GOV (por ejemplo, comprando en DEX o recibiendo vía propuesta de distribución) y stakeó en `projectId = propio`, captura parte de la share de rewards de ese proyecto en la ronda siguiente.
 
-Como?
+¿Cómo?
 
-1. Cuando Charlie paga, 95% es quemado y va a `burnByRoundProject[R][projectId=app]`.
-2. En la ronda R+1, la emision es proporcional a ese burn.
-3. Si la app tiene peso de staking dentro del propio `projectId`, recibe parte de esa emision.
+1. Cuando Charlie paga, 95% se quema y va a `burnByRoundProject[R][projectId=app]`.
+2. En la ronda R+1, la emisión es proporcional a ese burn.
+3. Si la app tiene peso de staking dentro del propio `projectId`, recibe parte de esa emisión.
 
-**Ejemplo numerico** (ronda hipotetica):
+**Ejemplo numérico** (ronda hipotética):
 
 - ChatApp mueve 600.000 CREDIT en pagos en la ronda R-1.
-- (A) Rebate directo: 5% × 600k = **30.000 CREDIT** inmediato.
+- (A) Rebate directo: 5% × 600k = **30.000 CREDIT** instantáneo.
 - En la ronda R, `projectShare_ChatApp = 902.500 × 600k/950k = 570.000 CREDIT`.
-- Si ChatApp stakeo 50k GOV con lock de 365d (multiplier 4x, peso 200k), y el peso total en el proyecto es 400k, captura 50% × 570k = **285.000 CREDIT**.
-- Suma (A) + (B) = **315.000 CREDIT** sobre un volumen bruto de 600k = **~52,5%** efectivo.
+- Si ChatApp stakeó 50k GOV con lock de 365d (multiplier 4x, peso 200k), y el peso total en el proyecto es 400k, captura 50% × 570k = **285.000 CREDIT**.
+- Suma (A) + (B) = **315.000 CREDIT** de un volumen bruto de 600k = **~52,5%** efectivo.
 
-El split **nominal** cuenta una historia enganosa. El split **economico efectivo** para una app que tambien stakea depende de cuanto stakea y de la competencia de otros stakers en el mismo `projectId`.
+El split **nominal** cuenta una historia engañosa. El split **económico efectivo** para una app que también stake depende de cuánto stake y de la competencia de otros stakers en el mismo `projectId`.
 
-### (C) Apreciacion del CREDIT retenido
+### (C) Apreciación del CREDIT retenido
 
-Como `alpha < 1`, el supply de CREDIT cae si el uso se mantiene constante. El CREDIT que la app recibio (rebate + rewards) y aun no vendio tiende a apreciarse en terminos reales — siempre que la demanda por CREDIT (generada por el uso de las apps) se sostenga.
+Como `alpha < 1`, el supply de CREDIT cae si el uso se mantiene constante. El CREDIT que la app recibió (rebate + rewards) y aún no vendió tiende a apreciarse en términos reales — siempre que la demanda por CREDIT (generada por el uso de las apps) se sostenga.
 
-**Trampa**: si la app vende todo el CREDIT inmediatamente, renuncia a (C). Si retiene, se expone a volatilidad. Es decision de la app.
+**Trampa**: si la app vende todo el CREDIT inmediatamente, renuncia a (C). Si retiene, queda expuesta a volatilidad. Es decisión de la app.
 
-## Cuando (B) no cierra la cuenta
+## Cuándo (B) no cierra la cuenta
 
 Apps sin capital para adquirir GOV no capturan (B). Para esos casos:
 
-- El split default (95/0/5) puede ser **desincentivador**.
-- La DAO puede aprobar `setProjectSplit(projectId, custom)` via propuesta. Por ejemplo: `8000/0/2000` (20% rebate) para apps estrategicas que no logran stakear.
-- Alternativamente, se puede financiar la adquisicion inicial de GOV via `Treasury` (propuesta de transferencia directa).
+- El split por defecto (95/0/5) puede ser **desincentivador**.
+- La DAO puede aprobar `setProjectSplit(projectId, custom)` vía propuesta. Por ejemplo: `8000/0/2000` (20% rebate) para apps estratégicas que no logran stakear.
+- Alternativamente, se puede financiar adquisición inicial de GOV vía `Treasury` (propuesta de transferencia directa).
 
-La arquitectura permite ajuste por proyecto exactamente para ese tipo de acomodacion.
+La arquitectura permite ajuste por proyecto exactamente para ese tipo de acomodación.
 
 ## Flujo por ciclo de ronda
 
@@ -109,7 +118,7 @@ La arquitectura permite ajuste por proyecto exactamente para ese tipo de acomoda
    | Charlie + 10k otros usuarios        |                  | Alice puede claim rewards de R-1   |
    | pagaron en CREDIT en las apps       |                  | en funcion de:                     |
    |                                     |                  |   - burn total de R-1              |
-   | BurnTracker registro:               |  closeRound()    |   - burn del proyecto de ella R-1  |
+   | BurnTracker registro:               |  closeRound()    |   - burn de su proyecto en R-1     |
    |   totalBurnByRound[R-1] = 950_000   |  --------->      |   - peso del stake de ella         |
    |   burnByRoundProject[R-1][42] = 600_000                |                                    |
    +------------------------------------+                   +------------------------------------+
@@ -130,73 +139,85 @@ La arquitectura permite ajuste por proyecto exactamente para ese tipo de acomoda
                                                               alice_claim = 570k * aliceW/projectW
 ```
 
-## Rotacion de CREDIT
+## Rotación de CREDIT
 
-CREDIT entra al supply por **dos** vias unicamente:
+CREDIT entra al supply por **dos** vías solamente:
 
 1. `CreditToken.mintGenesis` — one-shot, 10M al Treasury, en el deploy.
 2. `CreditToken.mint` — por el `RewardDistributor`, en los claims.
 
-Y sale por **una** via:
+Y sale por **una** vía:
 
-- `CreditToken.burn` / `burnFrom` / `burnByRole` — el camino principal es via `FeeRouter.pay` → `BurnTracker.burnAndRecord` → `CreditToken.burnByRole`.
+- `CreditToken.burn` / `burnFrom` / `burnByRole` — el camino principal es vía `FeeRouter.pay` -> `BurnTracker.burnAndRecord` -> `CreditToken.burnByRole`.
 
-Ese flujo cerrado permite analisis simple:
+Ese flujo cerrado permite análisis simple:
 
 ```
-   totalSupply_R = totalSupply_{R-1} + (novas emissoes em R) - (burns em R)
+   totalSupply_R = totalSupply_{R-1} + (nuevas emisiones en R) - (burns en R)
 ```
 
-Si `nuevas emisiones <= burns`, el supply cae. Con `alpha = 0.95` y uso estable, esa es la dinamica esperada.
+Si `nuevas emisiones <= burns`, el supply cae. Con `alpha = 0.95` y uso estable, esa es la dinámica esperada.
 
-## Rotacion de GOV
+## Rotación de GOV
 
 GOV entra al supply de forma permanente hasta alcanzar el cap:
 
 1. Genesis: 0 en el deploy.
-2. `mint`: solo por el owner (Timelock en produccion) hasta alcanzar `CAP_SUPPLY = 100M`.
-3. Tras alcanzar el cap, `mint` revierte con `CapExceeded`.
+2. `mint`: sólo por el owner (Timelock en producción) hasta alcanzar `CAP_SUPPLY = 100M`.
+3. Tras alcanzar el cap, `mint` reverte con `CapExceeded`.
 
-No hay burn de GOV en el codigo.
+No hay burn de GOV en el código.
 
-Circulacion:
+Circulación:
 
-- **Holder libre** → compra/venta en DEX.
-- **Holder → Staking**: `stake` bloquea GOV en el contrato; `unstake` libera.
-- **Holder → Registry**: `registerProject` bloquea GOV como colateral; `removeProject` libera (al owner o al treasury).
-- **Holder → TeamVesting (via Timelock)**: vesting contracts que liberan gradualmente.
-- **Holder → Governor**: `delegate` no mueve GOV, solo confiere poder de voto.
+- **Holder libre** -> compra/venta en DEX.
+- **Holder -> Staking**: `stake` lockea GOV en el contrato; `unstake` libera.
+- **Holder -> Registry**: `registerProject` lockea GOV como colateral; `removeProject` libera (al owner o al treasury).
+- **Holder -> TeamVesting (via Timelock)**: contratos de vesting que liberan gradualmente.
+- **Holder -> Governor**: `delegate` no mueve GOV, sólo confiere poder de voto.
 
-## El rol del Treasury en ese flujo
+## El rol del Treasury en este flujo (post-CLP)
 
-El Treasury es el **amortiguador** del sistema. El:
+El Treasury es el **amortiguador** del sistema. Él:
 
 - Recibe el genesis de CREDIT (10M).
-- Puede recibir `treasuryBps` de los pagos (0% en el default).
+- Puede recibir `treasuryBps` de los pagos (recomendación CLP: subir de 0% a 20%).
 - Recibe colateral de proyectos removidos con slash.
-- Puede ser financiado por buyback de GOV (via `executeBuyback`, stub en v1).
+- **Recibe el bucket bonders** del `RewardDistributorV2` (5% de la emisión por ronda — ledger `polRefillBucket`).
+- **Puede recibir el bucket LPs** cuando gauge paused (ledger `pendingGaugeRewards`).
 
-Y distribuye, via propuestas:
+Y distribuye, vía propuestas:
 
+- **Ejecuta FFP buyback** — swap USDC -> CREDIT + quema inmediata, defendiendo el floor.
+- **Provisiona POL** — `addPOL` / `addPOLFromRefill`.
 - Subsidios para usuarios nuevos (`UserSubsidy`).
 - Vesting para el equipo (`TeamVesting`).
 - Pago de rebates batch para apps.
 - Financiamiento de operaciones off-chain.
 
-El Treasury **no** se distribuye automaticamente. Todo sale por propuesta.
+El Treasury **no** se distribuye automáticamente — todo sale por propuesta. Pero a partir del CLP, el Treasury ejecuta tres loops económicos (en lugar de sólo custodiar):
 
-## Invariante economica de salud
+1. **Loop FFP**: `recordDailyPrice` (keeper) -> MA90 crece -> spot < floor por 24h -> gobernanza propone `executeBuyback` -> swap USDC->CREDIT -> quema -> `totalSupply` cae -> precio presionado para arriba.
+2. **Loop POL refill**: `treasuryBps` trae USDC -> bucket bonders trae CREDIT -> gobernanza propone `addPOLFromRefill` -> liquidez en el pool aumenta -> menor slippage para holders.
+3. **Loop fallback gauge**: `RewardDistributorV2` detecta gauge paused -> mint al Treasury -> gobernanza despausa gauge -> `flushPendingGaugeRewards` envía CREDIT acumulado de vuelta como incentive.
 
-Una senal simple de salud del protocolo: **el burn acumulado tiene que crecer mas rapido que la emision acumulada**, a lo largo de rondas. Como `alpha < 1` garantiza `emision_R ≈ 0.95 × burn_{R-1}`, esa desigualdad se satisface automaticamente mientras:
+## Invariante económica de salud
+
+Una señal simple de salud del protocolo: **el burn acumulado debe crecer más rápido que la emisión acumulada**, a lo largo de las rondas. Como `alpha < 1` garantiza `emisión_R ≈ 0.95 × burn_{R-1}`, esa desigualdad se satisface automáticamente mientras:
 
 ```
 burn_R >= burn_{R-1}
 ```
 
-Es decir: el protocolo esta saludable mientras el uso real se mantiene o crece. Si burn cae, la emision cae junto, pero la razon `emision/burn` permanece constante en `alpha`. El sintoma terminal es el burn absoluto yendo a cero durante muchas rondas consecutivas.
+Es decir: el protocolo está saludable mientras el uso real se mantiene o crece. Si burn cae, emisión cae junto, pero la razón `emisión/burn` permanece constante en `alpha`. El síntoma terminal es burn absoluto yendo a cero por muchas rondas consecutivas.
 
-Metricas completas en [Metricas que importan](../06-for-investors/04-metrics-that-matter.md).
+Post-CLP, dos señales adicionales:
+
+- **MA90 del CREDIT creciente** — indica precio saludable; el floor relativo (`0.5 × MA90`) acompaña. Si spot cae debajo del floor por 24h, se propone FFP buyback.
+- **POL TVL creciente** — Treasury acumula liquidez propia. Mayor POL = menor slippage para holders y menor dependencia de LPs externos para salir.
+
+Métricas completas en [Métricas que importan](../06-for-investors/04-metrics-that-matter.md).
 
 ---
 
-**Siguiente →** [Como participar](../04-for-users/01-participate.md)
+**Siguiente ->** [Cómo participar](../04-for-users/01-participate.md)

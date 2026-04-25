@@ -1,13 +1,15 @@
-# RewardDistributor
+# RewardDistributor (V1)
 
-**Para quem é:** stakers consultando preview, auditores, devs integrando UIs de reward.
-**Pré-requisitos:** [Burn-to-mint](../02-core-concepts/03-burn-to-mint.md), [Rewards distribution](../02-core-concepts/04-rewards-distribution.md).
+**Para quem é:** stakers consultando preview de rewards V1 ainda não claimados, auditores, devs integrando UIs de reward.
+**Pré-requisitos:** [Burn-to-mint](../02-core-concepts/03-burn-to-mint.md), [Rewards distribution](../02-core-concepts/04-rewards-distribution.md), [RewardDistributorV2](07b-RewardDistributorV2.md).
+
+> **Status pós-pivot CLP (Fase 1.4):** V1 entra em modo **claim-only** durante a janela de migração de 4 rounds. `finalizeRound` continua funcional mas não será mais chamado em produção — novos rounds são finalizados pelo [RewardDistributorV2](07b-RewardDistributorV2.md). Após o cutoff, governance **revoga `MINTER_ROLE`** do V1 no CreditToken, e `claim` continua respondendo (sem cunhar) até stakers limparem seus rewards históricos. A doc abaixo descreve o V1 como deployado.
 
 ## Visão rápida
 
-Coração do modelo econômico. Calcula a emissão de CREDIT por rodada e cunha-a sob demanda para stakers via claim pull-based. Único detentor de `MINTER_ROLE` no CreditToken em produção.
+V1 do distributor de emissão (pré-CLP). Calcula emissão de CREDIT por rodada e cunha sob demanda para stakers via claim pull-based.
 
-Fórmula: `emissao_R = min(max(alpha * burn_{R-1}, floor(R)), capMax)`. Emissão por projeto computada sob demanda em `_calculateClaim` para escalar custo de gas com número de claims, não com número de projetos.
+Fórmula: `emissao_R = min(max(alpha * burn_{R-1}, floor(R)), capMax)`. **Toda** a emissão é tratada como bucket único de stakers (sem split em LPs/apps/bonders — isso é V2). Emissão por projeto computada sob demanda em `_calculateClaim` para escalar custo de gas com número de claims, não com número de projetos.
 
 ## Herança
 
@@ -189,6 +191,17 @@ Array FIXO (não dinâmico) obriga caller a passar exatamente 24 valores. Array 
 
 Deploy: `DEFAULT_ADMIN_ROLE` e `GOVERNANCE_ROLE` ao `admin` (deployer). Handoff transfere ambas ao Timelock e renuncia. Em produção, só Timelock governa.
 
+### Migração para V2 (Fase 1.4 CLP)
+
+A janela de migração é de **4 rounds**:
+
+1. V2 começa a finalizar novos rounds com bucket-aware split.
+2. V1 continua respondendo a `claim`/`claimMany` para rounds antigos.
+3. Ambos têm `MINTER_ROLE` no CREDIT durante a janela.
+4. **Após cutoff**: governance revoga `MINTER_ROLE` do V1 no CreditToken. V1 vira read-only — `claim` ainda computa o amount mas o `mint` falha. Stakers que não limparam rewards V1 perdem acesso a eles.
+
+Stakers devem **claim agressivamente** durante a janela de migração para não perder rewards V1.
+
 ---
 
-**Ver também**: [Staking](05-Staking.md), [BurnTracker](06-BurnTracker.md), [CreditToken](02-CreditToken.md).
+**Ver também**: [RewardDistributorV2](07b-RewardDistributorV2.md), [Staking](05-Staking.md), [BurnTracker](06-BurnTracker.md), [CreditToken](02-CreditToken.md).

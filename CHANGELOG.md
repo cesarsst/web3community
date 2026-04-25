@@ -9,6 +9,21 @@ de segurança (invariantes, access control, static analysis) ficam em `Security`
 
 ## [Unreleased]
 
+### Changed
+
+- Docs publicas (`/docs`): traducao das 10 paginas multi-idioma que estavam
+  como stub `status: needs-translation` apos o pivot CLP — paridade real
+  alcancada entre pt-br, en e es (50/50/50 markdown). Arquivos traduzidos:
+  `01-getting-started/03-glossary.md`, `02-core-concepts/04-rewards-distribution.md`,
+  `02-core-concepts/07-treasury-and-fees.md`, `03-protocol-overview/01-architecture.md`,
+  `03-protocol-overview/03-economic-flows.md`,
+  `08-contracts-reference/{03-ProjectRegistry,04-Treasury,07-RewardDistributor,07b-RewardDistributorV2,13-LiquidityGauge}.md`.
+  Conteudo cobre FFP buyback, POL, LiquidityGauge, bucket-aware split,
+  ownerRecipient timelock 48h, fallback gauge paused e migration window
+  V1->V2. Frontmatter `needs-translation` removido em todos. `npm run sync:docs`
+  e `npm run typecheck` verdes; `npm run build` produz `DocsView` com
+  conteudo final (1284kB JS contendo as 3 arvores).
+
 ### Security
 
 - `RewardDistributor.MAX_ALPHA` reduzido de `1.1e18` (1.10) para `0.99e18`
@@ -23,6 +38,46 @@ de segurança (invariantes, access control, static analysis) ficam em `Security`
 
 ### Changed
 
+- Docs publicas (`/docs`): atualizacao multi-idioma para refletir o pivot
+  Credit Liquidity Protocol (CLP, Fase 1.1-1.4). pt-BR como fonte de verdade
+  reescrita a partir do codigo; en/es recriadas como stubs
+  `status: needs-translation` com corpo identico ao pt-BR atualizado, para
+  preservar paridade estrita de paths (52/52/52 arquivos). Alteracoes:
+  - **Novos arquivos** em `08-contracts-reference/`:
+    - `13-LiquidityGauge.md` — adapter sobre UniswapV3Staker, bucket LPs
+      (25%), vesting linear 14d, denylist anti self-dealing.
+    - `07b-RewardDistributorV2.md` — distributor bucket-aware (split
+      stakers/LPs/apps/bonders), bounds individuais, IE12 assert, gauge
+      paused fallback, ownerRecipient timelock 48h.
+  - **Reescrita completa** de `08-contracts-reference/04-Treasury.md`:
+    FFP buyback real (Fase 1.1) com TWAP+breach 24h+caps, POL com NFT
+    custodiado (Fase 1.2), ledgers `polRefillBucket` e
+    `pendingGaugeRewards` (Fase 1.4), 4 novas roles, 5 novas funcoes.
+  - **Anotada** `08-contracts-reference/07-RewardDistributor.md` como
+    V1 em modo claim-only durante migration window de 4 rounds; cutoff
+    revoga `MINTER_ROLE`.
+  - **Atualizada** `08-contracts-reference/03-ProjectRegistry.md` com
+    `proposeOwnerRecipient` / `applyOwnerRecipient` /
+    `cancelOwnerRecipient` (timelock 48h), constante
+    `OWNER_RECIPIENT_TIMELOCK`, struct `PendingRecipientChange`.
+  - **Atualizada** `02-core-concepts/04-rewards-distribution.md` com
+    split em 4 buckets, bootstrap apps -> bonders, bucket-aware claim,
+    fluxo LPs no gauge.
+  - **Atualizada** `02-core-concepts/07-treasury-and-fees.md` removendo
+    "buyback stub" e descrevendo FFP real, POL, refill loop, gauge
+    fallback, recomendacao split `(7000, 2000, 1000)`.
+  - **Atualizada** `03-protocol-overview/01-architecture.md` com
+    diagrama incluindo LiquidityGauge + RewardDistributorV2 + FFP/POL,
+    grafo de roles pos-CLP (REWARD_NOTIFIER plural,
+    POL_REFILL_DEPOSITOR, GAUGE_FALLBACK_DEPOSITOR), tabela "quem chama
+    quem" expandida com 8 fluxos novos.
+  - **Atualizada** `03-protocol-overview/03-economic-flows.md` com
+    o agente "LP" como 5o ator, 3 loops economicos do Treasury (FFP,
+    POL refill, fallback gauge), invariante de saude expandida com
+    MA90 e POL TVL.
+  - **Atualizada** `01-getting-started/03-glossary.md` com 11 termos
+    novos: Bonders, Bucket, CLP, FFP, LiquidityGauge, MA90,
+    ownerRecipient, POL, polRefillBucket, RewardDistributorV2.
 - `ignition/modules/Dao.ts` agora suporta deploy opcional de `TeamVesting`
   e `UserSubsidy` via env vars (`DEPLOY_TEAM_VESTING`, `DEPLOY_USER_SUBSIDY`),
   ambas default `false`. Motivacao: facilitar deploy all-in-one em

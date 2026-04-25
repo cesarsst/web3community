@@ -1,36 +1,90 @@
 # Distribuição de rewards
 
-**Para quem é:** stakers e devs querendo entender exatamente como o pool de uma rodada vira claim do usuário.
+**Para quem é:** stakers, LPs, owners de apps e devs querendo entender exatamente como o pool de uma rodada vira claim/incentive.
 **Pré-requisitos:** [Directed staking](02-directed-staking.md), [Burn-to-mint](03-burn-to-mint.md).
 
-## Ciclo completo de uma rodada
+## Onde estamos: V1 (legado) → V2 (bucket-aware split)
+
+Esta página descreve o modelo **V2** (Fase 1.4 do pivot CLP), que está em produção a partir de abril/2026. O modelo V1 (pré-pivot) continua funcionando em modo claim-only durante uma janela de migração de 4 rounds — para detalhes ver [RewardDistributor (V1)](../08-contracts-reference/07-RewardDistributor.md).
+
+O V2 reescreve a finalização de rodada para **dividir a emissão em 4 buckets** simultâneos:
+
+| Bucket | Default | Destino | Mecanismo |
+|---|---|---|---|
+| **Stakers** | 55% | quem fez stake direcionado em algum projeto | pull (`claim`) |
+| **LPs** | 25% | quem fez LP no par CREDIT/USDC e stakou no [LiquidityGauge](../08-contracts-reference/13-LiquidityGauge.md) | push para o gauge (`notifyRewardAmount`) |
+| **Apps** | 15% | `ownerRecipient` de cada projeto, proporcional ao burn da rodada anterior | push (mint direto) |
+| **Bonders** | 5% | refill earmarkado do POL no Treasury (Fase 3 vira `BondDepository`) | push (`Treasury.depositPolRefill`) |
+
+A fórmula da emissão TOTAL é a mesma do V1: `min(max(alpha × burn_{R-1}, floor(R)), capMax)`. O split em buckets é aplicado **depois** do cap (IE3 fortalecida — nenhum bucket excede `bucketBps[i] × capMax`).
+
+Bounds individuais por bucket (E.8 do parecer 2026-04-24-clp-pivot.md):
+
+- `stakers >= 30%`
+- `LPs >= 5%`
+- `apps <= 25%` (IE4b — anti auto-extração via wash burn)
+- `bonders <= 20%` (Olympus mostrou que > 20% destrava ponzi)
+- soma exata 10000 bps.
+
+## Ciclo completo de uma rodada (V2)
 
 ```
 [Rodada R-1 aberta no BurnTracker]
 
 Usuarios pagam em apps via FeeRouter
-  -> FeeRouter.burnByRole 95% do valor via BurnTracker.burnAndRecord
+  -> FeeRouter.burnByRole burnBps% do valor via BurnTracker.burnAndRecord
   -> BurnTracker incrementa:
        burnByRoundProject[R-1][projectId] += amount
        totalBurnByRound[R-1]              += amount
-       projectsWithBurnCount[R-1]         += 1 (1a vez por projeto)
 
 [Fim da janela alvo da rodada (roundDuration)]
 
 Governanca chama closeRound()
   -> currentRound passa de R-1 para R
-  -> roundStartedAt = block.timestamp (rodada R aberta)
-  -> dados de R-1 continuam acessiveis via views
 
-[Qualquer um chama finalizeRound(R-1) no RewardDistributor]
-  -> le BurnTracker.getTotalBurnForRound(R-2)  (ou 0 se R-1 == 0)
-  -> calcula emissao = min(max(alpha * burn_{R-2}, floor(R-1)), capMax)
-  -> grava roundData[R-1] = { totalEmission, totalBurnAtFinalize, snapshotBlock, finalized: true }
+[Qualquer um chama RewardDistributorV2.finalizeRound(R-1)]
+  -> totalEmission = min(max(alpha * burn_{R-2}, floor(R-1)), capMax)
+  -> SPLIT em 4 buckets (proporcao bucketBps), bonders absorve residuo:
+       stakersAmount = totalEmission * 5500 / 10000
+       lpsAmount     = totalEmission * 2500 / 10000
+       appsAmount    = totalEmission * 1500 / 10000
+       bondersAmount = totalEmission - stakers - lps - apps
+
+  Push para 3 buckets (na mesma tx):
+    APPS:  loop em projetos com burn > 0:
+             share = appsAmount * burn_p / totalBurnPrev
+             CREDIT.mint(REGISTRY.ownerRecipient(p), share, "rewardRound:apps")
+    LPS:   se gauge nao paused:
+             CREDIT.mint(self, lpsAmount)
+             gauge.notifyRewardAmount(poolId, lpsAmount, duration)
+           se paused:
+             CREDIT.mint(treasury, lpsAmount)
+             treasury.depositPendingGaugeRewards(lpsAmount)
+    BONDERS: CREDIT.mint(treasury, bondersAmount, "rewardRound:bonders")
+             treasury.depositPolRefill(bondersAmount)
+
+  Stakers: NAO mint aqui (lazy via claim)
+
+  -> grava roundData[R-1] + bucketEmissionByRound[R-1][i]
+  -> assert IE12: soma dos 4 buckets == totalEmission (tolerancia 3 wei)
 
 [Stakers chamam claim(R-1, projectId)]
-  -> se !finalized: reverte
-  -> se ja claimou: reverte
-  -> calcula amount e cunha CREDIT via CREDIT.mint
+  -> base do calculo: bucketEmissionByRound[R-1][BUCKET_STAKERS]
+  -> projectShare = base * burnProjeto / totalBurn  (ou via globalWeight no bootstrap)
+  -> userAmount = projectShare * userWeight / projectWeight
+  -> CREDIT.mint(user, userAmount, "rewardRoundV2:stakers")
+
+[LPs sacam via LiquidityGauge.harvest(user, maxAmount)]
+  -> staker oficial Uniswap distribui in-range proporcionalmente
+  -> unstake() cria VestingPosition de 14 dias linear
+  -> harvest puxa fracao ja vestida
+
+[Owners de apps recebem automaticamente em ownerRecipient]
+  -> nada a fazer — o mint acontece em finalizeRound
+
+[Bonders nao existem na Fase 1 — bucket vira refill POL]
+  -> Treasury.polRefillBucket acumula
+  -> governance dreina via addPOLFromRefill (proposta DAO)
 ```
 
 Observação importante: **a rodada R-1 só pode ser `finalizeRound`ada depois que o `BurnTracker` fechou a R-1**, mesmo que ainda não tenha fechado a R. A sequencialidade é:
@@ -38,20 +92,22 @@ Observação importante: **a rodada R-1 só pode ser `finalizeRound`ada depois q
 - `closeRound` incrementa `currentRound`. Logo, para finalizar a rodada X, é preciso que `BURN_TRACKER.currentRound() > X`.
 - `finalizeRound` exige ordem estrita: primeiro R=0, depois R=1, depois R=2... Não pode pular.
 
-## Como calcula o share de um projeto
+## Como calcula o share de um projeto no bucket stakers (V2)
 
-Em `RewardDistributor._projectShare(round, projectId)`:
+Em `RewardDistributorV2._projectStakerShare(round, projectId)`:
+
+**Base do cálculo**: `stakersBase = bucketEmissionByRound[round][BUCKET_STAKERS]` — não é mais `totalEmission`.
 
 **Se houve burn na rodada:**
 
 ```
-projectShare = totalEmission * burnDoProjetoNaRodada / totalBurnDaRodada
+projectShare = stakersBase * burnDoProjetoNaRodada / totalBurnDaRodada
 ```
 
 **Se não houve burn (bootstrap):**
 
 ```
-projectShare = totalEmission * weightDoProjetoNoSnapshot / weightGlobalNoSnapshot
+projectShare = stakersBase * weightDoProjetoNoSnapshot / weightGlobalNoSnapshot
 ```
 
 **E em qualquer caso:**
@@ -61,21 +117,61 @@ se isInProbation(projectId):
     projectShare = projectShare / 4
 ```
 
-Os 75% cortados pela probation **nunca são mintados** — não entram no `CREDIT.mint`, não são redistribuídos e `CreditToken.totalSupply()` **não é afetado**. Não é `_burn` (que reduziria supply previamente mintado); é simplesmente `projectShare` dividido por 4 antes do mint, conforme `contracts/RewardDistributor.sol:615-618`.
+Os 75% cortados pela probation **nunca são mintados** — não são redistribuídos e `CreditToken.totalSupply()` **não é afetado**. É simplesmente `projectShare` dividido por 4 antes do mint.
 
-## Como calcula o claim de um usuário
+## Como calcula o claim de um usuário (bucket stakers)
 
-Em `RewardDistributor._calculateClaim(user, round, projectId)`:
+Em `RewardDistributorV2._calculateClaim(user, round, projectId)`:
 
 ```
-share = _projectShare(round, projectId)
-userWeight   = Staking.getWeightAt(user, projectId, snapshotBlock)
+share = _projectStakerShare(round, projectId)
+userWeight    = Staking.getWeightAt(user, projectId, snapshotBlock)
 projectWeight = Staking.getTotalWeightAt(projectId, snapshotBlock)
 
 amount = share * userWeight / projectWeight
 ```
 
-Se `userWeight == 0` ou `share == 0`, retorna 0 sem side effects — o usuário pode tentar de novo depois se o estado mudar (raro, mas evita "queimar" o slot de claim por erro).
+Se `userWeight == 0` ou `share == 0`, retorna 0 sem side effects — o usuário pode tentar de novo depois se o estado mudar.
+
+## Como o bucket apps distribui
+
+Em `finalizeRound`, o V2 itera `pid in 1..totalProjects`:
+
+```
+para cada projeto p:
+    burnP = BURN_TRACKER.getBurnForProjectInRound(round - 1, p)
+    se burnP == 0: pula
+    appShare = appsAmount * burnP / totalBurnPrev
+    se appShare == 0: pula
+    recipient = REGISTRY.ownerRecipient(p)
+    se recipient == address(0): pula  (projeto Removed/inexistente — share evapora)
+    CREDIT.mint(recipient, appShare, "rewardRound:apps")
+```
+
+**Bootstrap** (`totalBurnPrev == 0`): bucket apps NÃO emite — bonders absorve. Sem burn, não há sinal econômico para distribuir entre apps.
+
+**Recipient com timelock 48h**: `ownerRecipient(p)` retorna o explícito setado via `proposeOwnerRecipient` + `applyOwnerRecipient` (timelock 48h), ou cai para `project.owner` como fallback. Ver [ProjectRegistry](../08-contracts-reference/03-ProjectRegistry.md).
+
+## Como o bucket LPs distribui
+
+Em `finalizeRound`, V2 detecta o estado do gauge:
+
+- **Gauge ativo**: `CREDIT.mint(self, lpsAmount)` + `forceApprove(gauge, lpsAmount)` + `gauge.notifyRewardAmount(poolId, lpsAmount, duration)`. Cria uma incentive nova de `gaugeIncentiveDuration` segundos (default 7 dias).
+- **Gauge paused**: fallback para `Treasury.depositPendingGaugeRewards(lpsAmount)` + emite `GaugePauseFallback`. Sem fallback, pause do gauge travaria a finalização da rodada inteira.
+
+LPs sacam via `LiquidityGauge.harvest(user, maxAmount)` — o staker oficial Uniswap distribui proporcionalmente ao tempo in-range (`secondsInsideX128`). Após `unstake`, rewards entram em vesting linear de 14 dias.
+
+## Como o bucket bonders alimenta o POL
+
+Em `finalizeRound`, V2 mint `bondersAmount` direto para o Treasury e chama `Treasury.depositPolRefill(bondersAmount)`. Isso só **acumula no ledger interno** `polRefillBucket` — não move tokens para o pool ainda.
+
+Quando governance decide refilar o POL, propõe `addPOLFromRefill(creditAmount, usdcAmount, ...)` no Treasury. O contrato:
+
+1. Debita `creditAmount` do `polRefillBucket` (CEI).
+2. Casa com `usdcAmount` do balance livre do Treasury (vem do `treasuryBps` do FeeRouter).
+3. Chama `NPM.increaseLiquidity` (ou `mint` na primeira vez).
+
+A Fase 3 do roadmap CLP recicla esse bucket para um `BondDepository` — usuários vendem ETH/CREDIT em troca de CREDIT vested, e o protocolo acumula POL através de bonds. Por enquanto, o bucket sustenta o POL diretamente.
 
 ## Pull-based — você puxa seus rewards
 
