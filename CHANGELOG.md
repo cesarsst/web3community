@@ -72,6 +72,27 @@ de segurança (invariantes, access control, static analysis) ficam em `Security`
 
 ### Added
 
+- `scripts/governance/propose-fase0-default-split.ts`,
+  `scripts/governance/execute-fase0-default-split.ts`,
+  `test/governance/Fase0DefaultSplit.test.ts` e
+  `docs/governance/fase0-default-split.md` — pacote operacional da **Fase 0
+  do pivot CLP**: proposta DAO unica que executa
+  `FeeRouter.setDefaultSplit({burnBps: 7000, treasuryBps: 2000, rebateBps: 1000})`,
+  destravando o pre-requisito C4 (Treasury sem receita recorrente) do
+  parecer `audit/economist/2026-04-24-clp-pivot.md`. O script de propose
+  tem modo `DRY_RUN=true` (imprime calldata + proposalId computado via
+  `Governor.hashProposal` sem submeter); o script de execute identifica
+  automaticamente o estado da proposta e executa a transicao apropriada
+  (`Succeeded -> queue`, `Queued+ETA maturado -> execute`, `Executed -> noop`).
+  Teste de integracao cobre o ciclo completo (propose → vote → queue →
+  execute → verifica `defaultSplit() == (7000, 2000, 1000)` + evento
+  `DefaultSplitUpdated`), sobrescrita do split antigo e caminho triste
+  (proposer sem voting power -> `GovernorInsufficientProposerVotes`).
+  Nenhum contrato Solidity foi alterado — a proposta usa a funcao
+  `setDefaultSplit` ja existente. **Esta entrada documenta a PREPARACAO
+  da proposta**; a execucao on-chain real movera esta entrada para a
+  versao publicada quando o user disparar o ciclo via Governor. Modelo de
+  peg adotado: FFP (`audit/economist/2026-04-24-credit-peg.md`).
 - `contracts/test/ReentrantCallMock.sol` — ERC-20 malicioso generico que
   durante `_update` executa um `call(target, data)` arbitrario. Permite
   armar reentradas cross-function sem precisar de um mock especifico por
