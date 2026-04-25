@@ -7,6 +7,7 @@ import {AccessControl} from "@openzeppelin/contracts/access/AccessControl.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 
 import {IUniswapV3SwapRouter} from "./interfaces/IUniswapV3SwapRouter.sol";
+import {INonfungiblePositionManager} from "./interfaces/INonfungiblePositionManager.sol";
 import {IChainlinkAggregator} from "./interfaces/IChainlinkAggregator.sol";
 import {ICreditPriceOracle} from "./interfaces/ICreditPriceOracle.sol";
 import {ICreditTokenBurnable} from "./interfaces/ICreditTokenBurnable.sol";
@@ -111,6 +112,19 @@ contract Treasury is AccessControl, ReentrancyGuard {
     ///         3h e o "heartbeat" tipico do feed em condicoes normais; 6h
     ///         absorve atrasos. Maior que 6h: dado e considerado stale.
     uint256 public constant CHAINLINK_MAX_STALENESS = 6 hours;
+
+    // ------------------------------------------------------------------
+    // Constants — POL (Fase 1.2)
+    // ------------------------------------------------------------------
+
+    /// @notice Tick inferior do range full-range no fee tier 3000 (0.3%).
+    ///         O Uniswap V3 usa tickSpacing 60 nesse tier, e os ticks
+    ///         "full range" canonicos sao -887220 / +887220 (multiplos de
+    ///         60 mais proximos dos limites teoricos -887272 / +887272).
+    int24 public constant POL_TICK_LOWER = -887220;
+
+    /// @notice Tick superior do range full-range no fee tier 3000 (0.3%).
+    int24 public constant POL_TICK_UPPER = 887220;
 
     // ------------------------------------------------------------------
     // Default param values — congelados em parecer 2026-04-24-credit-peg.md
@@ -247,6 +261,21 @@ contract Treasury is AccessControl, ReentrancyGuard {
     uint256 public dailyPriceSum;
 
     // ------------------------------------------------------------------
+    // Storage — POL (Fase 1.2)
+    // ------------------------------------------------------------------
+
+    /// @notice Uniswap V3 NonfungiblePositionManager. `address(0)` ate ser
+    ///         configurado via {setPositionManager} pelo governance (POL
+    ///         desabilitada enquanto nao setado).
+    INonfungiblePositionManager public positionManager;
+
+    /// @notice NFT id da posicao POL atual no pool CREDIT/USDC. `0` significa
+    ///         "ainda nao seedada"; primeira chamada a {addPOL} cunha o NFT
+    ///         e armazena aqui. Chamadas subsequentes usam o mesmo id via
+    ///         {INonfungiblePositionManager.increaseLiquidity}.
+    uint256 public polTokenId;
+
+    // ------------------------------------------------------------------
     // Events — originais (Fase 1.0)
     // ------------------------------------------------------------------
 
@@ -300,8 +329,35 @@ contract Treasury is AccessControl, ReentrancyGuard {
     event BuybackParamsUpdated(bytes32 indexed paramKey, uint256 newValue);
 
     /// @notice Emitido em {setPriceOracle}, {setSwapRouter},
-    ///         {setChainlinkFeed}, {setSwapFeeTier}.
+    ///         {setChainlinkFeed}, {setSwapFeeTier}, {setPositionManager}.
     event BuybackInfraUpdated(bytes32 indexed paramKey, address indexed addrOrZero, uint256 numericOrZero);
+
+    // ------------------------------------------------------------------
+    // Events — POL (Fase 1.2)
+    // ------------------------------------------------------------------
+
+    /// @notice Emitido na primeira {addPOL} (mint do NFT) e em chamadas
+    ///         subsequentes (increaseLiquidity da mesma posicao).
+    /// @param tokenId NFT id da posicao POL.
+    /// @param liquidityAdded Quantidade de liquidez (L) adicionada nesta chamada.
+    /// @param creditAmount Quantidade real de CREDIT consumida pelo NPM.
+    /// @param usdcAmount Quantidade real de USDC consumida pelo NPM.
+    event POLAdded(uint256 indexed tokenId, uint128 liquidityAdded, uint256 creditAmount, uint256 usdcAmount);
+
+    /// @notice Emitido em {removePOL} apos `decreaseLiquidity` + `collect` que
+    ///         efetivamente devolve principal ao Treasury.
+    /// @param tokenId NFT id da posicao POL.
+    /// @param liquidityRemoved Quantidade de liquidez (L) removida.
+    /// @param amount0Out Quantidade de token0 transferida ao Treasury.
+    /// @param amount1Out Quantidade de token1 transferida ao Treasury.
+    event POLRemoved(uint256 indexed tokenId, uint128 liquidityRemoved, uint256 amount0Out, uint256 amount1Out);
+
+    /// @notice Emitido em {collectPOLFees} apos coletar fees acumulados.
+    /// @param tokenId NFT id da posicao POL.
+    /// @param amount0 Quantidade de token0 (CREDIT ou USDC dependendo da
+    ///                ordenacao por endereco) transferida ao Treasury.
+    /// @param amount1 Quantidade de token1 transferida ao Treasury.
+    event POLFeesCollected(uint256 indexed tokenId, uint256 amount0, uint256 amount1);
 
     // ------------------------------------------------------------------
     // Errors — originais
@@ -351,6 +407,14 @@ contract Treasury is AccessControl, ReentrancyGuard {
 
     /// @notice Oracle retornou preco zero — interpretacao indefinida.
     error InvalidOraclePrice();
+
+    // ------------------------------------------------------------------
+    // Errors — POL (Fase 1.2)
+    // ------------------------------------------------------------------
+
+    /// @notice {removePOL} ou {collectPOLFees} chamado antes de a posicao
+    ///         POL existir (`polTokenId == 0`).
+    error POLNotInitialized();
 
     // ------------------------------------------------------------------
     // Constructor
@@ -845,6 +909,280 @@ contract Treasury is AccessControl, ReentrancyGuard {
     }
 
     // ------------------------------------------------------------------
+    // POL — Fase 1.2 (Protocol Owned Liquidity)
+    // ------------------------------------------------------------------
+
+    /**
+     * @notice Provisiona liquidez no pool CREDIT/USDC (Uniswap V3, fee 3000),
+     *         mantendo a posicao NFT sob custodia do Treasury.
+     * @dev Restrita a {GOVERNANCE_ROLE} + `nonReentrant`. Segue parametros
+     *      operacionais congelados em
+     *      `audit/economist/2026-04-24-pol-params.md`:
+     *      - Range FULL ({POL_TICK_LOWER}, {POL_TICK_UPPER}) — sem
+     *        rebalance ativo;
+     *      - Fee tier {swapFeeTier} (default 3000) — alinhado com o swap
+     *        do FFP;
+     *      - NFT custodiado em `address(this)` — mesmo Treasury
+     *        controla buyback (Fase 1.1) e POL (Fase 1.2), evitando
+     *        cross-contract trust e garantindo que toda saida exige
+     *        proposta DAO via Timelock (I4).
+     *
+     *      Comportamento:
+     *      - Primeira chamada (`polTokenId == 0`): chama
+     *        {INonfungiblePositionManager.mint}. Armazena tokenId
+     *        retornado.
+     *      - Chamadas subsequentes: chama
+     *        {INonfungiblePositionManager.increaseLiquidity} no mesmo
+     *        tokenId. Nao reentra em `mint` — uma posicao POL unica
+     *        para o pool CREDIT/USDC e o desenho deliberado (vide
+     *        Decisao 1 do parecer §1).
+     *
+     *      *Pre-condicoes off-chain (proposta DAO):*
+     *      1. {positionManager} ja setado via {setPositionManager}.
+     *      2. {USDC_TOKEN} setado no construtor (se zero, reverte com
+     *         {BuybackInfraMissing}).
+     *      3. Treasury ja tem `creditAmount` e `usdcAmount` em saldo.
+     *         Para o seed inicial, isso exige que a proposta DAO
+     *         tambem mint CREDIT (Treasury com `MINTER_ROLE` temporario
+     *         no `CreditToken`) e que o USDC chegue por bootstrap
+     *         externo (vide Decisao 3 do parecer).
+     *
+     *      *Slippage*: caller passa `amount0Min`/`amount1Min` ja na ordem
+     *      de tokens do POOL (token0 < token1). Helper {_orderTokens} eh
+     *      consultado para ordenar `creditAmount`/`usdcAmount` antes do
+     *      call. **Atencao do proponente da DAO**: a ordem dos mins deve
+     *      casar com a ordem real `(token0, token1)` no pool — verificavel
+     *      via {polTokensOrdered} (view).
+     *
+     *      *Token ordering*: Uniswap V3 ordena tokens por endereco
+     *      ascendente. {_orderTokens} cuida disso: caller passa CREDIT e
+     *      USDC nas suas variaveis nativas; o helper devolve `(token0,
+     *      token1, amount0, amount1)` corretos para o NPM.
+     *
+     * @param creditAmount Quantidade de CREDIT a depositar (precisao 18 decimais).
+     * @param usdcAmount Quantidade de USDC a depositar (precisao 6 decimais em prod).
+     * @param amount0Min Slippage protection para `token0` (vide ordering acima).
+     * @param amount1Min Slippage protection para `token1`.
+     * @param deadline UNIX timestamp limite para o NPM aceitar a operacao.
+     */
+    function addPOL(
+        uint256 creditAmount,
+        uint256 usdcAmount,
+        uint256 amount0Min,
+        uint256 amount1Min,
+        uint256 deadline
+    ) external onlyRole(GOVERNANCE_ROLE) nonReentrant {
+        if (creditAmount == 0 && usdcAmount == 0) {
+            revert ZeroAmount();
+        }
+        if (USDC_TOKEN == address(0) || address(positionManager) == address(0)) {
+            revert BuybackInfraMissing();
+        }
+
+        (address token0, address token1, uint256 d0, uint256 d1) = _orderTokens(creditAmount, usdcAmount);
+        _approveNPM(token0, token1, d0, d1);
+        (uint256 currentTokenId, uint128 liq, uint256 a0, uint256 a1) = _provisionLiquidity(
+            token0,
+            token1,
+            d0,
+            d1,
+            amount0Min,
+            amount1Min,
+            deadline
+        );
+        _approveNPM(token0, token1, 0, 0);
+
+        // Reordena amounts efetivamente consumidos -> (creditConsumed, usdcConsumed).
+        (uint256 cConsumed, uint256 uConsumed) = (CREDIT_TOKEN < USDC_TOKEN) ? (a0, a1) : (a1, a0);
+
+        emit POLAdded(currentTokenId, liq, cConsumed, uConsumed);
+    }
+
+    /**
+     * @notice Reduz a liquidez da posicao POL e devolve o principal ao
+     *         Treasury (saldo livre, nao re-investido).
+     * @dev Restrita a {GOVERNANCE_ROLE} + `nonReentrant`. NAO queima o NFT —
+     *      a posicao permanece (com 0 liquidez se removida totalmente),
+     *      e governance pode chamar {addPOL} novamente para reusa-la.
+     *      Esta decisao reduz a complexidade contabil (sempre lemos o
+     *      mesmo `polTokenId`) e elimina a necessidade de reset de
+     *      `polTokenId` em casos extremos. O custo de manter um NFT vazio
+     *      e desprezivel.
+     *
+     *      Tres etapas, espelhando o NPM:
+     *      1. {INonfungiblePositionManager.decreaseLiquidity} — registra
+     *         debito (sem transferir).
+     *      2. {INonfungiblePositionManager.collect} — saca o debito + qualquer
+     *         fee pendente, ambos para `address(this)`.
+     *      3. Emite {POLRemoved}.
+     *
+     *      *Politica de exit (Decisao 5 do parecer)*: o gate de
+     *      "supermaioria 75% para remocoes >25%" e implementado fora
+     *      deste contrato — no `Governor` via proposal type, nao em
+     *      Solidity aqui. Este contrato apenas exige {GOVERNANCE_ROLE}
+     *      (ou seja, o Timelock executando proposta aprovada). O
+     *      threshold 75% e responsabilidade do `CommunityGovernor`.
+     *
+     * @param liquidityAmount Quantidade de liquidez (L) a remover.
+     * @param amount0Min Slippage protection para `token0`.
+     * @param amount1Min Slippage protection para `token1`.
+     * @param deadline UNIX timestamp limite.
+     */
+    function removePOL(
+        uint128 liquidityAmount,
+        uint256 amount0Min,
+        uint256 amount1Min,
+        uint256 deadline
+    ) external onlyRole(GOVERNANCE_ROLE) nonReentrant {
+        if (liquidityAmount == 0) {
+            revert ZeroAmount();
+        }
+        uint256 tokenId = polTokenId;
+        if (tokenId == 0) {
+            revert POLNotInitialized();
+        }
+        if (address(positionManager) == address(0)) {
+            revert BuybackInfraMissing();
+        }
+
+        // `decreaseLiquidity` retorna (amount0, amount1) owed apos o decrease;
+        // ignoramos esses valores deliberadamente pois o `collect` seguinte
+        // devolve a soma `owed-by-decrease + fees-pendentes` em uma unica
+        // chamada — slither: unused-return aceito.
+        positionManager.decreaseLiquidity(
+            INonfungiblePositionManager.DecreaseLiquidityParams({
+                tokenId: tokenId,
+                liquidity: liquidityAmount,
+                amount0Min: amount0Min,
+                amount1Min: amount1Min,
+                deadline: deadline
+            })
+        );
+
+        // Coleta tudo o que ficou owed (debito do decrease + qualquer fee
+        // residual). type(uint128).max = "tudo disponivel".
+        (uint256 amount0Out, uint256 amount1Out) = positionManager.collect(
+            INonfungiblePositionManager.CollectParams({
+                tokenId: tokenId,
+                recipient: address(this),
+                amount0Max: type(uint128).max,
+                amount1Max: type(uint128).max
+            })
+        );
+
+        emit POLRemoved(tokenId, liquidityAmount, amount0Out, amount1Out);
+    }
+
+    /**
+     * @notice Coleta os fees acumulados pela posicao POL e os deposita no
+     *         Treasury como saldo livre.
+     * @dev Restrita a {GOVERNANCE_ROLE} (nao e permissionless intencionalmente
+     *      — simetria com o restante do Treasury, e fees sao uma decisao
+     *      governance: podem ir para buyback ammo, refill POL, etc., vide
+     *      Decisao 4 do parecer §4). Como `recipient = address(this)`
+     *      sempre e tokens vao direto pro Treasury (sem callback nem call
+     *      externo arbitrario), o `nonReentrant` aqui e defensivo
+     *      (alinhamento com o padrao do restante do contrato).
+     *
+     *      Sem auto-compound. Para reinvestir fees em LP, governance chama
+     *      {collectPOLFees} -> {addPOL} em propostas separadas (ou em batch
+     *      via `executeBatch` do Timelock).
+     *
+     * @param amount0Max Maximo aceito de token0 (use type(uint128).max para
+     *                   "tudo disponivel"). Util para auto-rebalance off-chain
+     *                   onde governance prefere coletar parcialmente.
+     * @param amount1Max Maximo aceito de token1.
+     */
+    function collectPOLFees(uint128 amount0Max, uint128 amount1Max) external onlyRole(GOVERNANCE_ROLE) nonReentrant {
+        uint256 tokenId = polTokenId;
+        if (tokenId == 0) {
+            revert POLNotInitialized();
+        }
+        if (address(positionManager) == address(0)) {
+            revert BuybackInfraMissing();
+        }
+
+        (uint256 amount0, uint256 amount1) = positionManager.collect(
+            INonfungiblePositionManager.CollectParams({
+                tokenId: tokenId,
+                recipient: address(this),
+                amount0Max: amount0Max,
+                amount1Max: amount1Max
+            })
+        );
+
+        emit POLFeesCollected(tokenId, amount0, amount1);
+    }
+
+    /**
+     * @notice View que retorna o estado atual da posicao POL lido do NPM.
+     * @dev Reverte com {POLNotInitialized} se ainda nao houve {addPOL}.
+     *      Os campos sao um subset do retorno de
+     *      {INonfungiblePositionManager.positions} — escolhidos pelo
+     *      uso pratico off-chain (dashboards, propostas DAO).
+     * @return tokenId NFT id da posicao.
+     * @return liquidity Liquidez ativa atual (L).
+     * @return tickLower Tick inferior do range.
+     * @return tickUpper Tick superior do range.
+     * @return tokensOwed0 Fees + principal owed nao coletado de `token0`.
+     * @return tokensOwed1 Fees + principal owed nao coletado de `token1`.
+     */
+    function polPosition()
+        external
+        view
+        returns (
+            uint256 tokenId,
+            uint128 liquidity,
+            int24 tickLower,
+            int24 tickUpper,
+            uint128 tokensOwed0,
+            uint128 tokensOwed1
+        )
+    {
+        tokenId = polTokenId;
+        if (tokenId == 0) {
+            revert POLNotInitialized();
+        }
+        // Ignoramos deliberadamente os campos nonce/operator/token0/token1/
+        // fee/feeGrowthInside*LastX128 — irrelevantes para callers do view
+        // (token0/token1/fee sao conhecidos via {polTokensOrdered} +
+        // {swapFeeTier}; nonce/operator sao bookkeeping ERC-721;
+        // feeGrowth* sao internos do NPM). Slither: unused-return aceito.
+        (, , , , , int24 tl, int24 tu, uint128 liq, , , uint128 owed0, uint128 owed1) = positionManager.positions(
+            tokenId
+        );
+        return (tokenId, liq, tl, tu, owed0, owed1);
+    }
+
+    /**
+     * @notice Retorna a ordenacao Uniswap V3 dos tokens do par CREDIT/USDC.
+     * @dev Util off-chain para o proponente da DAO calcular `amount0Min`
+     *      e `amount1Min` na ordem correta antes de submeter a proposta
+     *      de {addPOL} / {removePOL}.
+     * @return token0 Endereco com menor address.
+     * @return token1 Endereco com maior address.
+     * @return creditIsToken0 `true` se CREDIT == token0.
+     */
+    function polTokensOrdered() external view returns (address token0, address token1, bool creditIsToken0) {
+        if (CREDIT_TOKEN < USDC_TOKEN) {
+            return (CREDIT_TOKEN, USDC_TOKEN, true);
+        }
+        return (USDC_TOKEN, CREDIT_TOKEN, false);
+    }
+
+    /**
+     * @notice Configura o Uniswap V3 NonfungiblePositionManager.
+     * @dev Restrita a {GOVERNANCE_ROLE}. Setar para `address(0)` desabilita
+     *      todas as operacoes POL ({addPOL}/{removePOL}/{collectPOLFees}
+     *      revertem com {BuybackInfraMissing}).
+     * @param manager Endereco do NPM.
+     */
+    function setPositionManager(INonfungiblePositionManager manager) external onlyRole(GOVERNANCE_ROLE) {
+        positionManager = manager;
+        emit BuybackInfraUpdated("positionManager", address(manager), 0);
+    }
+
+    // ------------------------------------------------------------------
     // ETH (originais)
     // ------------------------------------------------------------------
 
@@ -981,6 +1319,101 @@ contract Treasury is AccessControl, ReentrancyGuard {
     function _checkBounds(uint256 value, uint256 min, uint256 max) private pure {
         if (value < min || value > max) {
             revert ParamOutOfBounds(value, min, max);
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // Internal helpers — POL (Fase 1.2)
+    // ------------------------------------------------------------------
+
+    /**
+     * @dev Ordena CREDIT/USDC e seus respectivos amounts em (token0, token1,
+     *      amount0, amount1) seguindo o padrao Uniswap V3 (`token0 < token1`
+     *      por endereco). Helper crucial: a ordem real do par no pool
+     *      depende dos enderecos deployados, NAO de qual token e
+     *      "principal" do ponto de vista do protocolo.
+     */
+    function _orderTokens(
+        uint256 creditAmount,
+        uint256 usdcAmount
+    ) private view returns (address token0, address token1, uint256 amount0, uint256 amount1) {
+        if (CREDIT_TOKEN < USDC_TOKEN) {
+            return (CREDIT_TOKEN, USDC_TOKEN, creditAmount, usdcAmount);
+        }
+        return (USDC_TOKEN, CREDIT_TOKEN, usdcAmount, creditAmount);
+    }
+
+    /**
+     * @dev Aplica `forceApprove` em ambos os tokens da posicao POL ao
+     *      `positionManager`. Usado em {addPOL} para set-and-reset:
+     *      `_approveNPM(t0, t1, d0, d1)` antes do call,
+     *      `_approveNPM(t0, t1, 0, 0)` depois. forceApprove ja e idempotente
+     *      e seguro contra tokens "broken" (USDT mainnet) que requerem
+     *      allowance == 0 antes de novo set.
+     */
+    function _approveNPM(address token0, address token1, uint256 amount0, uint256 amount1) private {
+        IERC20(token0).forceApprove(address(positionManager), amount0);
+        IERC20(token1).forceApprove(address(positionManager), amount1);
+    }
+
+    /**
+     * @dev Despacha entre `mint` (primeira provisao) e `increaseLiquidity`
+     *      (provisoes subsequentes) preservando os parametros do Uniswap V3.
+     *      Atualiza {polTokenId} no caso de mint. Helper extraido apenas
+     *      para manter {addPOL} sob o limite de 50 linhas (solhint
+     *      function-max-lines); semantica idêntica a um if-else inline.
+     *
+     *      Slither sinaliza `reentrancy-no-eth` para a escrita
+     *      `polTokenId = tokenId` apos o call externo `positionManager.mint`,
+     *      apontando uso cross-function em {polPosition}. Falso positivo:
+     *      (1) {addPOL} — unica funcao publica que invoca este helper — tem
+     *      `nonReentrant`, bloqueando re-entrada em qualquer funcao
+     *      `nonReentrant` deste contrato; (2) {polPosition} e `view` (nao
+     *      muta estado, nao consegue iniciar reentrada); (3) inverter a
+     *      ordem (set polTokenId antes do call) impede o uso do tokenId
+     *      retornado pelo NPM e poluiria o storage com `tokenId == 0`
+     *      reservado quando o mint reverter, dificultando rollback.
+     *      Mesmo padrao usado em {recordDailyPrice} da Fase 1.1.
+     */
+    function _provisionLiquidity(
+        address token0,
+        address token1,
+        uint256 amount0Desired,
+        uint256 amount1Desired,
+        uint256 amount0Min,
+        uint256 amount1Min,
+        uint256 deadline
+    ) private returns (uint256 tokenId, uint128 liquidityAdded, uint256 amount0, uint256 amount1) {
+        uint256 currentTokenId = polTokenId;
+        if (currentTokenId == 0) {
+            (tokenId, liquidityAdded, amount0, amount1) = positionManager.mint(
+                INonfungiblePositionManager.MintParams({
+                    token0: token0,
+                    token1: token1,
+                    fee: swapFeeTier,
+                    tickLower: POL_TICK_LOWER,
+                    tickUpper: POL_TICK_UPPER,
+                    amount0Desired: amount0Desired,
+                    amount1Desired: amount1Desired,
+                    amount0Min: amount0Min,
+                    amount1Min: amount1Min,
+                    recipient: address(this),
+                    deadline: deadline
+                })
+            );
+            polTokenId = tokenId;
+        } else {
+            (liquidityAdded, amount0, amount1) = positionManager.increaseLiquidity(
+                INonfungiblePositionManager.IncreaseLiquidityParams({
+                    tokenId: currentTokenId,
+                    amount0Desired: amount0Desired,
+                    amount1Desired: amount1Desired,
+                    amount0Min: amount0Min,
+                    amount1Min: amount1Min,
+                    deadline: deadline
+                })
+            );
+            tokenId = currentTokenId;
         }
     }
 }

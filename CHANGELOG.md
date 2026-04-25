@@ -72,6 +72,104 @@ de segurança (invariantes, access control, static analysis) ficam em `Security`
 
 ### Added
 
+- **Fase 1.2 do pivot CLP — `Treasury` POL (Protocol Owned Liquidity).**
+  Treasury vira LP permanente do pool CREDIT/USDC na Uniswap V3 (fee tier
+  3000, full range), dando substancia ao floor defendido pelo FFP da Fase
+  1.1 — sem liquidez no pool, `executeBuyback` swappa contra book vazio.
+  Parametros operacionais congelados em
+  `audit/economist/2026-04-24-pol-params.md`. **Contratos**:
+  - `contracts/Treasury.sol` ganha 4 funcoes governance-only +
+    nonReentrant: `addPOL(creditAmount, usdcAmount, amount0Min,
+amount1Min, deadline)` (primeira chamada cunha NFT via
+    `INonfungiblePositionManager.mint`, subsequentes usam
+    `increaseLiquidity` no mesmo `polTokenId`); `removePOL(liquidity,
+amount0Min, amount1Min, deadline)` (decreaseLiquidity + collect em
+    sequencia, NAO queima o NFT — posicao persiste com liq=0 para
+    reuso); `collectPOLFees(amount0Max, amount1Max)` (claim de fees
+    para Treasury, sem auto-compound — Decisao 4 do parecer §4); e o
+    setter `setPositionManager(npm)`.
+  - 2 views novas: `polPosition()` (tokenId, liquidity, ticks, owed) e
+    `polTokensOrdered()` (token0, token1, creditIsToken0) — esta
+    ultima crucial para o proponente da DAO calcular `amount0Min`/
+    `amount1Min` na ordem do pool (Uniswap V3 ordena tokens por
+    address ascendente).
+  - Storage adicional: `INonfungiblePositionManager public
+positionManager`, `uint256 public polTokenId` (0 = nao seedada).
+    Constants `POL_TICK_LOWER = -887220`, `POL_TICK_UPPER = 887220`
+    (full range no fee tier 3000, tickSpacing 60).
+  - 3 eventos novos: `POLAdded(tokenId, liquidity, creditAmount,
+usdcAmount)`, `POLRemoved(tokenId, liquidityRemoved, amount0Out,
+amount1Out)`, `POLFeesCollected(tokenId, amount0, amount1)`. Setter
+    reusa `BuybackInfraUpdated("positionManager", ...)`.
+  - 1 custom error nova: `POLNotInitialized()` (chamadas a
+    `removePOL`/`collectPOLFees`/`polPosition` antes de `addPOL` inicial).
+  - Helper interno `_orderTokens(creditAmount, usdcAmount)` retorna
+    `(token0, token1, amount0, amount1)` corretos para o NPM
+    independente de qual token tem endereco menor — testado com CREDIT
+    < USDC E CREDIT > USDC.
+  - Helper `_provisionLiquidity(...)` despacha entre `mint`/
+    `increaseLiquidity` e helper `_approveNPM(...)` faz forceApprove
+    set-and-reset. Ambos extraidos para manter `addPOL` <= 50 linhas
+    (solhint function-max-lines).
+
+  **Interface nova**:
+  `contracts/interfaces/INonfungiblePositionManager.sol` — 5 funcoes
+  consumidas (mint, increaseLiquidity, decreaseLiquidity, collect,
+  positions) + 4 structs. Nao importa de `@uniswap/v3-periphery` por
+  incompatibilidade de pragma (0.7.6 vs 0.8.24); selectors validados
+  contra ABI canonica do NPM.
+
+  **Mock novo**:
+  `contracts/test/NonfungiblePositionManagerMock.sol` — simula
+  mint/increase/decrease/collect/positions com ledger interno
+  (`StoredPosition` por tokenId, distribuicao proporcional em
+  decrease, transfer em collect). Helper de teste `accrueFees`
+  injeta fees pendentes para exercitar `collectPOLFees`. Helpers
+  `setForceSlippageRevert`/`setOverrideAmounts` para casos
+  adversariais.
+
+  **Testes**: `test/Treasury.pol.test.ts` com 31 testes cobrindo
+  ciclo completo (add inicial -> add incremento -> collectFees ->
+  removePOL parcial -> removePOL total), token ordering com CREDIT <
+  USDC E CREDIT > USDC (fixture itera deploys de USDC mock ate
+  satisfazer ordering desejada), todos os caminhos tristes
+  (BuybackInfraMissing, POLNotInitialized, ZeroAmount,
+  AccessControlUnauthorizedAccount, slippage do NPM repassado),
+  verificacao de eventos com `withArgs`, e estado pos-operacao
+  (polTokenId persiste apos full remove, balances do Treasury,
+  approvals zerados). **Coverage**: `Treasury.sol` mantem 100% lines
+  e funcs (90.56% branch, +0.x absoluto vs Fase 1.1);
+  `INonfungiblePositionManager.sol` 100%. Suite total 630 passing
+  (599 + 31 novos), sem regressao.
+
+  **Slither**: 0 high/medium novos atribuiveis a esta mudanca. Os
+  achados em `_provisionLiquidity` (reentrancy-no-eth com escrita
+  de `polTokenId` apos `mint`) e em `polPosition`/`removePOL`
+  (unused-return) sao falsos positivos justificados em comentarios
+  inline — `addPOL` tem `nonReentrant`, `polPosition` e `view`, e
+  os retornos ignorados de `decreaseLiquidity`/`positions` sao
+  deliberados (decrease registra debito que `collect` saca; view
+  ignora campos irrelevantes).
+
+  **Documentacao operacional**:
+  `docs/governance/fase1-2-pol.md` — sequencia da proposta DAO de
+  seed atomica (grantRole MINTER_ROLE -> mint(treasury) -> revoke ->
+  addPOL via Timelock.executeBatch), pre-requisitos (pool criado e
+  initialized off-chain antes da proposta), token ordering, cenarios
+  esperados (spot crash, token deplete em buyback two-sided risk
+  §8 do parecer, spot rally), politica de exit (75% supermaioria
+  para >25% — pendente de proposal type no Governor), soft cap 50%
+  (governance norm, sem hard cap on-chain).
+
+  **Pendencias para o user**:
+  (1) Decidir caminho de bootstrap USDC e tamanho do seed inicial
+  ($200k mínimo / $500k preferido);
+  (2) Confirmar texto da proposta DAO atomica de seed;
+  (3) Validar interface `INonfungiblePositionManager` contra a ABI do
+  NPM canonico na rede alvo (selectors). NPM mainnet:
+  `0xC36442b4a4522E871399CD717aBDD847Ab11FE88`; Sepolia:
+  `0x1238536071E1c677A632429e3655c799b22cDA52`.
+
 - **Fase 1.1 do pivot CLP — `Treasury.executeBuyback` real (FFP).**
   Substitui o stub anterior por um buyback-and-burn defensivo do floor
   price segundo o modelo FFP (Floating com Floor Price defendido) do
