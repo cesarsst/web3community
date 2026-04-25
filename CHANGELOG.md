@@ -72,6 +72,129 @@ de segurança (invariantes, access control, static analysis) ficam em `Security`
 
 ### Added
 
+- **Fase 1.3 do pivot CLP — `LiquidityGauge` (incentivos LP).** Adapter
+  sobre o `UniswapV3Staker` canonico (Uniswap Foundation, mainnet
+  `0xe34139463bA50bD61336E0c446Bd8C0867c6fE65`) que distribui o **bucket
+  de 25% da emissao de CREDIT** para LPs externos do par CREDIT/USDC.
+  Parametros operacionais congelados em
+  `audit/economist/2026-04-24-clp-pivot.md` Anexo D (D.1–D.13).
+  **Contratos**:
+  - `contracts/LiquidityGauge.sol` (novo): adapter com 2 roles
+    (`GOVERNANCE_ROLE` para whitelist/denylist/pause/vesting params;
+    `REWARD_NOTIFIER_ROLE` plural para Treasury manual + futuro
+    RewardDistributor automatico, D.7), whitelist governance-tunable de
+    pools (D.1, seed CREDIT/USDC 0.3%), stake/unstake mecanico delegado
+    ao staker oficial (D.2 — gauge mantem ledger interno do real owner e
+    repassa NFT via safeTransferFrom com IncentiveKey no calldata, staker
+    faz auto-stake on receive), reward proporcional a `liquidity in-range`
+    (D.3, padrao staker oficial, secondsInsideX128), **vesting linear de
+    14 dias** em `unstake()` (D.4 — `harvest(user, maxAmount)` saca a
+    fracao ja vestida, suporta saque parcial e compactacao em-loco de
+    positions exauridas; multiplas positions do mesmo user acumulam),
+    `notifyRewardAmount(poolId, amount, duration)` cria nova incentive no
+    staker (D.5 — modelo simplificado de 1 incentive ativa por pool por
+    vez, rollover via `endIncentive` + nova notify), sem boost cap (D.6),
+    `pause()/unpause()` bloqueia entrada mas mantem
+    `unstake/harvest/emergencyUnstake` operacionais (D.8 + IE10),
+    `emergencyUnstake(tokenId)` fail-safe sempre permitido que devolve
+    NFT incondicionalmente e descarta reward do ciclo atual (mas NAO
+    afeta VestingPositions in-flight), **denylist anti self-dealing**
+    (D.9 — Treasury/POL nao pode stakear no gauge para evitar protocolo
+    pagar rewards a si mesmo), `endIncentive(poolId)` apos expiry com
+    refund para o gauge, `governanceRescueRewards(to, amount)` para
+    drenar saldo orfao (refund + forfeits de emergencyUnstake).
+    Implementa `IERC721Receiver` para aceitar NFT em ambos sentidos
+    (gauge faz pull do user E recebe de volta do staker em
+    `withdrawToken`).
+  - 11 custom errors: `ZeroAddress`, `ZeroAmount`, `InvalidPool`,
+    `PoolDisabled`, `NoActiveIncentive`, `Denylisted`, `StakeNotFound`,
+    `NotStakeOwner`, `InvalidVestingDuration`, `InsufficientBalance`,
+    `InvalidIncentiveDuration`, `IncentiveNotExpired`, `IncentiveOverlap`.
+  - 10 eventos: `PoolAdded`, `PoolEnabledSet`, `RewardNotified`,
+    `IncentiveEnded`, `Staked`, `Unstaked`, `EmergencyUnstaked`,
+    `Harvested`, `VestingDurationSet`, `DenylistSet`, `RewardsRescued`.
+
+  **Interface nova**:
+  `contracts/interfaces/IUniswapV3Staker.sol` — 7 funcoes consumidas
+  (`createIncentive`, `endIncentive`, `stakeToken`, `unstakeToken`,
+  `claimReward`, `rewards`, `withdrawToken`) + struct `IncentiveKey`.
+  Nao importa de `@uniswap/v3-staker` por incompatibilidade de pragma
+  (0.7.6 vs 0.8.24); selectors validados contra ABI do staker canonico.
+
+  **Mocks novos**:
+  - `contracts/test/UniswapV3StakerMock.sol` — simula
+    createIncentive/endIncentive/stake/unstake/claim/rewards/withdraw com
+    contabilidade observavel. Helpers `accrueRewards(rewardToken, owner,
+    amount)` para injetar ganhos atribuiveis e `setForceFailUnstake(bool)`
+    para exercitar try/catch em `emergencyUnstake`. Implementa
+    `onERC721Received` espelhando o staker real (decoder de IncentiveKey
+    em `data` faz auto-stake on receive).
+  - `contracts/test/NonfungiblePositionManagerERC721Mock.sol` — mock
+    **ERC-721 real** (herda OZ `ERC721`) com helper `mintTo(to, tokenId)`.
+    Necessario para o flow `safeTransferFrom` (user -> gauge -> staker
+    -> user); o `NonfungiblePositionManagerMock` previo (Fase 1.2) NAO e
+    ERC-721 real entao nao serve para o gauge. Stubs das funcoes de
+    `INonfungiblePositionManager` revertem com `NOT_IMPLEMENTED` para
+    sinalizar uso indevido.
+
+  **Testes**: `test/LiquidityGauge.test.ts` com 64 testes cobrindo
+  constructor (zero addresses, roles), todos os setters governance-only,
+  `notifyRewardAmount` (zero amount, duration <
+  `INCENTIVE_DURATION_MIN`, unknown poolId, overlap, replacement apos
+  expiry), `stake` (denylisted/D.9, paused, unknown pool, disabled pool,
+  no active incentive, happy path com transferencia do NFT ao staker e
+  registro do Stake), `unstake` (stake unknown, not owner, happy path com
+  vesting position criada, zero rewards path), `emergencyUnstake` (forfeit
+  de rewards, paused-still-works, vesting in-flight intacto, try/catch
+  fail-safe quando staker reverte unstake), **vesting linear** (t=0d
+  harvest 0, t=7d ~50%, t=14d 100%, partial cap, multiplas positions
+  acumulam corretamente, harvest funciona pausado), `endIncentive` (gates
+  de expiry e role, refund para o gauge), `governanceRescueRewards`
+  (zero address, zero amount, amount > balance via `InsufficientBalance`,
+  exact amount, max sentinel), token ordering CREDIT<USDC e CREDIT>USDC,
+  e `onERC721Received` retorna selector canonico. **Coverage**:
+  `LiquidityGauge.sol` 99.32% lines / 92.24% branches / 95.45% functions
+  (linha unica nao coberta era `pendingRewardsAtStaker`, agora coberta);
+  `IUniswapV3Staker.sol` 100%. Suite total **692 passing** (630 + 62
+  novos antes de adicionar 2 testes de view -> 64), sem regressao.
+
+  **Slither**: 0 high/medium atribuiveis. Achados informacionais:
+  `reentrancy-benign` em `unstake` (escrita de VestingPosition apos call
+  ao staker — protegido por `nonReentrant`, staker e contrato canonico
+  trusted), `timestamp` em comparacoes de vesting/incentive (intencional,
+  padrao do projeto com `not-rely-on-time: off` no solhint),
+  `dangerous strict equality` em `== 0` (padrao aceitavel),
+  `naming-convention` em `CREDIT_TOKEN`/`UNISWAP_V3_STAKER`/
+  `POSITION_MANAGER` (consistente com `Staking.GOV_TOKEN` —
+  `solhint-disable` inline), pragma OZ `^0.8.20` e dead-code de OZ
+  identicos aos das fases anteriores.
+
+  **Documentacao operacional**:
+  `docs/governance/fase1-3-liquidity-gauge.md` — sequencia da proposta
+  DAO de bootstrap (deploy gauge -> grantRole REWARD_NOTIFIER ao
+  Treasury -> addPool(creditUsdcPool) -> setDenylist(treasury, true)
+  para D.9 enforcement -> Treasury aprova CREDIT e chama
+  notifyRewardAmount), pre-requisitos (POL ja bootstrappado da Fase 1.2,
+  pool inicializado, staker canonico conhecido na rede-alvo), fluxo do
+  usuario, cenarios (emergencyUnstake fail-safe, pool removida da
+  whitelist drena ate unstake, pause global, mudanca de
+  vestingDuration nao retroativa), riscos conhecidos
+  (R1 two-sided risk POL/FFP/Gauge do Anexo C, R2 mercenary capital
+  com vesting 14d, R3 POL self-staking defesa em profundidade,
+  R4 LP fora de range, R5 incentive overlap), e proximas decisoes
+  pendentes do user (endereco do staker em Sepolia — nao ha staker
+  oficial; valor inicial da primeira incentive — Treasury manual ate
+  Fase 1.4; ERC-4626 wrapper para composability — Fase 2).
+
+  **Pendencias para o user**:
+  (1) Confirmar plano de deploy do `UniswapV3Staker` em Sepolia (nao ha
+  instancia oficial — deployar uma?);
+  (2) Aprovar valor inicial da primeira incentive (proposta DAO manual
+  ate Fase 1.4 RewardDistributor refator);
+  (3) Avaliar se POL self-staking deve ter denylist secundaria (Staking,
+  RewardDistributor, FeeRouter) por defesa em profundidade na proposta
+  de bootstrap.
+
 - **Fase 1.2 do pivot CLP — `Treasury` POL (Protocol Owned Liquidity).**
   Treasury vira LP permanente do pool CREDIT/USDC na Uniswap V3 (fee tier
   3000, full range), dando substancia ao floor defendido pelo FFP da Fase
