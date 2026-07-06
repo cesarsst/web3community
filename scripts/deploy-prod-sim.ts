@@ -27,6 +27,15 @@
  *   5. Proposta #2 (exemplo real): registry.registerProject(devMember,
  *      ipfs://..., 10k GOV) — registra o dev member como owner do primeiro
  *      projeto, com colateral puxado via allowance no execute.
+ *   6. Propostas #3/#4: activateProject(cloud-terminal) + CREDIT de teste.
+ *   7. Fase 1 do pivot CLP (DEPLOY_CLP_PHASE1 default true aqui): deploy de
+ *      LiquidityGauge + RewardDistributorV2 via Ignition (mocks Uniswap
+ *      locais pro constructor do gauge), proposta #5 de wiring/migracao
+ *      (MINTER V2, cutoff V1, notifier, depositors, pool, Treasury->gauge).
+ *   8. Stake de 1M GOV do dev member no projeto #1 (lock 365d, 4x) e seed
+ *      de burn via FeeRouter.pay — dados reais pro frontend.
+ *   9. Ciclo completo de rewards V2: propostas #6/#7 (closeRound) +
+ *      finalizeRound(0..1) + claim do bucket stakers.
  *
  * Uso:
  *   # terminal 1
@@ -47,7 +56,9 @@ import hre, { ethers } from "hardhat";
 import { existsSync, readFileSync, rmSync } from "node:fs";
 import { resolve } from "node:path";
 import type { DeploymentParameters } from "@nomicfoundation/ignition-core";
-import CommunityDAOModule from "../ignition/modules/Dao";
+// ATENCAO: o modulo Ignition e importado DINAMICAMENTE dentro de main().
+// A flag DEPLOY_CLP_PHASE1 e lida no build do modulo (import-time) — um
+// import estatico aqui rodaria antes de setarmos a flag abaixo.
 
 // Account #0 do mnemonic default do Hardhat — o "membro desenvolvedor
 // inicial" do projeto. O script exige que o signer 0 seja exatamente esse
@@ -72,6 +83,19 @@ const PROJECT_URI = "ipfs://bafybeig-cloud-terminal-project-metadata-v1";
 // do fluxo de ativacao do cloud-terminal). 10k CREDIT cobre muitas ativacoes.
 const TEST_CREDIT = 10_000n * 10n ** 18n;
 
+// Stake do dev member no projeto #1 (cloud-terminal): 1M GOV com lock de
+// 365 dias = multiplier 4x (MAX_LOCK do Staking).
+const STAKE_AMOUNT = 1_000_000n * 10n ** 18n;
+const STAKE_LOCK = 365n * 24n * 3600n;
+
+// Seed de burn pro ciclo de rewards V2: pagamento de 100 CREDIT no FeeRouter
+// atribuido ao projeto #1 na rodada 0 (70% queima com o split default).
+const SEED_PAYMENT = 100n * 10n ** 18n;
+
+// Pool "CREDIT/USDC" whitelistada no LiquidityGauge. Endereco arbitrario —
+// o gauge nao chama metodos da pool (mesmo padrao dos testes unitarios).
+const MOCK_POOL = "0x" + "11".repeat(20);
+
 async function mine(blocks: bigint) {
   await hre.network.provider.send("hardhat_mine", [`0x${blocks.toString(16)}`]);
 }
@@ -92,6 +116,11 @@ function extractProposalId(receipt: { logs: readonly unknown[] } | null): bigint
 }
 
 async function main() {
+  // Liga o deploy da Fase 1 do pivot CLP (LiquidityGauge + RewardDistributorV2)
+  // ANTES do import do modulo Ignition — a flag e lida no build do modulo.
+  process.env.DEPLOY_CLP_PHASE1 = process.env.DEPLOY_CLP_PHASE1 ?? "true";
+  const { default: CommunityDAOModule } = await import("../ignition/modules/Dao");
+
   const signers = await ethers.getSigners();
   const [devMember, saleSim, communitySim, liquiditySim] = signers;
 
@@ -109,7 +138,7 @@ async function main() {
   // em rede publica (la o guard de chainId abaixo nem deixaria chegar aqui).
   const balance = await ethers.provider.getBalance(devMember.address);
   if (balance < ethers.parseEther("100")) {
-    console.log(`\n[0/8] saldo ETH baixo (${ethers.formatEther(balance)}) — hardhat_setBalance 10k ETH…`);
+    console.log(`\n[0/12] saldo ETH baixo (${ethers.formatEther(balance)}) — hardhat_setBalance 10k ETH…`);
     await hre.network.provider.send("hardhat_setBalance", [
       devMember.address,
       `0x${ethers.parseEther("10000").toString(16)}`,
@@ -117,7 +146,7 @@ async function main() {
   }
 
   // ---------- 1) Deploy via Ignition com parametros de PRODUCAO ----------
-  console.log("\n[1/8] deploy via Ignition com ignition/parameters/production.json…");
+  console.log("\n[1/12] deploy via Ignition com ignition/parameters/production.json…");
 
   const chainId = Number((await ethers.provider.getNetwork()).chainId);
   const journalDir = resolve(__dirname, "..", "ignition", "deployments", `chain-${chainId}`);
@@ -145,12 +174,34 @@ async function main() {
     rmSync(journalDir, { recursive: true, force: true });
   }
 
+  // Periferia Uniswap V3 nao existe em chain local — mocks (mesmos dos testes
+  // unitarios) satisfazem os constructors do LiquidityGauge. Deployados FORA
+  // do Ignition pra manter o modulo identico ao de mainnet.
+  console.log("  deploy de mocks Uniswap (staker + positionManager) pro LiquidityGauge…");
+  const NPMMock = await ethers.getContractFactory("NonfungiblePositionManagerERC721Mock");
+  const npmMock = await NPMMock.deploy();
+  await npmMock.waitForDeployment();
+  const StakerMock = await ethers.getContractFactory("UniswapV3StakerMock");
+  const stakerMock = await StakerMock.deploy();
+  await stakerMock.waitForDeployment();
+  await (await stakerMock.setPositionManager(await npmMock.getAddress())).wait();
+
   const prodParamsPath = resolve(__dirname, "..", "ignition", "parameters", "production.json");
   const parameters = JSON.parse(readFileSync(prodParamsPath, "utf8")) as DeploymentParameters;
+  const moduleParams = parameters.CommunityDAOModule as Record<string, unknown>;
+  moduleParams.uniswapV3Staker = await stakerMock.getAddress();
+  moduleParams.positionManager = await npmMock.getAddress();
+
   const deployed = await hre.ignition.deploy(CommunityDAOModule, {
     parameters,
     deploymentId: `chain-${chainId}`, // persiste deployed_addresses.json pro front/export-runtime-config
   });
+
+  if (!deployed.liquidityGauge || !deployed.distributorV2) {
+    throw new Error(
+      "LiquidityGauge/RewardDistributorV2 nao deployados — DEPLOY_CLP_PHASE1 nao chegou ao modulo Ignition.",
+    );
+  }
 
   const addrs = {
     gov: await deployed.gov.getAddress(),
@@ -159,6 +210,12 @@ async function main() {
     treasury: await deployed.treasury.getAddress(),
     governor: await deployed.governor.getAddress(),
     registry: await deployed.registry.getAddress(),
+    staking: await deployed.staking.getAddress(),
+    burnTracker: await deployed.burnTracker.getAddress(),
+    feeRouter: await deployed.feeRouter.getAddress(),
+    distributorV1: await deployed.distributor.getAddress(),
+    gauge: await deployed.liquidityGauge.getAddress(),
+    distributorV2: await deployed.distributorV2.getAddress(),
   };
 
   const gov = await ethers.getContractAt("GovernanceToken", addrs.gov);
@@ -179,7 +236,7 @@ async function main() {
   );
 
   // ---------- 2) Distribuicao inicial 30/25/20/15/10 (100M GOV) ----------
-  console.log("\n[2/8] distribuicao inicial 30/25/20/15/10 (100M GOV, cap integral)…");
+  console.log("\n[2/12] distribuicao inicial 30/25/20/15/10 (100M GOV, cap integral)…");
   const owner = await gov.owner();
   if (owner.toLowerCase() !== devMember.address.toLowerCase()) {
     throw new Error(
@@ -202,7 +259,7 @@ async function main() {
   console.log(`  totalSupply = ${ethers.formatEther(totalSupply)} GOV (cap 100M atingido)`);
 
   // ---------- 3) Dev member delega voto pra si (quorum) ----------
-  console.log("\n[3/8] dev member delega voto pra si mesmo…");
+  console.log("\n[3/12] dev member delega voto pra si mesmo…");
   await (await gov.connect(devMember).delegate(devMember.address)).wait();
   await mine(1n); // snapshot de votos exige >= 1 bloco apos delegate
   const votes: bigint = await gov.getVotes(devMember.address);
@@ -250,7 +307,7 @@ async function main() {
   }
 
   // ---------- 4) Proposta #1: acceptOwnership do GOV pelo Timelock ----------
-  console.log("\n[4/8] proposta #1 (obrigatoria): GovernanceToken.acceptOwnership()…");
+  console.log("\n[4/12] proposta #1 (obrigatoria): GovernanceToken.acceptOwnership()…");
   const acceptCalldata = gov.interface.encodeFunctionData("acceptOwnership");
   await passProposal(
     [addrs.gov],
@@ -265,7 +322,7 @@ async function main() {
   console.log(`  GOV.owner() = Timelock OK — mints futuros so via governanca`);
 
   // ---------- 5) Approve do colateral pro Registry ----------
-  console.log("\n[5/8] approve Registry pra puxar colateral GOV do dev member…");
+  console.log("\n[5/12] approve Registry pra puxar colateral GOV do dev member…");
   // registerProject puxa o colateral do owner via transferFrom no EXECUTE da
   // proposta — sem allowance previa o execute reverte com InsufficientAllowance.
   const approveAmount = minCollateral * 10n;
@@ -273,7 +330,7 @@ async function main() {
   console.log(`  allowance = ${ethers.formatEther(approveAmount)} GOV (10x minCollateral)`);
 
   // ---------- 6) Proposta #2: registrar o projeto do dev member ----------
-  console.log("\n[6/8] proposta #2 (exemplo real): registry.registerProject(devMember, …)…");
+  console.log("\n[6/12] proposta #2 (exemplo real): registry.registerProject(devMember, …)…");
   const registerCalldata = registry.interface.encodeFunctionData("registerProject", [
     devMember.address,
     PROJECT_URI,
@@ -306,7 +363,7 @@ async function main() {
   // ---------- 7) Proposta #3: ativar o projeto cloud-terminal ----------
   // Sem status Active o FeeRouter.pay reverte com ProjectNotActive — a
   // ativacao e o que permite o cloud-terminal cobrar ativacoes de conta.
-  console.log("\n[7/8] proposta #3: registry.activateProject(cloud-terminal)…");
+  console.log("\n[7/12] proposta #3: registry.activateProject(cloud-terminal)…");
   const activateCalldata = registry.interface.encodeFunctionData("activateProject", [projectId]);
   await passProposal(
     [addrs.registry],
@@ -325,7 +382,7 @@ async function main() {
   // ---------- 8) Proposta #4: CREDIT de teste pro dev member ----------
   // Treasury detem o genesis de 10M CREDIT. O dev member (usuario de teste
   // do cloud-terminal) recebe TEST_CREDIT pra exercitar o fluxo de ativacao.
-  console.log("\n[8/8] proposta #4: treasury.transfer(CREDIT, devMember, 10k)…");
+  console.log("\n[8/12] proposta #4: treasury.transfer(CREDIT, devMember, 10k)…");
   const treasury = await ethers.getContractAt("Treasury", addrs.treasury);
   const credit = await ethers.getContractAt("CreditToken", addrs.credit);
   const transferCalldata = treasury.interface.encodeFunctionData("transfer", [
@@ -342,6 +399,109 @@ async function main() {
   const creditBalance: bigint = await credit.balanceOf(devMember.address);
   console.log(`  saldo CREDIT do dev member = ${ethers.formatEther(creditBalance)}`);
 
+  // ---------- 9) Proposta #5: wiring da Fase 1.4 (RewardDistributorV2) ----------
+  // Espelha docs/governance/fase1-4-bucket-split.md (propostas #2/#3/#5 de
+  // migracao, comprimidas em um batch — prod-sim nao precisa da janela de
+  // 4 rounds de coexistencia V1/V2):
+  //   1. CREDIT.grantRole(MINTER_ROLE, V2)      — V2 mint no finalizeRound
+  //   2. CREDIT.revokeRole(MINTER_ROLE, V1)     — cutoff: evita dupla emissao
+  //   3. Gauge.grantRole(REWARD_NOTIFIER_ROLE, V2) — bucket LPs via notify
+  //   4. Treasury.grantRole(POL_REFILL_DEPOSITOR_ROLE, V2)     — bucket bonders
+  //   5. Treasury.grantRole(GAUGE_FALLBACK_DEPOSITOR_ROLE, V2) — gauge paused
+  //   6. Gauge.addPool(MOCK_POOL)               — poolId 1 == gaugePoolId default do V2
+  //   7. Treasury.setLiquidityGauge(gauge, 1)   — habilita flushPendingGaugeRewards
+  console.log("\n[9/12] proposta #5: wiring V2 (roles + pool gauge + cutoff V1)…");
+  const gauge = await ethers.getContractAt("LiquidityGauge", addrs.gauge);
+  const distributorV2 = await ethers.getContractAt("RewardDistributorV2", addrs.distributorV2);
+  const MINTER_ROLE = ethers.id("MINTER_ROLE");
+  const REWARD_NOTIFIER_ROLE = ethers.id("REWARD_NOTIFIER_ROLE");
+  const POL_REFILL_DEPOSITOR_ROLE = ethers.id("POL_REFILL_DEPOSITOR_ROLE");
+  const GAUGE_FALLBACK_DEPOSITOR_ROLE = ethers.id("GAUGE_FALLBACK_DEPOSITOR_ROLE");
+
+  await passProposal(
+    [addrs.credit, addrs.credit, addrs.gauge, addrs.treasury, addrs.treasury, addrs.gauge, addrs.treasury],
+    [0n, 0n, 0n, 0n, 0n, 0n, 0n],
+    [
+      credit.interface.encodeFunctionData("grantRole", [MINTER_ROLE, addrs.distributorV2]),
+      credit.interface.encodeFunctionData("revokeRole", [MINTER_ROLE, addrs.distributorV1]),
+      gauge.interface.encodeFunctionData("grantRole", [REWARD_NOTIFIER_ROLE, addrs.distributorV2]),
+      treasury.interface.encodeFunctionData("grantRole", [POL_REFILL_DEPOSITOR_ROLE, addrs.distributorV2]),
+      treasury.interface.encodeFunctionData("grantRole", [GAUGE_FALLBACK_DEPOSITOR_ROLE, addrs.distributorV2]),
+      gauge.interface.encodeFunctionData("addPool", [MOCK_POOL]),
+      treasury.interface.encodeFunctionData("setLiquidityGauge", [addrs.gauge, 1n]),
+    ],
+    "# Proposta #5 — Migracao de rewards para o RewardDistributorV2 (Fase 1.4)\n\nConcede MINTER_ROLE do CREDIT ao V2 e revoga do V1 (cutoff), concede REWARD_NOTIFIER_ROLE no LiquidityGauge e roles de depositor no Treasury, whitelista a pool CREDIT/USDC (poolId 1) e aponta o Treasury pro gauge.",
+  );
+  if (!(await credit.hasRole(MINTER_ROLE, addrs.distributorV2))) {
+    throw new Error("V2 nao recebeu MINTER_ROLE");
+  }
+  if (await credit.hasRole(MINTER_ROLE, addrs.distributorV1)) {
+    throw new Error("V1 ainda tem MINTER_ROLE (cutoff falhou)");
+  }
+  console.log("  V2 = minter unico do CREDIT; gauge poolId 1 whitelistada; Treasury -> gauge ok");
+
+  // ---------- 10) Stake do dev member no projeto #1 ----------
+  // Acao de usuario (permissionless) — staking direcionado de GOV no
+  // cloud-terminal com lock maximo (365d = multiplier 4x).
+  console.log("\n[10/12] stake: 1M GOV no projeto #1 (lock 365d, 4x)…");
+  const staking = await ethers.getContractAt("Staking", addrs.staking);
+  await (await gov.connect(devMember).approve(addrs.staking, STAKE_AMOUNT)).wait();
+  await (await staking.connect(devMember).stake(projectId, STAKE_AMOUNT, STAKE_LOCK)).wait();
+  const weight: bigint = await staking.getWeight(devMember.address, projectId);
+  console.log(
+    `  stake ok — weight = ${ethers.formatEther(weight)} (${ethers.formatEther(STAKE_AMOUNT)} GOV x4)`,
+  );
+
+  // ---------- 11) Seed de burn: pagamento no FeeRouter (round 0) ----------
+  console.log("\n[11/12] seed de burn: FeeRouter.pay de 100 CREDIT no projeto #1…");
+  const feeRouter = await ethers.getContractAt("FeeRouter", addrs.feeRouter);
+  const burnTracker = await ethers.getContractAt("BurnTracker", addrs.burnTracker);
+  await (await credit.connect(devMember).approve(addrs.feeRouter, SEED_PAYMENT)).wait();
+  await (await feeRouter.connect(devMember).pay(projectId, devMember.address, SEED_PAYMENT)).wait();
+  const round0Burn: bigint = await burnTracker.getBurnForProjectInRound(0n, projectId);
+  console.log(`  burn registrado na rodada 0: ${ethers.formatEther(round0Burn)} CREDIT`);
+
+  // ---------- 12) Ciclo de rewards V2: close -> finalize -> claim ----------
+  // Round 0: emissao = floorSchedule[0] (400k CREDIT) — burnPrev inexistente,
+  //          bucket apps cai no bonders (bootstrap documentado no contrato).
+  // Round 1: emissao usa o burn da rodada 0 vs floorSchedule[1]; bucket apps
+  //          minta pro ownerRecipient do projeto (= dev member).
+  console.log("\n[12/12] ciclo V2: closeRound -> finalizeRound -> claim (rounds 0 e 1)…");
+  for (const round of [0n, 1n]) {
+    await passProposal(
+      [addrs.burnTracker],
+      [0n],
+      [burnTracker.interface.encodeFunctionData("closeRound")],
+      `# Proposta #${6n + round} — Fechar rodada ${round}\n\nBurnTracker.closeRound(): encerra a rodada ${round} e abre a ${round + 1n}, liberando o finalizeRound do RewardDistributorV2.`,
+    );
+    if (round > 0n) {
+      // O bucket LPs cria um incentivo de 7d no gauge a cada finalize; sem
+      // avancar o relogio o proximo finalize reverte com IncentiveOverlap.
+      // Em producao os rounds ja distam 7d (roundDuration) — simulamos isso.
+      await increaseTime(7n * 24n * 3600n);
+    }
+    await (await distributorV2.finalizeRound(round)).wait();
+    const emission: bigint = await distributorV2.getEmission(round);
+    const buckets = await Promise.all(
+      [0, 1, 2, 3].map((b) => distributorV2.getBucketEmission(round, b)),
+    );
+    console.log(
+      `  round ${round} finalizado — emissao ${ethers.formatEther(emission)} CREDIT ` +
+        `(stakers ${ethers.formatEther(buckets[0])} / lps ${ethers.formatEther(buckets[1])} / ` +
+        `apps ${ethers.formatEther(buckets[2])} / bonders ${ethers.formatEther(buckets[3])})`,
+    );
+
+    const claimPreview: bigint = await distributorV2.previewClaim(devMember.address, round, projectId);
+    if (claimPreview > 0n) {
+      await (await distributorV2.connect(devMember).claim(round, projectId)).wait();
+      console.log(`  claim stakers do dev member (round ${round}): ${ethers.formatEther(claimPreview)} CREDIT`);
+    } else {
+      console.log(`  claim stakers do dev member (round ${round}): 0 (nada a puxar)`);
+    }
+  }
+  const finalCreditBalance: bigint = await credit.balanceOf(devMember.address);
+  console.log(`  saldo CREDIT final do dev member = ${ethers.formatEther(finalCreditBalance)}`);
+
   // ---------- Resumo ----------
   console.log("\npronto — bootstrap de producao simulado em dev:");
   console.log(`  - parametros: production.json (timelock 2d, voto 1d+7d, quorum 4%)`);
@@ -353,7 +513,12 @@ async function main() {
     `  - projeto #${projectId} (cloud-terminal) registrado E ATIVO — owner = carteira dev (propostas #2 e #3)`,
   );
   console.log(`  - dev member com ${ethers.formatEther(creditBalance)} CREDIT de teste (proposta #4)`);
-  console.log(`  - Treasury: 30M GOV + ${ethers.formatEther(10_000_000n * 10n ** 18n - TEST_CREDIT)} CREDIT`);
+  console.log(`  - Treasury: 30M GOV + ${ethers.formatEther(10_000_000n * 10n ** 18n - TEST_CREDIT)} CREDIT (genesis)`);
+  console.log(`  - CLP Fase 1: LiquidityGauge ${addrs.gauge}`);
+  console.log(`                RewardDistributorV2 ${addrs.distributorV2} (MINTER unico; V1 cortado)`);
+  console.log(`  - stake: ${ethers.formatEther(STAKE_AMOUNT)} GOV do dev no projeto #${projectId} (lock 365d, weight 4x)`);
+  console.log(`  - rounds 0 e 1 fechados e finalizados no V2 (emissao floor + burn-driven); claims pagos`);
+  console.log(`  - saldo CREDIT final do dev member: ${ethers.formatEther(finalCreditBalance)}`);
   console.log("\nintegracao cloud-terminal (prod-sim):");
   console.log("  1. exporte o runtime config pro backend do cloud-terminal:");
   console.log("       CHAIN_ID=31337 PUBLIC_RPC_URL=http://127.0.0.1:8545 \\");

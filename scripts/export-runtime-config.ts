@@ -31,6 +31,9 @@ const FUTURE_ID_TO_NAME: Record<string, string> = {
   "CommunityDAOModule#phaseA_RewardDistributor": "RewardDistributor",
   "CommunityDAOModule#phaseA_FeeRouter": "FeeRouter",
   "CommunityDAOModule#phaseA_CommunityGovernor": "CommunityGovernor",
+  // Fase F (pivot CLP) — presentes quando o deploy rodou com DEPLOY_CLP_PHASE1.
+  "CommunityDAOModule#phaseF_LiquidityGauge": "LiquidityGauge",
+  "CommunityDAOModule#phaseF_RewardDistributorV2": "RewardDistributorV2",
 };
 
 const deployFile = resolve(
