@@ -31,7 +31,13 @@ Para crear una propuesta, el proponente necesita tener al menos `proposalThresho
 
 ### Quorum (participación mínima)
 
-Una propuesta solo vence si alcanza quorum **y** tiene más `For` que `Against`. Quorum en producción: **4%** del supply total al bloque del snapshot. Evita que una minoría activa apruebe algo radical mientras la mayoría duerme.
+Una propuesta solo vence si alcanza quorum **y** tiene más `For` que `Against`. Quorum en producción: **4%** del supply total al bloque del snapshot. Para el quorum cuentan los votos **For + Abstain** (`COUNTING_MODE` del `GovernorCountingSimple` — Abstain participa del quorum, pero queda fuera de la razón For/Against). Evita que una minoría activa apruebe algo radical mientras la mayoría duerme.
+
+### Supermayoría 75% para propuestas sensibles al POL
+
+Desde el pivote CLP, la "norma cultural" de exigir supermayoría para tocar el POL se volvió **código** en el `CommunityGovernor`. En el `propose`, el Governor escanea el batch: si **cualquier** call tiene `target == TREASURY` con selector de `Treasury.removePOL` **o** de gestión de roles (`grantRole`/`revokeRole`/`renounceRole`), o `target == timelock()` con selector de gestión de roles, la propuesta entera se marca como `ProposalType.Supermajority` (evento `ProposalTypeSet`). El scan de roles cierra el bypass obvio: sin él, una propuesta simple podría conceder `GOVERNANCE_ROLE` en el Treasury (o `PROPOSER_ROLE` en el Timelock) a una dirección cualquiera y ejecutar `removePOL` por fuera del gate.
+
+Para propuestas `Supermajority`, `_voteSucceeded` exige `forVotes > 0 && forVotes >= 3 * againstVotes` — es decir, **For >= 75% de los votos decisivos** (Abstain fuera de la razón, como en el CountingSimple). Un batch mixto contamina: TODA propuesta que contenga una call sensible exige 75%, independiente de las demás calls. La dirección del Treasury es `immutable`, pasada en el constructor del Governor.
 
 ### Delay total (ventana de respuesta)
 
@@ -57,7 +63,7 @@ Si una propuesta maliciosa pasa, aún hay 2 días tras la aprobación para acci�
 | Contrato | Parámetros controlados |
 |---|---|
 | `ProjectRegistry` | `registerProject`, `activateProject`, `setProbation`, `reactivate`, `removeProject`, `setMinCollateral`, `setProbationDuration` |
-| `Treasury` | `transfer`, `batchTransfer`, `payRebates`, `executeBuyback`, `sweepETH` |
+| `Treasury` | `transfer`, `batchTransfer`, `payRebates`, `executeBuyback`, `sweepETH`, `addPOL`, `removePOL` (**supermayoría 75%**), `addPOLFromRefill`, `flushPendingGaugeRewards`, `writeDownPolRefillBucket`, `writeDownPendingGaugeRewards` |
 | `BurnTracker` | `closeRound`, `setRoundDuration`, `setMaxBurnPerRoundPerProject` |
 | `RewardDistributor` | `setAlpha`, `setCapMax` |
 | `FeeRouter` | `setDefaultSplit`, `setProjectSplit`, `clearProjectSplit` |

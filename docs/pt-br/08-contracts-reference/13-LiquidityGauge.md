@@ -51,6 +51,7 @@ Usa `SafeERC20`.
 | `pools[poolId]` | `PoolConfig` | Config por pool |
 | `poolIdByAddress[pool]` | `uint256` | Lookup reverso (`0` = não whitelistada) |
 | `stakes[tokenId]` | `Stake` | Estado do NFT staked |
+| `totalVestingLocked` | `uint256` | Total de CREDIT reservado para `VestingPosition`s ainda não sacadas. Segrega o saldo: essa parcela pertence aos usuários e NÃO pode ser drenada via `governanceRescueRewards` |
 | `denylisted[account]` | `bool` | Anti self-dealing (D.9) |
 
 ### Struct `PoolConfig`
@@ -138,9 +139,9 @@ Encerra incentive ATUAL da pool (precisa estar expirada) e resgata refund para o
 
 #### `governanceRescueRewards(address to, uint256 amount)`
 
-Resgata CREDIT órfão no gauge (refunds de incentives encerradas, forfeits de `emergencyUnstake`). `amount == type(uint256).max` transfere todo saldo.
+Resgata CREDIT órfão no gauge (refunds de incentives encerradas, forfeits de `emergencyUnstake`). **Segregação on-chain**: o resgate NUNCA pode consumir CREDIT que lastreia `VestingPosition`s não sacadas (`totalVestingLocked`) — apenas o excedente (`getUnreservedBalance()`). `amount == type(uint256).max` transfere todo o saldo **não-reservado**.
 
-- **Reverte**: `ZeroAddress`, `ZeroAmount`, `InsufficientBalance`.
+- **Reverte**: `ZeroAddress`, `ZeroAmount`, `InsufficientBalance(requested, available)`, `RescueExceedsUnreserved(available, requested)`.
 - **Eventos**: `RewardsRescued(to, amount)`.
 
 ### Reward notification (`REWARD_NOTIFIER_ROLE`)
@@ -194,6 +195,7 @@ Saca CREDIT já vestido. Compacta positions totalmente claimadas (anti-bloat). `
 - `vestedAmount(address user) → (uint256 vested, uint256 claimable)` — soma sobre todas as positions.
 - `vestingCountOf(address user) → uint256`.
 - `vestingAt(address user, uint256 index) → VestingPosition`.
+- `getUnreservedBalance() → uint256` — `max(balanceOf(gauge) - totalVestingLocked, 0)`. Única parcela elegível para `governanceRescueRewards`.
 - `incentiveByHash(bytes32) → IUniswapV3Staker.IncentiveKey` — útil off-chain.
 - `pendingRewardsAtStaker() → uint256` — saldo agregado do gauge no staker.
 
@@ -229,7 +231,8 @@ Saca CREDIT já vestido. Compacta positions totalmente claimadas (anti-bloat). `
 | `InvalidIncentiveDuration(requested)` | `< INCENTIVE_DURATION_MIN` |
 | `IncentiveNotExpired(hash, endsAt)` | `endIncentive` antes do `endTime` |
 | `IncentiveOverlap(poolId, currentHash)` | `notifyRewardAmount` com incentive ativa |
-| `InsufficientBalance(requested, available)` | Rescue excede saldo |
+| `InsufficientBalance(requested, available)` | Rescue excede saldo total do gauge |
+| `RescueExceedsUnreserved(available, requested)` | Rescue excede o saldo **não-reservado** (`balance - totalVestingLocked`) — protege vesting on-chain |
 
 ## Invariantes
 
@@ -237,6 +240,7 @@ Saca CREDIT já vestido. Compacta positions totalmente claimadas (anti-bloat). `
 - **IE10 (não pausar usuário)**: `pause` bloqueia ENTRADA, não SAÍDA. `emergencyUnstake` é fail-safe sempre operacional.
 - **D.4 vesting linear 14d**: `harvest` parcial. Saída antes do fim do vesting NÃO penaliza positions já criadas — vesting acumula independente do NFT estar staked.
 - **D.9 anti self-dealing**: Treasury não pode stakear (denylisted no bootstrap).
+- **Segregação on-chain de vesting**: `totalVestingLocked` (soma de `totalAmount - claimedAmount` das positions vivas) é intocável por `governanceRescueRewards` — o rescue só alcança `getUnreservedBalance()`. `unstake` incrementa a reserva (via `_createVestingPosition`), `harvest` decrementa pelo sacado; `emergencyUnstake` NÃO mexe (forfeit vira saldo não-reservado, positions prévias preservadas).
 
 ## Observações importantes
 

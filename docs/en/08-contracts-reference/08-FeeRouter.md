@@ -5,7 +5,7 @@
 
 ## Quick overview
 
-Single payment interface between users and apps. Every CREDIT consumption goes through `pay`, which splits into three destinations (burn / treasury / rebate) as per a configurable split. Production default: `95/0/5`.
+Single payment interface between users and apps. Every CREDIT consumption goes through `pay`, which splits into three destinations (burn / treasury / rebate) as per a configurable split. Production deploy default (CLP Phase 0): `(7000, 2000, 1000)` = 70% burn / 20% treasury / 10% rebate. The `defaultSplit` comes from the deploy parameters (`production.json`), it is not hardcoded — the `.sol` NatSpec still cites the historical 95/0/5 value.
 
 `pay` is public — any address can initiate, as long as `user` has approved the FeeRouter. Economic payer is always `user`; `msg.sender` is the tx initiator.
 
@@ -27,7 +27,7 @@ Uses `SafeERC20`.
 | `BURN_TRACKER` | immutable | BurnTracker |
 | `REGISTRY` | immutable | ProjectRegistry |
 | `TREASURY` | immutable | Treasury |
-| `defaultSplit` | `Split` | production: `(9500, 0, 500)` |
+| `defaultSplit` | `Split` | production deploy: `(7000, 2000, 1000)` (set via constructor from `production.json`) |
 | `projectSplit` | mapping | per-project override |
 | `hasProjectSplit` | mapping | override flag |
 | `appRecipient` | mapping | explicit override; 0 = dynamic owner |

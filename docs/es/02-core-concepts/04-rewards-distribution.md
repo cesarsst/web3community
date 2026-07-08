@@ -5,7 +5,7 @@
 
 ## Dónde estamos: V1 (legado) -> V2 (bucket-aware split)
 
-Esta página describe el modelo **V2** (Fase 1.4 del pivote CLP), en producción a partir de abril/2026. El modelo V1 (pre-pivote) sigue funcionando en modo claim-only durante una ventana de migración de 4 rondas — para detalles ver [RewardDistributor (V1)](../08-contracts-reference/07-RewardDistributor.md).
+Esta página describe el modelo **V2** (Fase 1.4 del pivote CLP), en producción a partir de abril/2026. El modelo V1 (pre-pivote) sigue funcionando en modo claim-only durante una ventana de migración de 4 rondas — para detalles ver [RewardDistributor (V1)](../08-contracts-reference/07-RewardDistributor.md). El pre-requisito de la Fase 1.4 en el lado de los fees está satisfecho: el split default del `FeeRouter` en producción es **`70/20/10`** (`burnBps=7000, treasuryBps=2000, rebateBps=1000` en `ignition/parameters/production.json`), dando al Treasury ingreso recurrente en CREDIT.
 
 V2 reescribe la finalización de ronda para **dividir la emisión en 4 buckets simultáneos**:
 

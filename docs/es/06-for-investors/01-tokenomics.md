@@ -30,7 +30,17 @@ La distribución no se hace en el deploy. El genesis de GOV es 0. La DAO decide 
 100% (100M — atinge cap)
 ```
 
-**Esos valores son intención de propuesta, no programación automática.** Cada asignación es una propuesta separada, votada individualmente. La DAO puede ajustar las proporciones antes de ejecutar cada bucket.
+**Esos valores son intención de propuesta, no programación automática.** Ninguna línea de código del repositorio implementa los porcentajes 30/25/20/15/10 — no hay schedule on-chain, y los contratos `Sale`, LBP/`LiquidityManager` y `LPRewards` citados abajo **no existen en el repo**. Cada asignación es una propuesta separada, votada individualmente. La DAO puede ajustar las proporciones antes de ejecutar cada bucket.
+
+> **Contratos pendientes de diseño/deploy.** La distribución de arriba describe **intención**, no el estado actual del repositorio. Los contratos `Sale` (venta pública del 20%), `LiquidityBootstrappingPool` / `LiquidityManager` (provisión del 10% en DEX) y `LPRewards` / liquidity-mining (para parte del 15% community) **no existen en el repo actual** y necesitan ser diseñados, auditados y deployados antes de las propuestas correspondientes. El `TeamVesting` existe (1 instancia por beneficiario) y el `UserSubsidy` existe (singleton para campañas Merkle), pero también dependen de propuesta para ser funded vía transfer del Treasury. Hasta que la propuesta #2 de distribución se ejecute, **0 GOV está en circulación** — el 100% del cap permanece minteable por el Timelock. Secuencia propuesta de propuestas bootstrap (tras `acceptOwnership` por el Timelock):
+>
+> 1. Mint 30M GOV al Treasury.
+> 2. Deploy `TeamVesting` × N + mint 25M GOV distribuido entre las instancias vía transfer del Treasury.
+> 3. Deploy `Sale` + mint 20M GOV al contrato de venta.
+> 4. Fund `UserSubsidy` (CREDIT del Treasury) + mint 15M GOV al bucket community (LP mining / airdrops).
+> 5. Deploy `LiquidityManager` + mint 10M GOV + provisión del pool DEX inicial.
+>
+> Cada propuesta es revisable independientemente. Ver `docs/es/09-advanced/02-mainnet-deployment.md` para el procedimiento operacional completo.
 
 ### TeamVesting
 
@@ -57,7 +67,7 @@ Tener GOV parado en la wallet **no** paga reward. GOV solo participa en la econo
 | Aspecto | Valor | Fuente |
 |---|---|---|
 | Supply cap hardcodeado | **No existe** | `CreditToken` no tiene cap |
-| Genesis | 10.000.000 CREDIT (one-shot) | `mintGenesis` con flag `genesisMinted` |
+| Genesis | 10.000.000 CREDIT (one-shot; el valor es **parámetro de deploy** `genesisAmount`, no hardcodeado en el contrato) | `mintGenesis` con flag `genesisMinted`; `genesisAmount` en `ignition/parameters/production.json` |
 | Destinatario del genesis | `Treasury` | `ignition/modules/Dao.ts` |
 | Mint posterior | Solo por el `MINTER_ROLE` | `CreditToken.mint` |
 | Minter en producción | `RewardDistributor` | grant del deploy |
@@ -90,7 +100,9 @@ Decaimiento lineal de 400k a ~16.666 en 24 rondas. En producción (`roundDuratio
 
 ### Dinámica esperada de supply
 
-Si el uso es constante (burn = constante), `alpha < 1` implica emisión < burn, y el supply cae gradualmente. Simulación de 52 rondas escenario base: el supply cae ~3.8%.
+Si el uso es constante (burn = constante), `alpha < 1` implica emisión < burn, y el supply cae gradualmente.
+
+> **Nota sobre la simulación.** El repositorio tiene en `scripts/simulation/` una simulación de 52 rondas en 3 escenarios. En el escenario base, el supply cae **~3.8%** y el APR nominal del staker se estabiliza en ~34% en CREDIT. Esos valores son **ilustrativos del comportamiento cualitativo** (deflación sostenida con uso constante) en un escenario hipotético con supply inflado (70.4M CREDIT inicial, vía `Charlie_seed = 60M` minteado por atajo de test en `scripts/simulation/economicSim.ts:72`) y 1M burn/round. En mainnet, el supply operacional **empieza en 10M** (genesis real), y el burn orgánico necesita ser construido a partir de uso real de las apps — los números absolutos no prometen comportamiento de mainnet, solo la dinámica cualitativa.
 
 Si el uso crece, el burn absoluto crece, la emisión absoluta crece (hasta saturar en `capMax`). En las primeras 24 rondas, el floor puede mantener emisión incluso si el burn colapsa — después, no.
 
@@ -113,7 +125,7 @@ La DAO funda el contrato transfiriendo `maxClaims × amountPerUser` de CREDIT de
 
 El floor existe para el **bootstrap** — garantizar emisión positiva mientras los apps aún no generan burn orgánico. 24 rondas × 7 días = ~168 días = ~6 meses. Después de eso, el protocolo necesita caminar con sus propias piernas.
 
-Decaimiento lineal: `floor[R] = 400_000e18 - R * (400_000 / 24 * 1e18)`, redondeado. El total sumado da ~5.2M CREDIT — bien por debajo del genesis (10M). Diseñado para ser safety net, no presupuesto cerrado.
+Decaimiento lineal: `floor[R] = 400_000e18 - R * (400_000 / 24 * 1e18)`, redondeado. El total sumado da exactamente **5M CREDIT** (suma analítica: `24 * 400_000 - (400_000/24) * 276 = 9.6M - 4.6M = 5M`, según el comentario "Soma analitica" en `ignition/modules/Dao.ts`; el array efectivo en `ignition/parameters/production.json` suma `5_000_000e18 + 184 wei` de dust del redondeo entero del STEP) — bien por debajo del genesis (10M). Diseñado para ser safety net, no presupuesto cerrado.
 
 ## Cap por ronda (capMax)
 
@@ -133,7 +145,7 @@ Razón: impedir que un proyecto malicioso queme volumen absurdo para capturar sh
 
 ## Probation penalty (25%)
 
-Los proyectos en probation inicial (por tiempo) reciben `projectShare / 4` en la emisión. El otro 75% **no se redistribuye** — simplemente no se acuña. Preserva la intención deflacionaria.
+Los proyectos en probation inicial (por tiempo) reciben `projectShare / 4` en la emisión. El otro 75% **nunca se mintea** — no se redistribuye, `CREDIT.mint` no se llama para ese valor y `CreditToken.totalSupply()` no se ve afectado (no es `_burn`, es simplemente división de share antes del mint). Preserva la intención deflacionaria por sustracción de emisión, no por incineración.
 
 En producción, la probation inicial dura 30 días. Durante ese período, los stakers en proyectos nuevos capturan 25% de lo que sería completo.
 
@@ -141,13 +153,13 @@ En producción, la probation inicial dura 30 días. Durante ese período, los st
 
 | Parámetro | Contrato | Rango permitido | Valor en producción |
 |---|---|---|---|
-| `alpha` | RewardDistributor | `[0.5e18, 1.1e18]` | `0.95e18` |
+| `alpha` | RewardDistributor | `[0.5e18, 0.99e18]` | `0.95e18` |
 | `capMax` | RewardDistributor | `[1e18, 100M * 1e18]` | `5M * 1e18` |
 | `roundDuration` | BurnTracker | `[1 day, 30 days]` | `7 days` |
 | `maxBurnPerRoundPerProject` | BurnTracker | `[0, ilimitado]` (0 = deshabilita) | `10M * 1e18` |
 | `minCollateral` | ProjectRegistry | `> 0` | `10.000 GOV` |
 | `probationDuration` | ProjectRegistry | `> 0` | `30 days` |
-| `defaultSplit` | FeeRouter | suma = 10.000 bps | `(9500, 0, 500)` |
+| `defaultSplit` | FeeRouter | suma = 10.000 bps | `(7000, 2000, 1000)` — 70% burn / 20% treasury / 10% rebate (Fase 0) |
 | `votingDelay` | Governor | `> 0` bloques | `7200` (~1d) |
 | `votingPeriod` | Governor | `> 0` bloques | `50400` (~7d) |
 | `proposalThreshold` | Governor | `>= 0` GOV | `10.000 GOV` |

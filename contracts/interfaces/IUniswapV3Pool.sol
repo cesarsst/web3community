@@ -4,9 +4,11 @@ pragma solidity 0.8.24;
 /**
  * @title IUniswapV3Pool (subset)
  * @notice Subset minimo da ABI da pool Uniswap V3 usado pelo {Treasury} para
- *         derivar TWAP de 30 minutos do par CREDIT/USDC. Apenas {observe} e
- *         {slot0} sao consumidos — qualquer chamada adicional fica fora do
- *         escopo de Fase 1.1 do pivot CLP.
+ *         derivar TWAP de 30 minutos do par CREDIT/USDC. Apenas {observe},
+ *         {slot0}, {token0} e {token1} sao consumidos — qualquer chamada
+ *         adicional fica fora do escopo de Fase 1.1 do pivot CLP.
+ *         ({token0}/{token1} adicionados para o {CreditPriceOracle} detectar
+ *         a ordem CREDIT/USDC do par no constructor.)
  * @dev Por que NAO importar `@uniswap/v3-core`:
  *      1. Dependency hell — `v3-core` exige Solidity 0.7.6 (incompativel com
  *         o pragma 0.8.24 deste projeto). O wrapper oficial `v3-periphery`
@@ -23,6 +25,18 @@ pragma solidity 0.8.24;
  *      IUniswapV3PoolDerivedState
  */
 interface IUniswapV3Pool {
+    /**
+     * @notice Primeiro token do par (o de endereco menor, convencao Uniswap V3).
+     * @dev Usado pelo {CreditPriceOracle} para detectar se o CREDIT e token0
+     *      ou token1 — a ordem determina a direcao da conversao tick -> preco.
+     */
+    function token0() external view returns (address);
+
+    /**
+     * @notice Segundo token do par (o de endereco maior, convencao Uniswap V3).
+     */
+    function token1() external view returns (address);
+
     /**
      * @notice Retorna acumuladores de tick e liquidez observados nos timestamps
      *         derivados de `secondsAgos`. Usado para construir TWAP via

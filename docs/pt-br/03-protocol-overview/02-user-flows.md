@@ -29,31 +29,32 @@ FeeRouter.pay(projectId=42, user=charlie, amount=1000)
      | 3. puxa CREDIT
      | CREDIT.safeTransferFrom(charlie, router, 1000)
      |
-     | 4. calcula split default = (9500, 0, 500)
-     |    burned = 950, toTreasury = 0, toApp = 50
+     | 4. calcula split default = (7000, 2000, 1000)
+     |    burned = 700, toTreasury = 200, toApp = 100
      |
      | 5. resolve recipient = registry.getProject(42).owner
      |    (ou appRecipient[42] se setado)
      |
-     | 6. paga rebate
-     | CREDIT.safeTransfer(recipient, 50)
+     | 6. paga rebate + fatia do treasury
+     | CREDIT.safeTransfer(recipient, 100)
+     | CREDIT.safeTransfer(treasury, 200)
      |
      | 7. aciona burn
-     | CREDIT.forceApprove(burnTracker, 950)
-     | BurnTracker.burnAndRecord(42, router, 950)
+     | CREDIT.forceApprove(burnTracker, 700)
+     | BurnTracker.burnAndRecord(42, router, 700)
      |        |
      |        | check: registry.isActive(42)
-     |        | check: acumulado + 950 <= sanityCap
+     |        | check: acumulado + 700 <= sanityCap
      |        |
      |        | 8. atualiza storage do tracker
-     |        | burnByRoundProject[R][42] += 950
-     |        | totalBurnByRound[R]       += 950
+     |        | burnByRoundProject[R][42] += 700
+     |        | totalBurnByRound[R]       += 700
      |        | projectsWithBurnCount[R]  += 1 (se 1a vez)
      |        |
      |        | 9. queima
-     |        | CREDIT.burnByRole(router, 950, "burnTracker")
+     |        | CREDIT.burnByRole(router, 700, "burnTracker")
      |        |        |
-     |        |        | _burn(router, 950) => totalSupply -= 950
+     |        |        | _burn(router, 700) => totalSupply -= 700
      |        |        v
      |        +-------- BurnedByRole event
      |
@@ -62,9 +63,10 @@ FeeRouter.pay(projectId=42, user=charlie, amount=1000)
 
 **Efeitos pós-tx:**
 
-- Supply de CREDIT caiu em 950.
-- `appOwner.balance += 50` em CREDIT.
-- `burnByRoundProject[R][42] += 950` on-chain.
+- Supply de CREDIT caiu em 700.
+- `appOwner.balance += 100` em CREDIT.
+- `treasury.balance += 200` em CREDIT.
+- `burnByRoundProject[R][42] += 700` on-chain.
 - Charlie `|=>` pode usar o serviço do ChatApp (lógica do app, fora do protocolo).
 
 ## Fluxo 2 — Staker abre posição em um projeto
@@ -124,44 +126,45 @@ Ator: **Alice**, já stakou e rodada `R=5` foi finalizada.
 Alice.wallet
      |
      | (opcional: preview)
-     | rewardDistributor.previewClaim(alice, 5, 42) -> 3421.7 CREDIT
+     | rewardDistributorV2.previewClaim(alice, 5, 42) -> 156_750 CREDIT
      |
      | 1. claim
      v
-RewardDistributor.claim(round=5, projectId=42)
+RewardDistributorV2.claim(round=5, projectId=42)
      |
      | Check: roundData[5].finalized = true
      | Check: !claimed[5][42][alice]
      |
      | 2. _calculateClaim
      |
-     |    share = _projectShare(5, 42):
-     |      - totalEmission = roundData[5].totalEmission = 905_000 CREDIT
+     |    share = _projectStakerShare(5, 42):
+     |      - base = bucketEmissionByRound[5][STAKERS]
+     |             = 55% * totalEmission (902_500) = 496_375 CREDIT
      |      - se totalBurnAtFinalize > 0:
      |          burnDoProjeto = burnByRoundProject[4][42] = 600_000
      |          totalBurn     = totalBurnByRound[4]       = 950_000
-     |          share = 905_000 * 600_000 / 950_000 = 571_578 CREDIT
+     |          share = 496_375 * 600_000 / 950_000 = 313_500 CREDIT
      |      - isInProbation(42)? (false - projeto tem > 30 dias de idade)
-     |    share = 571_578
+     |    share = 313_500
      |
      |    userWeight    = staking.getWeightAt(alice, 42, snapshotBlock_5) = 200_000
      |    projectWeight = staking.getTotalWeightAt(42, snapshotBlock_5)   = 400_000
      |
-     |    amount = 571_578 * 200_000 / 400_000 = 285_789 CREDIT
+     |    amount = 313_500 * 200_000 / 400_000 = 156_750 CREDIT
      |
      | 3. claimed[5][42][alice] = true
      |
      | 4. Claimed event
      |
-     | 5. CREDIT.mint(alice, 285_789, "rewardRound")
+     | 5. CREDIT.mint(alice, 156_750, "rewardRoundV2:stakers")
      |            |
      |            | precisa de MINTER_ROLE
-     |            | (RewardDistributor tem)
+     |            | (RewardDistributorV2 tem)
      |            v
-     |    totalSupply += 285_789
-     |    balance[alice] += 285_789
+     |    totalSupply += 156_750
+     |    balance[alice] += 156_750
      v
-alice recebe 285_789 CREDIT
+alice recebe 156_750 CREDIT
 ```
 
 ## Fluxo 4 — DAO lista um projeto novo
@@ -275,7 +278,7 @@ Estado: BurnTracker.currentRound = 6.
         Dados de R=5 continuam acessiveis via views.
 
 2. Qualquer um (Alice, bot, etc) chama:
-   RewardDistributor.finalizeRound(5)
+   RewardDistributorV2.finalizeRound(5)
        |
        | Check: !roundData[5].finalized
        | Check: expected = 5 (lastFinalizedRound + 1)
@@ -287,15 +290,24 @@ Estado: BurnTracker.currentRound = 6.
        | rawEmission = max(902_500, 316_666) = 902_500
        | totalEmission = min(902_500, capMax=5_000_000) = 902_500
        |
+       | split bucketBps = [5500, 2500, 1500, 500]:
+       |   stakers = 55% = 496_375  (lazy — mintado so no claim)
+       |   lps     = 25% = 225_625  (mint + notify no LiquidityGauge;
+       |                             fallback Treasury se gauge paused)
+       |   apps    = 15% = 135_375  (mint direto p/ ownerRecipient(p),
+       |                             proporcional ao burn de cada projeto em R=4)
+       |   bonders =  5% =  45_125  (mint p/ Treasury + depositPolRefill)
+       |
        | snapshotBlock = block.number
        |
        | roundData[5] = { 902_500, 950_000, snapshotBlock, true }
+       | bucketEmissionByRound[5][0..3] gravado
        | lastFinalizedRound = 5
        | isFirstRoundFinalized = true
        v
-       +-- RoundFinalized event
+       +-- RoundFinalizedV2 event (+ BucketEmissionMinted por bucket)
 
-Estado: stakers podem agora chamar claim(5, projectId).
+Estado: stakers podem agora chamar claim(5, projectId) — bucket stakers.
 ```
 
 ---

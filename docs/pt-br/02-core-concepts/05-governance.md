@@ -31,7 +31,13 @@ Para criar proposta, o propositor precisa ter pelo menos `proposalThreshold` de 
 
 ### Quorum (participação mínima)
 
-Uma proposta só vence se atingir quorum **e** tiver mais `For` que `Against`. Quorum em produção: **4%** do supply total ao bloco do snapshot. Evita que uma minoria ativa passe algo radical enquanto a maioria está dormindo.
+Uma proposta só vence se atingir quorum **e** tiver mais `For` que `Against`. Quorum em produção: **4%** do supply total ao bloco do snapshot. Para o quorum contam os votos **For + Abstain** (`COUNTING_MODE` do `GovernorCountingSimple` — Abstain participa do quorum, mas fica fora da razão For/Against). Evita que uma minoria ativa passe algo radical enquanto a maioria está dormindo.
+
+### Supermaioria 75% para propostas sensíveis ao POL
+
+Desde o pivot CLP, a "norma cultural" de exigir supermaioria para mexer no POL virou **código** no `CommunityGovernor`. No `propose`, o Governor escaneia o batch: se **qualquer** call tiver `target == TREASURY` com selector de `Treasury.removePOL` **ou** de gestão de roles (`grantRole`/`revokeRole`/`renounceRole`), ou `target == timelock()` com selector de gestão de roles, a proposta inteira é marcada como `ProposalType.Supermajority` (evento `ProposalTypeSet`). O scan de roles fecha o bypass óbvio: sem ele, uma proposta simples poderia conceder `GOVERNANCE_ROLE` no Treasury (ou `PROPOSER_ROLE` no Timelock) a um endereço qualquer e executar `removePOL` por fora do gate.
+
+Para propostas `Supermajority`, `_voteSucceeded` exige `forVotes > 0 && forVotes >= 3 * againstVotes` — ou seja, **For >= 75% dos votos decisivos** (Abstain fora da razão, como no CountingSimple). Batch misto contamina: TODA proposta contendo uma call sensível exige 75%, independente das demais calls. O endereço do Treasury é `immutable`, passado no constructor do Governor.
 
 ### Delay total (janela de resposta)
 
@@ -57,7 +63,7 @@ Se uma proposta maliciosa passa, ainda há 2 dias após a aprovação para açã
 | Contrato | Parâmetros controlados |
 |---|---|
 | `ProjectRegistry` | `registerProject`, `activateProject`, `setProbation`, `reactivate`, `removeProject`, `setMinCollateral`, `setProbationDuration` |
-| `Treasury` | `transfer`, `batchTransfer`, `payRebates`, `executeBuyback`, `sweepETH` |
+| `Treasury` | `transfer`, `batchTransfer`, `payRebates`, `executeBuyback`, `sweepETH`, `addPOL`, `removePOL` (**supermaioria 75%**), `addPOLFromRefill`, `flushPendingGaugeRewards`, `writeDownPolRefillBucket`, `writeDownPendingGaugeRewards` |
 | `BurnTracker` | `closeRound`, `setRoundDuration`, `setMaxBurnPerRoundPerProject` |
 | `RewardDistributor` | `setAlpha`, `setCapMax` |
 | `FeeRouter` | `setDefaultSplit`, `setProjectSplit`, `clearProjectSplit` |
@@ -91,8 +97,8 @@ Pós-deploy, após todos os handoffs:
 | `PROPOSER_ROLE` + `CANCELLER_ROLE` no `CommunityTimelock` | `CommunityGovernor` |
 | `EXECUTOR_ROLE` no `CommunityTimelock` | `address(0)` — qualquer um executa após o delay |
 | `DEFAULT_ADMIN_ROLE` no `CommunityTimelock` | **Self** (o próprio Timelock) |
-| `MINTER_ROLE` no `CreditToken` | `RewardDistributor` |
-| `BURNER_ROLE` no `CreditToken` | `BurnTracker` |
+| `MINTER_ROLE` no `CreditToken` | `RewardDistributor` (V1) no deploy; `RewardDistributorV2` é o minter alvo — dois minters durante a migração de 4 rounds, V1 perde a role após o cutoff |
+| `BURNER_ROLE` no `CreditToken` | `BurnTracker` (burn de uso) + `Treasury` (via proposta, para a queima do buyback FFP) |
 | `RECORDER_ROLE` no `BurnTracker` | `FeeRouter` (e cada novo app listado recebe via proposta) |
 
 O deployer **renuncia todas as roles** no fim do deploy. Após isso, ele não tem mais poder que qualquer holder de GOV.

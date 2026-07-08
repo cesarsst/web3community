@@ -9,7 +9,7 @@ DAO multi-asset custody. Receives any ERC-20 passively (and ETH via `receive`). 
 
 From the Credit Liquidity Protocol (CLP, April/2026) pivot, the Treasury also:
 
-1. **Executes FFP buyback** (Phase 1.1) — real USDC -> CREDIT swap via Uniswap V3 + immediate burn, defending the **floor price** when spot breaks below MA90 for 24h.
+1. **Executes FFP buyback** (Phase 1.1) — real USDC -> CREDIT swap via Uniswap V3 + immediate burn, defending the **floor price** when spot breaks below MA90 for 24h. The price comes from a **real** oracle (`CreditPriceOracle`, a Uniswap V3 TWAP adapter + Chainlink sanity), set via `setPriceOracle`.
 2. **Provisions POL** (Phase 1.2) — Protocol-Owned Liquidity in the CREDIT/USDC 0.3% pool, NFT custodied by the Treasury, full-tick range.
 3. **Receives bonders bucket** (Phase 1.4) — `RewardDistributorV2` deposits 5% of per-round emission into an internal ledger (`polRefillBucket`) governance drains via `addPOLFromRefill`.
 4. **Gauge paused fallback** (Phase 1.4) — if `LiquidityGauge.paused()` at the time of `finalizeRound`, V2 deposits the LPs bucket in a second ledger (`pendingGaugeRewards`) drained later via `flushPendingGaugeRewards`.
@@ -47,7 +47,7 @@ Uses `SafeERC20`.
 
 | Name | Type | Default | Bounds |
 |---|---|---|---|
-| `priceOracle` | `ICreditPriceOracle` | `address(0)` | governance setter |
+| `priceOracle` | `ICreditPriceOracle` | `address(0)` | governance setter (real `CreditPriceOracle` in production) |
 | `swapRouter` | `IUniswapV3SwapRouter` | `address(0)` | governance setter |
 | `swapFeeTier` | `uint24` | `3000` (0.3%) | any non-zero |
 | `chainlinkUsdcFeed` | `IChainlinkAggregator` | `address(0)` | governance setter |
@@ -99,21 +99,21 @@ Uses `SafeERC20`.
 
 #### `transfer(IERC20 token, address to, uint256 amount)`
 
-Transfers ERC-20 from the treasury.
+Transfers ERC-20 from the treasury. When `token == CREDIT_TOKEN`, `amount` is capped to `unreservedCreditBalance()` — it reverts if it would eat into the `polRefillBucket`/`pendingGaugeRewards` ledgers (on-chain segregation, Phase 1.4).
 
-- **Reverts**: `ZeroAddress`, `ZeroAmount`, `InsufficientBalance`.
+- **Reverts**: `ZeroAddress`, `ZeroAmount`, `InsufficientBalance`, `TransferExceedsUnreservedCredit(available, requested)` (CREDIT only).
 - **Events**: `Transferred(token, to, amount)`.
 
 #### `batchTransfer(IERC20 token, address[] recipients, uint256[] amounts)`
 
-Batch.
+Batch. When `token == CREDIT_TOKEN`, the **sum** of the parts (not each part in isolation) is validated against `unreservedCreditBalance()`.
 
-- **Reverts**: `ZeroAddress`, `ZeroAmount`, `ArrayLengthMismatch`, `EmptyBatch`, `InsufficientBalance`.
+- **Reverts**: `ZeroAddress`, `ZeroAmount`, `ArrayLengthMismatch`, `EmptyBatch`, `InsufficientBalance`, `TransferExceedsUnreservedCredit` (CREDIT only).
 - **Events**: N × `Transferred` + 1 × `BatchTransferred(token, total, recipientCount)`.
 
 #### `payRebates(IERC20 token, address[] apps, uint256[] amounts, uint256 round)`
 
-Mechanically equivalent to `batchTransfer`, with the semantic event `RebatesPaid(token, round, total, appCount)`.
+Mechanically equivalent to `batchTransfer` (same CREDIT segregation), with the semantic event `RebatesPaid(token, round, total, appCount)`.
 
 #### `sweepETH(address payable to, uint256 amount)`
 
@@ -177,7 +177,9 @@ Provisions liquidity in the CREDIT/USDC pool. FULL range (`POL_TICK_LOWER`, `POL
 
 `amount0Min`/`amount1Min` in POOL order (`token0 < token1` by address). Use the `polTokensOrdered()` view to discover ordering before submitting the proposal.
 
-- **Reverts**: `ZeroAmount`, `BuybackInfraMissing` (USDC or positionManager not set).
+The `creditAmount` is also capped to `unreservedCreditBalance()` — the CREDIT portion injected into the POL cannot eat into the reserved ledgers.
+
+- **Reverts**: `ZeroAmount`, `BuybackInfraMissing` (USDC or positionManager not set), `TransferExceedsUnreservedCredit(available, requested)`.
 - **Events**: `POLAdded(tokenId, liquidityAdded, creditAmount, usdcAmount)`.
 
 #### `removePOL(uint128 liquidityAmount, uint256 amount0Min, uint256 amount1Min, uint256 deadline)`
@@ -200,16 +202,16 @@ Collects fees accrued by the POL position. No auto-compound — to reinvest, gov
 
 #### `depositPolRefill(uint256 amount)` — `POL_REFILL_DEPOSITOR_ROLE`
 
-Accumulates `amount` in `polRefillBucket`. Called by `RewardDistributorV2` after minting CREDIT directly to this Treasury.
+Accumulates `amount` in `polRefillBucket`. Called by `RewardDistributorV2` after minting CREDIT directly to this Treasury. The segregation invariant is enforced **on the inflow side too**: if the total post-deposit reserve (`polRefillBucket + pendingGaugeRewards`) exceeds the real CREDIT balance, it reverts — a buggy/compromised depositor cannot inflate the ledger beyond backing (which would freeze every generic CREDIT outflow). V2 mints the CREDIT BEFORE recording it, in the same tx, so the legitimate flow passes.
 
-- **Reverts**: `ZeroAmount`.
+- **Reverts**: `ZeroAmount`, `DepositExceedsCreditBalance(reservedAfter, creditBalance)`.
 - **Events**: `PolRefillDeposited(amount, newBucketTotal)`.
 
 #### `addPOLFromRefill(uint256 creditAmount, uint256 usdcAmount, ...)` — `GOVERNANCE_ROLE`
 
 Drains `creditAmount` from `polRefillBucket` matched with `usdcAmount` from the Treasury's free balance for injection into `polTokenId`. Reuses `_orderTokens` + `_provisionLiquidity`.
 
-USDC comes from the Treasury's free balance (fed by `treasuryBps` of the FeeRouter — split `(7000, 2000, 1000)` must be live).
+USDC comes from the Treasury's FREE balance. Mind the economic rationale: the FeeRouter's `treasuryBps` is denominated in **CREDIT** (`FeeRouter.pay` transfers CREDIT to the Treasury), so it does NOT feed the USDC side of this function. The real USDC sources are off-protocol: external bootstrap (DAO seed) and POL-position fees collected via `collectPOLFees`. Without USDC to match, the bonders bucket grows without being consumed — governance recycles it via `writeDownPolRefillBucket`.
 
 CEI: ledger debited BEFORE the external call (idempotency on revert).
 
@@ -218,17 +220,36 @@ CEI: ledger debited BEFORE the external call (idempotency on revert).
 
 #### `depositPendingGaugeRewards(uint256 amount)` — `GAUGE_FALLBACK_DEPOSITOR_ROLE`
 
-Accounting fallback when `gauge.paused() == true` at `finalizeRound`. Without this path, pausing the gauge would freeze finalisation of the entire round (red flag E.3 #2).
+Accounting fallback when `gauge.paused() == true` at `finalizeRound`. Without this path, pausing the gauge would freeze finalisation of the entire round (red flag E.3 #2). Same inflow-side enforcement as `depositPolRefill`.
 
-- **Reverts**: `ZeroAmount`.
+- **Reverts**: `ZeroAmount`, `DepositExceedsCreditBalance(reservedAfter, creditBalance)`.
 - **Events**: `PendingGaugeDeposited(amount, newPendingTotal)`.
 
-#### `flushPendingGaugeRewards(uint32 duration)` — `GOVERNANCE_ROLE`
+#### `flushPendingGaugeRewards(uint256 amount, uint256 poolId, uint32 duration)` — `GOVERNANCE_ROLE`
 
-Drains `pendingGaugeRewards` to the gauge via `notifyRewardAmount(poolId, amount, duration)`. Approves CREDIT, drains, reset approve.
+Drains `amount` from `pendingGaugeRewards` to the gauge via `notifyRewardAmount(poolId, amount, duration)`. Approves CREDIT, drains, reset approve. Accepts a **partial flush** and an explicit `poolId`. Sentinels:
 
-- **Reverts**: `LiquidityGaugeNotSet`, `LiquidityGaugePaused`, `NoPendingGaugeRewards`.
+- `amount == 0`: drains the **entire** ledger (original behaviour).
+- `poolId == 0`: uses the default `liquidityGaugePoolId` from `setLiquidityGauge` (gauge poolIds are 1-based; 0 is never a valid pool).
+
+Partial flush + explicit poolId are the defence against the gauge's `IncentiveOverlap` freeze: governance can drain into ANOTHER whitelisted pool without re-pointing `setLiquidityGauge`.
+
+- **Reverts**: `LiquidityGaugeNotSet`, `LiquidityGaugePaused`, `NoPendingGaugeRewards`, `PendingGaugeRewardsInsufficient(requested, available)`.
 - **Events**: `PendingGaugeFlushed(amount, poolId, duration)`.
+
+#### `writeDownPolRefillBucket(uint256 amount)` — `GOVERNANCE_ROLE`
+
+Reduces `polRefillBucket` by `amount` **without moving tokens** — the written-down portion returns to the FREE CREDIT balance (it stops being reserved). Recycling valve for the bonders bucket: since the FeeRouter's `treasuryBps` is denominated in CREDIT (not USDC), the bucket grows every round without an on-chain USDC counterpart to match in `addPOLFromRefill` — without this valve the reserve would grow monotonically until it dominated the CREDIT balance.
+
+- **Reverts**: `ZeroAmount`, `PolRefillBucketInsufficient(requested, available)`.
+- **Events**: `PolRefillWrittenDown(amount, newBucketTotal)`.
+
+#### `writeDownPendingGaugeRewards(uint256 amount)` — `GOVERNANCE_ROLE`
+
+Reduces `pendingGaugeRewards` by `amount` without moving tokens. Escape valve for the scenario where `flushPendingGaugeRewards` stays infeasible indefinitely (e.g., permanent `IncentiveOverlap` across all pools) — without it the ledger's CREDIT would be frozen forever.
+
+- **Reverts**: `ZeroAmount`, `PendingGaugeRewardsInsufficient(requested, available)`.
+- **Events**: `PendingGaugeWrittenDown(amount, newPendingTotal)`.
 
 #### `setLiquidityGauge(ILiquidityGaugeRewards gauge, uint256 poolId)` — `GOVERNANCE_ROLE`
 
@@ -245,6 +266,7 @@ Configures flush destination.
 ### Views
 
 - `balanceOf(IERC20 token) -> uint256`.
+- `unreservedCreditBalance() -> uint256` — `max(balanceOf(CREDIT) - polRefillBucket - pendingGaugeRewards, 0)`. Ceiling of every generic CREDIT outflow (`transfer`, `batchTransfer`, `payRebates`, `addPOL`).
 - `currentMonthIndex() -> uint256` — `block.timestamp / 30 days`.
 - `ma90Price() -> uint256` — average in USD 18 dec (0 if not bootstrapped).
 - `currentFloorPrice() -> uint256` — `max(floorMultiplierBps × MA90 / 10000, floorAbsoluteUsd)`.
@@ -271,6 +293,8 @@ Configures flush destination.
 | `PolRefillUsed(creditUsed, usdcUsed, newTotal)` | `addPOLFromRefill` | — |
 | `PendingGaugeDeposited(amount, newTotal)` | `depositPendingGaugeRewards` | — |
 | `PendingGaugeFlushed(amount, poolId, duration)` | `flushPendingGaugeRewards` | `poolId` |
+| `PolRefillWrittenDown(amount, newTotal)` | `writeDownPolRefillBucket` | — |
+| `PendingGaugeWrittenDown(amount, newTotal)` | `writeDownPendingGaugeRewards` | — |
 | `LiquidityGaugeSet(gauge, poolId)` | `setLiquidityGauge` | `gauge` |
 
 ## Custom errors
@@ -278,6 +302,13 @@ Configures flush destination.
 ### Originals
 
 `ZeroAddress`, `ZeroAmount`, `ArrayLengthMismatch`, `EmptyBatch`, `InsufficientBalance(token, requested, available)`, `ETHTransferFailed`.
+
+### CREDIT segregation (Phase 1.4)
+
+| Error | When |
+|---|---|
+| `TransferExceedsUnreservedCredit(available, requested)` | A generic CREDIT outflow (`transfer`/`batchTransfer`/`payRebates`/`addPOL`) would eat into the reserved ledgers |
+| `DepositExceedsCreditBalance(reservedAfter, creditBalance)` | A ledger deposit (`depositPolRefill`/`depositPendingGaugeRewards`) would raise the total reserve above the real CREDIT balance |
 
 ### FFP
 
@@ -300,10 +331,11 @@ Configures flush destination.
 | Error | When |
 |---|---|
 | `POLNotInitialized()` | `polTokenId == 0` in remove/collect |
-| `PolRefillBucketInsufficient(requested, available)` | `addPOLFromRefill` exceeds ledger |
+| `PolRefillBucketInsufficient(requested, available)` | `addPOLFromRefill` / `writeDownPolRefillBucket` exceeds ledger |
 | `LiquidityGaugeNotSet()` | `flushPendingGaugeRewards` without gauge |
 | `LiquidityGaugePaused()` | Flush with gauge paused |
 | `NoPendingGaugeRewards()` | Flush with empty ledger |
+| `PendingGaugeRewardsInsufficient(requested, available)` | `flushPendingGaugeRewards` / `writeDownPendingGaugeRewards` with `amount` above the ledger |
 
 ## Invariants
 
@@ -311,6 +343,7 @@ Configures flush destination.
 - **IE7 (FFP)**: buyback executed below the floor with TWAP 30min + 1% max slippage + per-event and monthly caps over the USDC reserves.
 - **CREDIT bought is always burned** — never accumulated in treasury. Reinforces deflationary narrative and prevents capture via internal CREDIT whaledom.
 - **No pause**: no unilateral power to freeze the treasury. Residual risk accepted in exchange for decentralisation.
+- **On-chain CREDIT segregation (Phase 1.4)**: `polRefillBucket + pendingGaugeRewards <= balanceOf(CREDIT)` enforced on **both sides**. Generic outflows (`transfer`/`batchTransfer`/`payRebates`/`addPOL`) revert if they would eat into the ledgers (`TransferExceedsUnreservedCredit`); deposits revert if they would inflate the reserve beyond backing (`DepositExceedsCreditBalance`). The ledgers are only consumed by the dedicated paths (`addPOLFromRefill`, `flushPendingGaugeRewards`) and the `writeDown*` valves.
 - **CEI**: ledgers debited before external calls (`addPOLFromRefill`, `flushPendingGaugeRewards`).
 - **ReentrancyGuard**: every value outflow + `recordDailyPrice` (external oracle).
 
@@ -362,9 +395,16 @@ DAO proposal: addPOLFromRefill(creditAmount, usdcAmount, ...)
   -> approve reset 0
 ```
 
-### USDC for refill comes from FeeRouter
+### USDC for refill does NOT come from the FeeRouter
 
-For `addPOLFromRefill` to have USDC to match the CREDIT, `FeeRouter` must be set to split `(7000, 2000, 1000)` (70% burn / 20% treasury / 10% rebate). Default is `(9500, 0, 500)` — that split is a **documented prerequisite** for Phase 1.4 to produce recurring USDC. DAO decision via `setDefaultSplit`.
+Common mistake: the `FeeRouter`'s `treasuryBps` is denominated in **CREDIT**, not USDC (`FeeRouter.pay` transfers CREDIT to the Treasury). So the split `(7000, 2000, 1000)` — 70% burn / 20% treasury / 10% rebate — feeds the **CREDIT side** of the Treasury, not the USDC side of `addPOLFromRefill`.
+
+The real USDC sources to match the bucket's CREDIT are off-protocol:
+
+- **External bootstrap** — USDC seed by the DAO.
+- **`collectPOLFees`** — POL-position fees, partly in USDC.
+
+If there is no USDC to match, the bonders bucket (5% of per-round emission) grows monotonically. The `writeDownPolRefillBucket` valve recycles the excess back to the free CREDIT balance.
 
 ### ETH receipt
 
@@ -376,4 +416,4 @@ For `addPOLFromRefill` to have USDC to match the CREDIT, `FeeRouter` must be set
 
 ---
 
-**See also**: [FeeRouter](08-FeeRouter.md), [LiquidityGauge](13-LiquidityGauge.md), [RewardDistributorV2](07b-RewardDistributorV2.md), [UserSubsidy](12-UserSubsidy.md), [TeamVesting](11-TeamVesting.md).
+**See also**: [CreditPriceOracle](14-CreditPriceOracle.md), [FeeRouter](08-FeeRouter.md), [LiquidityGauge](13-LiquidityGauge.md), [RewardDistributorV2](07b-RewardDistributorV2.md), [UserSubsidy](12-UserSubsidy.md), [TeamVesting](11-TeamVesting.md).

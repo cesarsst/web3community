@@ -30,7 +30,7 @@ A distribuição não é feita no deploy. O genesis do GOV é 0. A DAO decide vi
 100% (100M — atinge cap)
 ```
 
-**Esses valores são intenção de proposta, não programação automática.** Cada alocação é uma proposta separada, votada individualmente. A DAO pode ajustar as proporções antes de executar cada bucket.
+**Esses valores são intenção de proposta, não programação automática.** Nenhuma linha de código do repositório implementa os percentuais 30/25/20/15/10 — não há schedule on-chain, e os contratos `Sale`, LBP/`LiquidityManager` e `LPRewards` citados abaixo **não existem no repo**. Cada alocação é uma proposta separada, votada individualmente. A DAO pode ajustar as proporções antes de executar cada bucket.
 
 > **Contratos pendentes de design/deploy.** A distribuição acima descreve **intenção**, não estado atual do repositório. Os contratos `Sale` (venda pública dos 20%), `LiquidityBootstrappingPool` / `LiquidityManager` (provisão dos 10% em DEX) e `LPRewards` / liquidity-mining (para parte dos 15% community) **não existem no repo atual** e precisam ser desenhados, auditados e deployados antes das propostas correspondentes. O `TeamVesting` existe (1 instância por beneficiário) e o `UserSubsidy` existe (singleton para campanhas Merkle), mas também dependem de proposta para serem funded via transfer do Treasury. Até a proposta #2 de distribuição executar, **0 GOV está em circulação** — 100% do cap permanece mintável pelo Timelock. Sequência proposta de propostas bootstrap (após `acceptOwnership` pelo Timelock):
 >
@@ -67,7 +67,7 @@ Ter GOV parado na wallet **não** paga reward. GOV só participa da economia via
 | Aspecto | Valor | Fonte |
 |---|---|---|
 | Supply cap hardcoded | **Não existe** | `CreditToken` não tem cap |
-| Genesis | 10.000.000 CREDIT (one-shot) | `mintGenesis` com flag `genesisMinted` |
+| Genesis | 10.000.000 CREDIT (one-shot; o valor é **parâmetro de deploy** `genesisAmount`, não hardcoded no contrato) | `mintGenesis` com flag `genesisMinted`; `genesisAmount` em `ignition/parameters/production.json` |
 | Destinatário do genesis | `Treasury` | `ignition/modules/Dao.ts` |
 | Mint subsequente | Apenas pelo `MINTER_ROLE` | `CreditToken.mint` |
 | Minter em produção | `RewardDistributor` | grant do deploy |
@@ -125,7 +125,7 @@ A DAO funda o contrato transferindo `maxClaims × amountPerUser` de CREDIT do Tr
 
 O floor existe para o **bootstrap** — garantir emissão positiva enquanto os apps ainda não geram burn orgânico. 24 rodadas × 7 dias = **~168 dias ≈ 5.5 meses**. Depois disso, o protocolo precisa andar com as próprias pernas.
 
-Decaimento linear: `floor[R] = 400_000e18 - R * (400_000 / 24 * 1e18)`, arredondado. O total somado dá exatamente **5M CREDIT** (soma analítica: `24 * 400_000 - (400_000/24) * 276 = 9.6M - 4.6M = 5M`, conforme `ignition/modules/Dao.ts:86-94`) — bem abaixo do genesis (10M). Projetado para ser safety net, não orçamento fechado.
+Decaimento linear: `floor[R] = 400_000e18 - R * (400_000 / 24 * 1e18)`, arredondado. O total somado dá exatamente **5M CREDIT** (soma analítica: `24 * 400_000 - (400_000/24) * 276 = 9.6M - 4.6M = 5M`, conforme o comentário "Soma analitica" em `ignition/modules/Dao.ts`; o array efetivo em `ignition/parameters/production.json` soma `5_000_000e18 + 184 wei` de dust do arredondamento inteiro do STEP) — bem abaixo do genesis (10M). Projetado para ser safety net, não orçamento fechado.
 
 ## Cap por rodada (capMax)
 
@@ -159,12 +159,14 @@ Em produção, probation inicial dura 30 dias. Durante esse período, stakers em
 | `maxBurnPerRoundPerProject` | BurnTracker | `[0, ilimitado]` (0 = desabilita) | `10M * 1e18` |
 | `minCollateral` | ProjectRegistry | `> 0` | `10.000 GOV` |
 | `probationDuration` | ProjectRegistry | `> 0` | `30 days` |
-| `defaultSplit` | FeeRouter | soma = 10.000 bps | `(9500, 0, 500)` |
+| `defaultSplit` | FeeRouter | soma = 10.000 bps | `(7000, 2000, 1000)` — 70% burn / 20% treasury / 10% rebate (Fase 0) |
 | `votingDelay` | Governor | `> 0` blocos | `7200` (~1d) |
 | `votingPeriod` | Governor | `> 0` blocos | `50400` (~7d) |
 | `proposalThreshold` | Governor | `>= 0` GOV | `10.000 GOV` |
 | `quorumNumerator` | Governor | `[0, 100]` | `4` |
 | `timelockMinDelay` | Timelock | `>= 0` seg | `172800` (2d) |
+
+Parâmetros do buyback FFP do Treasury (floor, caps, TWAP, slippage) e do split de buckets do `RewardDistributorV2` também são ajustáveis dentro de bounds próprios — lista completa em [Parâmetros](../07-governance/03-parameters.md).
 
 Parâmetros **não ajustáveis**:
 

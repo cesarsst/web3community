@@ -42,13 +42,16 @@ A ordem neste índice corresponde à ordem numérica em `08-contracts-reference/
 | 05 | `Staking` | `contracts/Staking.sol` |
 | 06 | `BurnTracker` | `contracts/BurnTracker.sol` |
 | 07 | `RewardDistributor` | `contracts/RewardDistributor.sol` |
+| 07b | `RewardDistributorV2` | `contracts/RewardDistributorV2.sol` |
 | 08 | `FeeRouter` | `contracts/FeeRouter.sol` |
 | 09 | `CommunityTimelock` | `contracts/CommunityTimelock.sol` |
 | 10 | `CommunityGovernor` | `contracts/CommunityGovernor.sol` |
 | 11 | `TeamVesting` | `contracts/TeamVesting.sol` |
 | 12 | `UserSubsidy` | `contracts/UserSubsidy.sol` |
+| 13 | `LiquidityGauge` | `contracts/LiquidityGauge.sol` |
+| — | `CreditPriceOracle` | `contracts/CreditPriceOracle.sol` |
 
-Doc detalhada por contrato em [`08-contracts-reference/`](../08-contracts-reference/).
+São **15 contratos de produção** no total. Doc detalhada por contrato em [`08-contracts-reference/`](../08-contracts-reference/) (a referência dedicada do `CreditPriceOracle` ainda não foi escrita — consulte a NatSpec do próprio `.sol`).
 
 ## Versões de dependências
 
@@ -80,6 +83,13 @@ const GOVERNOR = deployed['CommunityDAOModule#CommunityGovernor'];
 `TeamVesting` e `UserSubsidy` têm módulos Ignition separados (`ignition/modules/TeamVesting.ts` e `ignition/modules/UserSubsidy.ts`) — deployados sob demanda via proposta da DAO, não no bootstrap.
 
 Cada `TeamVesting` é uma instância separada (um por beneficiário). Seus endereços ficam em deployments dedicados.
+
+`RewardDistributorV2`, `LiquidityGauge` e `CreditPriceOracle` são deployáveis opcionalmente pelo próprio `Dao.ts` (Fase F) via env vars:
+
+- `DEPLOY_CLP_PHASE1=true` → `LiquidityGauge` + `RewardDistributorV2` (futures `CommunityDAOModule#phaseF_LiquidityGauge` / `#phaseF_RewardDistributorV2`).
+- `DEPLOY_CLP_ORACLE=true` → `CreditPriceOracle` (future `CommunityDAOModule#phaseF_CreditPriceOracle`).
+
+O módulo **não concede nenhuma role** a esses contratos — a migração V1 → V2 (MINTER_ROLE do CREDIT), whitelist de pools no gauge e `Treasury.setPriceOracle(oracle)` são atos de governança via proposta.
 
 ## Verificação on-chain
 

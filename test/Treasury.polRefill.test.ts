@@ -149,7 +149,10 @@ describe("Treasury — Fase 1.4 (bucket bonders + gauge fallback)", function () 
     });
 
     it("accumulates ledger across multiple deposits and emits PolRefillDeposited", async function () {
-      const { treasury, distributor } = await loadFixture(deployFixture);
+      const { treasury, distributor, admin, credit } = await loadFixture(deployFixture);
+      // Lastro real: o deposito exige CREDIT ja mintado para o Treasury
+      // (invariante enforced tambem nas entradas — DepositExceedsCreditBalance).
+      await credit.connect(admin).mint(await treasury.getAddress(), 350n, "test");
       await expect(treasury.connect(distributor).depositPolRefill(100n))
         .to.emit(treasury, "PolRefillDeposited")
         .withArgs(100n, 100n);
@@ -159,6 +162,14 @@ describe("Treasury — Fase 1.4 (bucket bonders + gauge fallback)", function () 
         .to.emit(treasury, "PolRefillDeposited")
         .withArgs(250n, 350n);
       expect(await treasury.polRefillBucket()).to.equal(350n);
+    });
+
+    it("reverts DepositExceedsCreditBalance when ledger would exceed real balance", async function () {
+      const { treasury, distributor, admin, credit } = await loadFixture(deployFixture);
+      await credit.connect(admin).mint(await treasury.getAddress(), 100n, "test");
+      await expect(treasury.connect(distributor).depositPolRefill(101n))
+        .to.be.revertedWithCustomError(treasury, "DepositExceedsCreditBalance")
+        .withArgs(101n, 100n);
     });
   });
 
@@ -277,7 +288,8 @@ describe("Treasury — Fase 1.4 (bucket bonders + gauge fallback)", function () 
     });
 
     it("accumulates ledger and emits PendingGaugeDeposited", async function () {
-      const { treasury, distributor } = await loadFixture(deployFixture);
+      const { treasury, distributor, admin, credit } = await loadFixture(deployFixture);
+      await credit.connect(admin).mint(await treasury.getAddress(), 150n, "test");
       await expect(treasury.connect(distributor).depositPendingGaugeRewards(100n))
         .to.emit(treasury, "PendingGaugeDeposited")
         .withArgs(100n, 100n);
@@ -285,6 +297,14 @@ describe("Treasury — Fase 1.4 (bucket bonders + gauge fallback)", function () 
         .to.emit(treasury, "PendingGaugeDeposited")
         .withArgs(50n, 150n);
       expect(await treasury.pendingGaugeRewards()).to.equal(150n);
+    });
+
+    it("reverts DepositExceedsCreditBalance when ledger would exceed real balance", async function () {
+      const { treasury, distributor, admin, credit } = await loadFixture(deployFixture);
+      await credit.connect(admin).mint(await treasury.getAddress(), 100n, "test");
+      await expect(treasury.connect(distributor).depositPendingGaugeRewards(101n))
+        .to.be.revertedWithCustomError(treasury, "DepositExceedsCreditBalance")
+        .withArgs(101n, 100n);
     });
   });
 
@@ -298,7 +318,7 @@ describe("Treasury — Fase 1.4 (bucket bonders + gauge fallback)", function () 
     it("reverts LiquidityGaugeNotSet when gauge unconfigured", async function () {
       const { treasury, governance } = await loadFixture(deployFixture);
       await expect(
-        treasury.connect(governance).flushPendingGaugeRewards(FLUSH_DURATION),
+        treasury.connect(governance).flushPendingGaugeRewards(0n, 0n, FLUSH_DURATION),
       ).to.be.revertedWithCustomError(treasury, "LiquidityGaugeNotSet");
     });
 
@@ -307,7 +327,7 @@ describe("Treasury — Fase 1.4 (bucket bonders + gauge fallback)", function () 
       await treasury.connect(governance).setLiquidityGauge(await gauge.getAddress(), 1);
       await gauge.setPaused(true);
       await expect(
-        treasury.connect(governance).flushPendingGaugeRewards(FLUSH_DURATION),
+        treasury.connect(governance).flushPendingGaugeRewards(0n, 0n, FLUSH_DURATION),
       ).to.be.revertedWithCustomError(treasury, "LiquidityGaugePaused");
     });
 
@@ -315,11 +335,11 @@ describe("Treasury — Fase 1.4 (bucket bonders + gauge fallback)", function () 
       const { treasury, governance, gauge } = await loadFixture(deployFixture);
       await treasury.connect(governance).setLiquidityGauge(await gauge.getAddress(), 1);
       await expect(
-        treasury.connect(governance).flushPendingGaugeRewards(FLUSH_DURATION),
+        treasury.connect(governance).flushPendingGaugeRewards(0n, 0n, FLUSH_DURATION),
       ).to.be.revertedWithCustomError(treasury, "NoPendingGaugeRewards");
     });
 
-    it("happy path: drains ledger, approves gauge, calls notifyRewardAmount, emits event", async function () {
+    it("happy path (amount = 0 -> tudo; poolId = 0 -> default): drains ledger, approves gauge, notifies, emits", async function () {
       const { treasury, governance, distributor, admin, credit, gauge } =
         await loadFixture(deployFixture);
       const amount = 12_345n * ONE_CREDIT;
@@ -327,7 +347,7 @@ describe("Treasury — Fase 1.4 (bucket bonders + gauge fallback)", function () 
       await treasury.connect(distributor).depositPendingGaugeRewards(amount);
       await treasury.connect(governance).setLiquidityGauge(await gauge.getAddress(), 3);
 
-      await expect(treasury.connect(governance).flushPendingGaugeRewards(FLUSH_DURATION))
+      await expect(treasury.connect(governance).flushPendingGaugeRewards(0n, 0n, FLUSH_DURATION))
         .to.emit(treasury, "PendingGaugeFlushed")
         .withArgs(amount, 3n, FLUSH_DURATION);
 
@@ -342,11 +362,63 @@ describe("Treasury — Fase 1.4 (bucket bonders + gauge fallback)", function () 
       ).to.equal(0n);
     });
 
+    it("partial flush: drains only `amount`, remainder stays reserved in the ledger", async function () {
+      const { treasury, governance, distributor, admin, credit, gauge } =
+        await loadFixture(deployFixture);
+      const total = 1_000n * ONE_CREDIT;
+      const part = 400n * ONE_CREDIT;
+      await credit.connect(admin).mint(await treasury.getAddress(), total, "fallback");
+      await treasury.connect(distributor).depositPendingGaugeRewards(total);
+      await treasury.connect(governance).setLiquidityGauge(await gauge.getAddress(), 3);
+
+      await expect(treasury.connect(governance).flushPendingGaugeRewards(part, 0n, FLUSH_DURATION))
+        .to.emit(treasury, "PendingGaugeFlushed")
+        .withArgs(part, 3n, FLUSH_DURATION);
+
+      expect(await treasury.pendingGaugeRewards()).to.equal(total - part);
+      expect(await gauge.lastNotifyAmount()).to.equal(part);
+      // O restante permanece reservado (segregacao intacta).
+      expect(await treasury.unreservedCreditBalance()).to.equal(0n);
+    });
+
+    it("explicit poolId overrides the default (drena para outra pool sem re-apontar o gauge)", async function () {
+      const { treasury, governance, distributor, admin, credit, gauge } =
+        await loadFixture(deployFixture);
+      const amount = 500n * ONE_CREDIT;
+      await credit.connect(admin).mint(await treasury.getAddress(), amount, "fallback");
+      await treasury.connect(distributor).depositPendingGaugeRewards(amount);
+      await treasury.connect(governance).setLiquidityGauge(await gauge.getAddress(), 3);
+
+      // Cenario do freeze por IncentiveOverlap: a pool default (3) esta com
+      // incentive ativa perpetuamente renovada; governance drena para a
+      // pool 5 sem precisar de setLiquidityGauge.
+      await expect(treasury.connect(governance).flushPendingGaugeRewards(0n, 5n, FLUSH_DURATION))
+        .to.emit(treasury, "PendingGaugeFlushed")
+        .withArgs(amount, 5n, FLUSH_DURATION);
+      expect(await gauge.lastPoolId()).to.equal(5n);
+      expect(await treasury.liquidityGaugePoolId()).to.equal(3n); // default intacto
+    });
+
+    it("reverts PendingGaugeRewardsInsufficient when amount > ledger", async function () {
+      const { treasury, governance, distributor, admin, credit, gauge } =
+        await loadFixture(deployFixture);
+      const amount = 100n * ONE_CREDIT;
+      await credit.connect(admin).mint(await treasury.getAddress(), amount, "fallback");
+      await treasury.connect(distributor).depositPendingGaugeRewards(amount);
+      await treasury.connect(governance).setLiquidityGauge(await gauge.getAddress(), 1);
+
+      await expect(
+        treasury.connect(governance).flushPendingGaugeRewards(amount + 1n, 0n, FLUSH_DURATION),
+      )
+        .to.be.revertedWithCustomError(treasury, "PendingGaugeRewardsInsufficient")
+        .withArgs(amount + 1n, amount);
+    });
+
     it("rejects unauthorized callers", async function () {
       const { treasury, gauge, governance, other } = await loadFixture(deployFixture);
       await treasury.connect(governance).setLiquidityGauge(await gauge.getAddress(), 1);
       await expect(
-        treasury.connect(other).flushPendingGaugeRewards(FLUSH_DURATION),
+        treasury.connect(other).flushPendingGaugeRewards(0n, 0n, FLUSH_DURATION),
       ).to.be.revertedWithCustomError(treasury, "AccessControlUnauthorizedAccount");
     });
   });

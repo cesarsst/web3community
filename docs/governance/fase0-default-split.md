@@ -5,6 +5,21 @@ Protocol. A Fase 0 consiste em UMA acao on-chain — atualizar o split default
 do `FeeRouter` de 95/0/5 para 70/20/10 — e e o **hard gate** para iniciar
 qualquer trabalho de Fase 1 (LPs/staking refinado).
 
+## STATUS (2026-07)
+
+O split `(7000, 2000, 1000)` foi **assado nos parametros de deploy** —
+`ignition/parameters/production.json` (e `dev.json`) ja trazem
+`burnBps: 7000`, `treasuryBps: 2000`, `rebateBps: 1000`, e o construtor do
+`FeeRouter` recebe esses valores como default split. Consequencia:
+
+- **Deploy fresh (rede nova)**: o `FeeRouter` ja nasce em 70/20/10. A
+  proposta on-chain deste documento torna-se **desnecessaria** — o hard
+  gate ja esta satisfeito no proprio deploy.
+- **Redes ja deployadas com o split antigo (95/0/5)**: o caminho da
+  proposta descrito abaixo **permanece valido e necessario** para migrar o
+  split default via governanca. Todo o restante do documento (calldata,
+  sequencia operacional, checklist, caminhos sad) aplica-se a esse caso.
+
 ## 1. Contexto
 
 Os pareceres economicos relevantes:
@@ -130,9 +145,21 @@ Apos `votingDelay` (estado da proposta = `Active`):
 governor.castVote(proposalId, 1); // 1 = FOR; 0 = AGAINST; 2 = ABSTAIN
 ```
 
-Quorum = 4% do supply do `GovernanceToken`. Em producao, com cap 100M e
-`genesisAmount = 10M`, sao **400_000 GOV em voto FOR** para atingir quorum
-(considerando supply atual).
+Quorum = **4% do `totalSupply` do `GovernanceToken` no bloco do snapshot**
+da proposta (`quorumNumerator = 4`, `quorumDenominator = 100`). Atencao ao
+erro comum: o quorum NAO tem relacao com o genesis de **CREDIT** (10M) — sao
+tokens distintos. O `GovernanceToken` **nao pre-minta supply no construtor**
+(ver `contracts/GovernanceToken.sol`): toda a distribuicao acontece via
+`mint()` explicitos, ate o cap imutavel de 100M GOV. Logo o quorum absoluto
+depende de **quanto GOV ja foi mintado** ate o snapshot:
+
+- **Estagio bootstrap** (~12k GOV mintados no inicio da vida do protocolo):
+  quorum = `4% × 12_000 ≈ 480 GOV` em voto FOR/ABSTAIN.
+- **Supply totalmente distribuido** (cap 100M atingido): quorum =
+  `4% × 100_000_000 = 4_000_000 GOV`.
+
+Ou seja, o alvo de quorum **cresce junto com o supply de GOV**. Consulte
+`governanceToken.totalSupply()` no bloco do snapshot para o valor exato.
 
 ### 5.3. Queue + execute
 

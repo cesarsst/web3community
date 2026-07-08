@@ -9,7 +9,11 @@ import { ethers } from "ethers";
  * Opcionalmente — via flags `deployTeamVesting` e `deployUserSubsidy`,
  * ambas default `false` — o modulo tambem deploya `TeamVesting` (single
  * beneficiary) e `UserSubsidy` (singleton), totalizando ate 12 contratos
- * em um unico deploy all-in-one. Com os defaults, o comportamento e
+ * em um unico deploy all-in-one. Alem dessas, as flags `DEPLOY_CLP_PHASE1`
+ * (LiquidityGauge + RewardDistributorV2) e `DEPLOY_CLP_ORACLE`
+ * (CreditPriceOracle) — ambas default `false` — cobrem a Fase 1 do pivot
+ * CLP com wiring minimo de constructor e ZERO concessao de roles pelo
+ * modulo (roles via proposta; ver Fase F). Com os defaults, o comportamento e
  * bit-compatible com a versao anterior: o deploy dos 2 contratos
  * auxiliares permanece como responsabilidade dos modulos
  * `TeamVesting.ts` / `UserSubsidy.ts` acionados por propostas de
@@ -148,13 +152,29 @@ const CommunityDAOModule = buildModule("CommunityDAOModule", (m) => {
   // dinamica que Ignition empacota como uint256[24].
   const floorSchedule = m.getParameter<bigint[]>("floorSchedule", FLOOR_SCHEDULE);
 
-  // FeeRouter — split inicial 95/0/5. Passado como struct {burnBps, treasuryBps, rebateBps}.
+  // FeeRouter — split inicial 70/20/10, ratificado na Fase 0 do pivot CLP
+  // (docs/governance/fase0-default-split.md). Como o protocolo e
+  // pre-deploy, o split novo e assado direto nos defaults e nos parameters
+  // JSON (dev + production) — nao ha proposta `setDefaultSplit` pos-deploy
+  // necessaria para fresh deploys.
+  //
+  // NOTA (racional economico, corrigido): a fatia `treasuryBps` (20%) e
+  // denominada em CREDIT — `FeeRouter.pay` transfere CREDIT ao Treasury,
+  // NAO USDC. Ela engorda o saldo livre de CREDIT do Treasury, mas nao
+  // fornece o lado USDC de `Treasury.addPOLFromRefill`; as fontes reais de
+  // USDC sao bootstrap externo e fees da posicao POL (`collectPOLFees`).
+  // Sem USDC para casar, o `polRefillBucket` (5%/rodada via V2) cresce sem
+  // consumo — a valvula `Treasury.writeDownPolRefillBucket` permite ao
+  // governance reciclar bucket antigo de volta ao saldo livre antes que a
+  // reserva domine o balanco de CREDIT (ver NatSpec de addPOLFromRefill).
+  //
+  // Passado como struct {burnBps, treasuryBps, rebateBps}.
   // Ignition serializa objetos como tuple de campos, ordem importa: ABI do
   // construtor da Split do FeeRouter e (uint16, uint16, uint16) na ordem
   // (burnBps, treasuryBps, rebateBps).
-  const burnBps = m.getParameter<number>("burnBps", 9500);
-  const treasuryBps = m.getParameter<number>("treasuryBps", 0);
-  const rebateBps = m.getParameter<number>("rebateBps", 500);
+  const burnBps = m.getParameter<number>("burnBps", 7000);
+  const treasuryBps = m.getParameter<number>("treasuryBps", 2000);
+  const rebateBps = m.getParameter<number>("rebateBps", 1000);
 
   // Governor (parametros em BLOCOS)
   const votingDelay = m.getParameter<bigint>("votingDelay", 1n); // dev: 1 block | prod: 7200
@@ -202,6 +222,33 @@ const CommunityDAOModule = buildModule("CommunityDAOModule", (m) => {
   const deployTeamVesting = (process.env.DEPLOY_TEAM_VESTING ?? "").toLowerCase() === "true";
   const deployUserSubsidy = (process.env.DEPLOY_USER_SUBSIDY ?? "").toLowerCase() === "true";
 
+  // Flags da Fase 1 do pivot CLP (mesmo padrao env-var das flags acima —
+  // Ignition nao permite branching por parametro runtime, ver comentario
+  // acima):
+  //
+  // - `DEPLOY_CLP_PHASE1`: deploya `LiquidityGauge` + `RewardDistributorV2`
+  //   (Fase 1.3/1.4). Wiring MINIMO de constructor apenas; NENHUMA role e
+  //   concedida pelo modulo (MINTER_ROLE do CREDIT para o V2, GAUGE_ROLE
+  //   etc. continuam sendo concedidas por proposta ratificada no Governor).
+  //   `admin` de ambos = Timelock (grant interno do proprio constructor,
+  //   alinhado ao modelo de seguranca da Fase E: nenhum poder na EOA
+  //   deployer).
+  //
+  // - `DEPLOY_CLP_ORACLE`: deploya `CreditPriceOracle` (adapter TWAP
+  //   imutavel, sem roles). Em deploy fresh a pool Uniswap V3 CREDIT/USDC
+  //   e o feed Chainlink NAO existem — os enderecos sao aceitos via
+  //   parametro Ignition com default address(0) e o oracle SO deve ser
+  //   deployado quando os parametros forem fornecidos. Como parametros
+  //   Ignition so resolvem em deploy-time (RuntimeValue e sempre truthy em
+  //   JS), a flag e a afirmacao build-time do operador de que os
+  //   parametros existem; se a flag for setada com `creditUsdcPool` (ou
+  //   `usdcAddress`) ainda em address(0), o constructor do oracle reverte
+  //   com `ZeroAddress` — fail-fast, sem deploy silencioso de oracle
+  //   quebrado. `usdcUsdFeed` em address(0) e VALIDO (modo 1 USDC = 1 USD,
+  //   documentado no NatSpec do contrato).
+  const deployClpPhase1 = (process.env.DEPLOY_CLP_PHASE1 ?? "").toLowerCase() === "true";
+  const deployClpOracle = (process.env.DEPLOY_CLP_ORACLE ?? "").toLowerCase() === "true";
+
   const teamVestingBeneficiary = m.getParameter<string>(
     "teamVestingBeneficiary",
     ethers.ZeroAddress,
@@ -209,6 +256,24 @@ const CommunityDAOModule = buildModule("CommunityDAOModule", (m) => {
   const teamVestingStart = m.getParameter<bigint>("teamVestingStart", 0n);
   const teamVestingCliff = m.getParameter<bigint>("teamVestingCliff", 0n);
   const teamVestingDuration = m.getParameter<bigint>("teamVestingDuration", 1n);
+
+  // Enderecos externos da Fase 1 do pivot CLP. Defaults ZeroAddress NAO sao
+  // validos para os construtores (revertem com `ZeroAddress`) — mesma
+  // assinatura "dura" e intencional do `teamVestingBeneficiary` acima:
+  // quando as flags `DEPLOY_CLP_PHASE1` / `DEPLOY_CLP_ORACLE` estiverem
+  // ativas, os enderecos reais DEVEM vir via `ignition/parameters/*.json`.
+  //
+  // - `uniswapV3Staker` / `positionManager`: periferia canonica da Uniswap
+  //   V3 na rede alvo (existem mesmo em deploy fresh da DAO).
+  // - `creditUsdcPool`: pool Uniswap V3 CREDIT/USDC — NAO existe em deploy
+  //   fresh (o CREDIT acabou de nascer); so fornecer depois que a pool for
+  //   criada, tipicamente num deploy incremental do modulo.
+  // - `usdcUsdFeed`: feed Chainlink USDC/USD — address(0) e VALIDO
+  //   (fallback 1 USDC = 1 USD do adapter, ver CreditPriceOracle.sol).
+  const uniswapV3Staker = m.getParameter<string>("uniswapV3Staker", ethers.ZeroAddress);
+  const positionManager = m.getParameter<string>("positionManager", ethers.ZeroAddress);
+  const creditUsdcPool = m.getParameter<string>("creditUsdcPool", ethers.ZeroAddress);
+  const usdcUsdFeed = m.getParameter<string>("usdcUsdFeed", ethers.ZeroAddress);
 
   // ---------- Fase A: Deploy ----------
 
@@ -273,10 +338,13 @@ const CommunityDAOModule = buildModule("CommunityDAOModule", (m) => {
     { id: "phaseA_FeeRouter" },
   );
 
-  // 10. CommunityGovernor (depende de gov + timelock).
+  // 10. CommunityGovernor (depende de gov + timelock + treasury).
+  //     O treasury entra imutavel no construtor para o scan de proposal
+  //     types: propostas contendo `Treasury.removePOL` exigem supermaioria
+  //     75% (ver NatSpec de CommunityGovernor.sol).
   const governor = m.contract(
     "CommunityGovernor",
-    [gov, timelock, votingDelay, votingPeriod, proposalThreshold, quorumNumerator],
+    [gov, timelock, treasury, votingDelay, votingPeriod, proposalThreshold, quorumNumerator],
     { id: "phaseA_CommunityGovernor" },
   );
 
@@ -539,9 +607,86 @@ const CommunityDAOModule = buildModule("CommunityDAOModule", (m) => {
     });
   }
 
-  // Retorno com shape estavel. Os campos `teamVesting` / `userSubsidy` so
-  // existem (undefined) quando os flags correspondentes foram passados.
-  // Consumidores devem checar antes de usar.
+  // ---------- Fase F: Deploys opcionais da Fase 1 do pivot CLP ----------
+  //
+  // Desligados por default (flags `DEPLOY_CLP_PHASE1` / `DEPLOY_CLP_ORACLE`,
+  // ver bloco de flags acima). Wiring MINIMO de constructor apenas — o
+  // modulo NAO concede nenhuma role a estes contratos (nem deles para
+  // outros): MINTER_ROLE do CREDIT para o RewardDistributorV2, whitelist de
+  // pools no gauge, `Treasury.setPriceOracle(oracle)` etc. sao atos de
+  // governanca e continuam via proposta ratificada no Governor.
+  //
+  // `admin` do gauge e do V2 = Timelock: e o proprio constructor de cada
+  // contrato que concede DEFAULT_ADMIN/GOVERNANCE ao `admin` — nenhum poder
+  // fica na EOA deployer, consistente com a Fase E. O CreditPriceOracle e
+  // um adapter imutavel sem roles/owner por design.
+  //
+  // `after: [cCreditAdmin]` defensivo: garante que o batcher nao intercale
+  // estes deploys no meio das fases B-D (mesma justificativa da Fase E).
+
+  let liquidityGauge;
+  let distributorV2;
+  if (deployClpPhase1) {
+    // IMPORTANTE: `uniswapV3Staker` e `positionManager` devem ser
+    // explicitamente fornecidos quando `DEPLOY_CLP_PHASE1=true` — o default
+    // ZeroAddress reverte no constructor (`ZeroAddress`), fail-fast.
+    liquidityGauge = m.contract(
+      "LiquidityGauge",
+      [timelock, credit, uniswapV3Staker, positionManager],
+      {
+        id: "phaseF_LiquidityGauge",
+        after: [cCreditAdmin],
+      },
+    );
+
+    // RewardDistributorV2 depende do gauge (constructor) — Ignition ordena
+    // automaticamente via a future `liquidityGauge`. Reusa alpha/capMax/
+    // floorSchedule do V1: os parametros economicos sao os mesmos; a
+    // migracao V1 -> V2 (revogar MINTER do V1, conceder ao V2) e ato de
+    // governanca fora deste modulo.
+    distributorV2 = m.contract(
+      "RewardDistributorV2",
+      [
+        timelock,
+        credit,
+        staking,
+        burnTracker,
+        registry,
+        liquidityGauge,
+        treasury,
+        alpha,
+        capMax,
+        floorSchedule,
+      ],
+      {
+        id: "phaseF_RewardDistributorV2",
+        after: [cCreditAdmin],
+      },
+    );
+  }
+
+  let creditPriceOracle;
+  if (deployClpOracle) {
+    // SO deployar com `creditUsdcPool` (e `usdcAddress`) reais — pool/feed
+    // nao existem em deploy fresh, por isso a flag e SEPARADA da
+    // `DEPLOY_CLP_PHASE1`. Com pool ou USDC em address(0) o constructor
+    // reverte com `ZeroAddress`; `usdcUsdFeed` pode ser address(0)
+    // (fallback 1 USDC = 1 USD). Ver bloco de flags acima para o racional
+    // completo (parametros Ignition nao permitem branching build-time).
+    creditPriceOracle = m.contract(
+      "CreditPriceOracle",
+      [creditUsdcPool, credit, usdcAddress, usdcUsdFeed],
+      {
+        id: "phaseF_CreditPriceOracle",
+        after: [cCreditAdmin],
+      },
+    );
+  }
+
+  // Retorno com shape estavel. Os campos `teamVesting` / `userSubsidy` /
+  // `liquidityGauge` / `distributorV2` / `creditPriceOracle` so existem
+  // quando os flags correspondentes foram passados. Consumidores devem
+  // checar antes de usar.
   return {
     gov,
     credit,
@@ -555,6 +700,9 @@ const CommunityDAOModule = buildModule("CommunityDAOModule", (m) => {
     governor,
     ...(teamVesting !== undefined ? { teamVesting } : {}),
     ...(userSubsidy !== undefined ? { userSubsidy } : {}),
+    ...(liquidityGauge !== undefined ? { liquidityGauge } : {}),
+    ...(distributorV2 !== undefined ? { distributorV2 } : {}),
+    ...(creditPriceOracle !== undefined ? { creditPriceOracle } : {}),
   };
 });
 

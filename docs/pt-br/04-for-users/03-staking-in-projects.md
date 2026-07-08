@@ -145,8 +145,12 @@ amount = projectShare(round, projectId)
        × seuPeso(round)
        ÷ pesoTotal(round)
 
-projectShare = totalEmission × burn_do_projeto_em_R-1 ÷ burn_total_R-1
+projectShare = bucketStakers × burn_do_projeto_em_R-1 ÷ burn_total_R-1
              (se não houve burn: via peso global)
+
+bucketStakers = 55% da totalEmission no split default do RewardDistributorV2
+              (bucketBps[stakers] = 5500; os outros 45% vão para LPs, apps
+               e bonders — não passam pelo claim de staker)
 
 Se projeto em probation inicial: projectShare /= 4.
 ```
@@ -155,14 +159,15 @@ A fórmula completa está em [Rewards distribution](../02-core-concepts/04-rewar
 
 ## Simulação hipotética
 
-Alice stakou 50.000 GOV no `projectId=42` com lock de 365 dias (peso = 200k). O projeto gerou 600k de burn na rodada R-1, o total da rodada foi 950k, emissão da rodada R é 902k CREDIT. Peso total no projeto (incluindo Alice) é 400k.
+Alice stakou 50.000 GOV no `projectId=42` com lock de 365 dias (peso = 200k). O projeto gerou 600k de burn na rodada R-1, o total da rodada foi 950k, emissão da rodada R é 902.500 CREDIT (0,95 × 950k) — dos quais o bucket stakers (55%) é o que vai para claim. Peso total no projeto (incluindo Alice) é 400k.
 
 ```
-projectShare = 902_000 × 600_000 / 950_000 = 569.684 CREDIT
-aliceShare   = 569.684 × 200.000 / 400.000 = 284.842 CREDIT
+bucketStakers = 902_500 × 55% = 496_375 CREDIT
+projectShare  = 496_375 × 600_000 / 950_000 = 313.500 CREDIT
+aliceShare    = 313.500 × 200.000 / 400.000 = 156.750 CREDIT
 ```
 
-Alice reivindica 284.842 CREDIT no round R. Se a rodada é semanal e ela mantém a posição por um ano com burn similar, captura ~14.8M CREDIT em 52 rodadas (ilustrativo — realidade depende de dinâmica do uso).
+Alice reivindica 156.750 CREDIT no round R. Se a rodada é semanal e ela mantém a posição por um ano com burn similar, captura ~8.15M CREDIT em 52 rodadas (ilustrativo — realidade depende de dinâmica do uso).
 
 ## Edge cases úteis
 

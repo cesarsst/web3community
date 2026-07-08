@@ -195,8 +195,8 @@ describe("E2E: ProjectLifecycle — estados do projeto e impacto nos dependentes
     await credit.connect(charlie).approve(await feeRouter.getAddress(), 1_000n * 10n ** 18n);
     await feeRouter.connect(charlie).pay(projectId, charlie.address, 1_000n * 10n ** 18n);
 
-    // Burn registrado.
-    expect(await burnTracker.getBurnForProjectInRound(0, projectId)).to.equal(950n * 10n ** 18n);
+    // Burn registrado (70% do pagamento — split default 70/20/10 da Fase 0).
+    expect(await burnTracker.getBurnForProjectInRound(0, projectId)).to.equal(700n * 10n ** 18n);
 
     // Avanca tempo menos que probationDuration — ainda em probation.
     await time.increase(DEV_PROBATION_DURATION / 2n);
@@ -395,7 +395,7 @@ describe("E2E: ProjectLifecycle — estados do projeto e impacto nos dependentes
     await feeRouter.connect(charlie).pay(projectId, charlie.address, 1_000n * 10n ** 18n);
 
     const burnRound0 = await burnTracker.getBurnForProjectInRound(0, projectId);
-    expect(burnRound0).to.equal(950n * 10n ** 18n);
+    expect(burnRound0).to.equal(700n * 10n ** 18n);
 
     // Avanca tempo e fecha rodada 0. Finaliza.
     await time.increase(DEV_ROUND_DURATION + 1n);
@@ -412,10 +412,10 @@ describe("E2E: ProjectLifecycle — estados do projeto e impacto nos dependentes
     await distributor.connect(alice).finalizeRound(1);
 
     const round1Data = await distributor.roundData(1);
-    expect(round1Data.totalBurnAtFinalize).to.equal(950n * 10n ** 18n);
+    expect(round1Data.totalBurnAtFinalize).to.equal(700n * 10n ** 18n);
 
     // O burn por projeto no round 0 permanece gravado:
-    expect(await burnTracker.getBurnForProjectInRound(0, projectId)).to.equal(950n * 10n ** 18n);
+    expect(await burnTracker.getBurnForProjectInRound(0, projectId)).to.equal(700n * 10n ** 18n);
 
     // Claim: mesmo com projeto Removed no momento do claim, o share e calculado
     // com base no burn historico do round 0 — historia e historia.
@@ -456,9 +456,9 @@ describe("E2E: ProjectLifecycle — estados do projeto e impacto nos dependentes
     await credit.connect(charlie).approve(await feeRouter.getAddress(), 100n * 10n ** 18n);
     const ownerABefore = await credit.balanceOf(projectOwnerA.address);
     await feeRouter.connect(charlie).pay(projectId, charlie.address, 100n * 10n ** 18n);
-    // Rebate 5% = 5 CREDIT.
+    // Rebate 10% = 10 CREDIT (split default 70/20/10 da Fase 0).
     expect((await credit.balanceOf(projectOwnerA.address)) - ownerABefore).to.equal(
-      5n * 10n ** 18n,
+      10n * 10n ** 18n,
     );
 
     // B aceita ownership.
@@ -473,7 +473,7 @@ describe("E2E: ProjectLifecycle — estados do projeto e impacto nos dependentes
     await credit.connect(charlie).approve(await feeRouter.getAddress(), 100n * 10n ** 18n);
     await feeRouter.connect(charlie).pay(projectId, charlie.address, 100n * 10n ** 18n);
     expect((await credit.balanceOf(projectOwnerB.address)) - ownerBBefore).to.equal(
-      5n * 10n ** 18n,
+      10n * 10n ** 18n,
     );
 
     // A antigo owner nao consegue mais updateMetadata.

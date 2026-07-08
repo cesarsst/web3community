@@ -43,8 +43,8 @@ Ver [GovernanceToken](../08-contracts-reference/01-GovernanceToken.md) para la r
 | Símbolo | CREDIT | idem |
 | Supply cap hardcodeado | **No existe** | `CreditToken` no aplica cap |
 | Estándar | ERC-20 + ERC20Burnable + AccessControl | herencia en `CreditToken` |
-| Genesis | 10.000.000 CREDIT a `Treasury`, one-shot | `mintGenesis`, flag `genesisMinted` |
-| Mint posterior | solo `MINTER_ROLE` | concedido al `RewardDistributor` en el deploy |
+| Genesis | 10.000.000 CREDIT a `Treasury`, one-shot — el valor es **parámetro de deploy** (`genesisAmount` en `ignition/parameters/production.json`), no hardcodeado en el contrato | `mintGenesis`, flag `genesisMinted` |
+| Mint posterior | solo `MINTER_ROLE` | concedido al `RewardDistributor` (V1) en el deploy; el `RewardDistributorV2` es el **minter objetivo** — durante la migración de 4 rondas coexisten dos minters, hasta que la gobernanza revoque la role del V1 |
 | Burn | vía `burn`, `burnFrom` (ERC20Burnable) **o** `burnByRole` | `burnByRole` sin allowance, exige `BURNER_ROLE` |
 
 **¿Por qué no tiene supply cap hardcodeado?**
@@ -55,7 +55,7 @@ Porque el cap efectivo es **económico**, no sintáctico. Quien tiene `MINTER_RO
 emissao_R = min( max( alpha * burn_{R-1}, floor(R) ), capMax )
 ```
 
-con `alpha <= 1.1`, `capMax <= 100M CREDIT` por ronda y `floor` decreciente que se pone a cero después de la ronda 23. Por lo tanto: la emisión está **limitada por el consumo pasado** y por un techo duro ajustable vía gobernanza. Un cap hardcodeado en el token sería redundante, e inflexible para ajustes económicos futuros.
+con `alpha <= 0.99` (techo reducido de `1.1` para garantizar IE1 por construcción — ver `audit/economist/2026-04-22-consistency-audit.md` C2), `capMax <= 100M CREDIT` por ronda y `floor` decreciente que se pone a cero después de la ronda 23. Por lo tanto: la emisión está **limitada por el consumo pasado** y por un techo duro ajustable vía gobernanza, y **estrictamente deflacionaria en régimen estable** porque `alpha < 1` es invariante permanente por código. Un cap hardcodeado en el token sería redundante, e inflexible para ajustes económicos futuros.
 
 Ver [CreditToken](../08-contracts-reference/02-CreditToken.md).
 
@@ -77,8 +77,8 @@ Estas diferencias no son decoración — modelan la separación entre "quien dec
 |---|---|
 | [GovernanceToken](../08-contracts-reference/01-GovernanceToken.md) | GOV ERC20Votes |
 | [CreditToken](../08-contracts-reference/02-CreditToken.md) | CREDIT ERC20Burnable con roles |
-| [RewardDistributor](../08-contracts-reference/07-RewardDistributor.md) | Único `MINTER_ROLE` en CREDIT |
-| [BurnTracker](../08-contracts-reference/06-BurnTracker.md) | Único `BURNER_ROLE` nativo en CREDIT |
+| [RewardDistributor](../08-contracts-reference/07-RewardDistributor.md) / [RewardDistributorV2](../08-contracts-reference/07b-RewardDistributorV2.md) | `MINTER_ROLE` en CREDIT — V1 lo recibe en el deploy; V2 es el minter objetivo (dos minters durante la migración de 4 rondas, V1 pasa a claim-only y pierde la role tras el cutoff) |
+| [BurnTracker](../08-contracts-reference/06-BurnTracker.md) | `BURNER_ROLE` en CREDIT para el burn de uso (vía `FeeRouter`); el [Treasury](../08-contracts-reference/04-Treasury.md) también recibe `BURNER_ROLE` (vía propuesta) para quemar el CREDIT comprado en el buyback FFP |
 | [FeeRouter](../08-contracts-reference/08-FeeRouter.md) | Entrypoint de pago que acciona el burn |
 
 ---

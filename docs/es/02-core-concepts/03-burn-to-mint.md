@@ -11,7 +11,7 @@ emissao_R = min( max( alpha * burn_{R-1}, floor(R) ), capMax )
 
 Definida en `RewardDistributor.finalizeRound`. Tres capas:
 
-1. **`alpha * burn_{R-1}`** — base económica. En producción `alpha = 0.95`, es decir, se emite 95% de lo que fue quemado en la ronda anterior. Si nadie quemó nada, ese término es cero.
+1. **`alpha * burn_{R-1}`** — base económica. En producción `alpha = 0.95` (**parámetro de deploy**: `alpha = 950000000000000000` en `ignition/parameters/production.json`; los bounds `[MIN_ALPHA=0.5, MAX_ALPHA=0.99]` son `constant` en el código), es decir, se emite 95% de lo que fue quemado en la ronda anterior. Si nadie quemó nada, ese término es cero.
 2. **`max(..., floor(R))`** — garantiza piso mínimo durante el bootstrap. El `floorSchedule` tiene 24 entradas. Rondas >= 24 no tienen floor. En producción, el floor cae linealmente de 400k CREDIT (ronda 0) a ~16.666 CREDIT (ronda 23).
 3. **`min(..., capMax)`** — techo duro. En producción `capMax = 5.000.000 CREDIT`. Ajustable vía gobernanza dentro de `[1, 100M] CREDIT`.
 
@@ -57,7 +57,7 @@ si RewardDistributor detecta isInProbation(projectId):
     projectShare = projectShare / PROBATION_PENALTY_DENOM   // = /4
 ```
 
-Es decir, **el proyecto recibe solo el 25% de su share de emisión**. El otro 75% **no se redistribuye** — simplemente no se acuña, lo que preserva el espíritu deflacionario.
+Es decir, **el proyecto recibe solo el 25% de su share de emisión**. El otro 75% **nunca se mintea** — no se redistribuye y no hay `_burn` del token involucrado. "Quemar" en tokenomics usualmente significa `_burn` sobre `totalSupply` ya existente; aquí la `projectShare` simplemente se divide por 4 antes de que se llame a `CREDIT.mint`, de modo que `CreditToken.totalSupply()` **no se ve afectado** por este camino. Esto preserva el espíritu deflacionario por sustracción de emisión, no por incineración.
 
 Intuición: un proyecto nuevo tiene riesgo de ser fraude. Durante 30 días, la DAO y los stakers observan. Si es legítimo, la probation expira y la share se normaliza. Si es fraude, la gobernanza puede mover el proyecto a `Status.Probation` punitiva (bloquea stake y pagos) o `Status.Removed` (encierra y potencialmente hace slashing del colateral).
 
@@ -105,7 +105,7 @@ Si cualquiera de esos eslabones se rompe, el loop se desacelera. **Ninguna fórm
 
 Ajustable vía `GOVERNANCE_ROLE` (Timelock, que solo ejecuta tras propuesta aprobada):
 
-- `alpha` dentro de `[0.5, 1.1]` — `RewardDistributor.setAlpha`
+- `alpha` dentro de `[0.5, 0.99]` — `RewardDistributor.setAlpha`. El default 0.95 es parámetro de deploy; los bounds son constantes inmutables (`MIN_ALPHA`/`MAX_ALPHA`). El rango se redujo (antes `[0.5, 1.1]`) para garantizar la invariante económica IE1 (α < 1 permanente) por construcción — la gobernanza ya no puede votar un valor inflacionario. Ver dictamen en `audit/economist/2026-04-22-consistency-audit.md` (C2).
 - `capMax` dentro de `[1, 100M] CREDIT` — `RewardDistributor.setCapMax`
 - `roundDuration` dentro de `[1 dia, 30 dias]` — `BurnTracker.setRoundDuration`
 - `maxBurnPerRoundPerProject` (0 = deshabilita) — `BurnTracker.setMaxBurnPerRoundPerProject`

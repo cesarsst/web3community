@@ -145,8 +145,12 @@ amount = projectShare(round, projectId)
        × tuPeso(round)
        ÷ pesoTotal(round)
 
-projectShare = totalEmission × burnDelProyectoEnR-1 ÷ burnTotalR-1
+projectShare = bucketStakers × burnDelProyectoEnR-1 ÷ burnTotalR-1
              (si no hubo burn: via peso global)
+
+bucketStakers = 55% de la totalEmission en el split default del RewardDistributorV2
+              (bucketBps[stakers] = 5500; el otro 45% va para LPs, apps
+               y bonders — no pasan por el claim de staker)
 
 Si el proyecto esta en probation inicial: projectShare /= 4.
 ```
@@ -155,14 +159,15 @@ La fórmula completa está en [Rewards distribution](../02-core-concepts/04-rewa
 
 ## Simulación hipotética
 
-Alice stakeó 50.000 GOV en el `projectId=42` con lock de 365 días (peso = 200k). El proyecto generó 600k de burn en la ronda R-1, el total de la ronda fue 950k, la emisión de la ronda R es 902k CREDIT. El peso total en el proyecto (incluyendo a Alice) es 400k.
+Alice stakeó 50.000 GOV en el `projectId=42` con lock de 365 días (peso = 200k). El proyecto generó 600k de burn en la ronda R-1, el total de la ronda fue 950k, la emisión de la ronda R es 902.500 CREDIT (0,95 × 950k) — de los cuales el bucket stakers (55%) es lo que va al claim. El peso total en el proyecto (incluyendo a Alice) es 400k.
 
 ```
-projectShare = 902_000 × 600_000 / 950_000 = 569.684 CREDIT
-aliceShare   = 569.684 × 200.000 / 400.000 = 284.842 CREDIT
+bucketStakers = 902_500 × 55% = 496_375 CREDIT
+projectShare  = 496_375 × 600_000 / 950_000 = 313.500 CREDIT
+aliceShare    = 313.500 × 200.000 / 400.000 = 156.750 CREDIT
 ```
 
-Alice reclama 284.842 CREDIT en el round R. Si la ronda es semanal y mantiene la posición por un año con burn similar, captura ~14.8M CREDIT en 52 rondas (ilustrativo — la realidad depende de la dinámica del uso).
+Alice reclama 156.750 CREDIT en el round R. Si la ronda es semanal y mantiene la posición por un año con burn similar, captura ~8.15M CREDIT en 52 rondas (ilustrativo — la realidad depende de la dinámica del uso).
 
 ## Edge cases útiles
 

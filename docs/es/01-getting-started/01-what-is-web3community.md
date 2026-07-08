@@ -36,7 +36,7 @@ Para entender la arquitectura, piensa en tres capas que se superponen.
 
 - **La capa política** está formada por [`CommunityGovernor`](../08-contracts-reference/10-CommunityGovernor.md) y [`CommunityTimelock`](../08-contracts-reference/09-CommunityTimelock.md). Toda decisión pasa por propuesta + voto + delay de 2 días.
 - **La capa de estado** guarda los hechos: quién es dueño de qué proyecto ([`ProjectRegistry`](../08-contracts-reference/03-ProjectRegistry.md)), cuánto de cada token está en la tesorería ([`Treasury`](../08-contracts-reference/04-Treasury.md)), quién stakeó cuánto en qué proyecto ([`Staking`](../08-contracts-reference/05-Staking.md)), cuánto fue quemado en cada ronda ([`BurnTracker`](../08-contracts-reference/06-BurnTracker.md)).
-- **La capa económica** mueve valor. Los usuarios pagan en CREDIT a través del [`FeeRouter`](../08-contracts-reference/08-FeeRouter.md) — 95% se quema, 5% va a la app. Los stakers reciben CREDIT recién emitido vía [`RewardDistributor`](../08-contracts-reference/07-RewardDistributor.md), cuya fórmula ata la emisión futura al burn pasado.
+- **La capa económica** mueve valor. Los usuarios pagan en CREDIT a través del [`FeeRouter`](../08-contracts-reference/08-FeeRouter.md) — en el split default de producción, 70% se quema, 20% va a la tesorería y 10% va a la app. Los stakers reciben CREDIT recién emitido vía [`RewardDistributor`](../08-contracts-reference/07-RewardDistributor.md), cuya fórmula ata la emisión futura al burn pasado.
 
 ## Los dos tokens en una línea cada uno
 

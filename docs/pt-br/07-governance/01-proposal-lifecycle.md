@@ -18,6 +18,8 @@
 7  Executed      - todas as chamadas foram executadas com sucesso
 ```
 
+> **Nota — propostas `Supermajority` (75%).** No `propose`, o `CommunityGovernor` escaneia o batch: se qualquer call tem target no `Treasury` com selector de `removePOL` ou de gestão de roles (`grantRole`/`revokeRole`/`renounceRole`), ou target no Timelock com selector de gestão de roles, a proposta inteira é marcada `ProposalType.Supermajority` (evento `ProposalTypeSet`). Para essas, a transição a `Succeeded` exige `forVotes >= 3 × againstVotes` e `forVotes > 0` (For >= 75% dos votos decisivos; Abstain só conta para quorum) — não apenas `For > Against`.
+
 ## Transições
 
 ```

@@ -67,7 +67,7 @@ Vá direto a [`08-contracts-reference/`](08-contracts-reference/). Um arquivo po
 
 ## Status do protocolo
 
-- 12 contratos em produção (veja [08-contracts-reference](08-contracts-reference/)).
+- 15 contratos em produção (veja [08-contracts-reference](08-contracts-reference/)).
 - Solidity 0.8.24 com `viaIR` ativado.
 - OpenZeppelin Contracts 5.0.2 pinado.
 - Pronto para deploy Sepolia pós-auditoria externa.

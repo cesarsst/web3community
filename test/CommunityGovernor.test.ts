@@ -50,26 +50,9 @@ describe("CommunityGovernor", function () {
     const timelock = await Timelock.deploy(TIMELOCK_DELAY, [], [ethers.ZeroAddress], admin.address);
     await timelock.waitForDeployment();
 
-    // 3. CommunityGovernor
-    const Governor = await ethers.getContractFactory("CommunityGovernor");
-    const governor = await Governor.deploy(
-      await gov.getAddress(),
-      await timelock.getAddress(),
-      VOTING_DELAY,
-      VOTING_PERIOD,
-      PROPOSAL_THRESHOLD,
-      QUORUM_NUMERATOR,
-    );
-    await governor.waitForDeployment();
-
-    // 4. Wiring: Governor recebe PROPOSER_ROLE e CANCELLER_ROLE no Timelock.
-    const PROPOSER_ROLE = await timelock.PROPOSER_ROLE();
-    const CANCELLER_ROLE = await timelock.CANCELLER_ROLE();
-    const DEFAULT_ADMIN_ROLE = await timelock.DEFAULT_ADMIN_ROLE();
-    await timelock.connect(admin).grantRole(PROPOSER_ROLE, await governor.getAddress());
-    await timelock.connect(admin).grantRole(CANCELLER_ROLE, await governor.getAddress());
-
-    // 5. Treasury gated com GOVERNANCE_ROLE = Timelock (I4).
+    // 3. Treasury gated com GOVERNANCE_ROLE = Timelock (I4). Deployado ANTES
+    //    do Governor porque o construtor do Governor agora recebe o endereco
+    //    do Treasury (scan de proposal types / supermajority em removePOL).
     //    O 3o argumento (USDC) e zero — buyback FFP nao e exercido neste
     //    suite. Para satisfazer o construtor, fornecemos um CREDIT placeholder
     //    (qualquer endereco nao-zero) — usamos o GOV (mesmo ja deployado)
@@ -86,6 +69,26 @@ describe("CommunityGovernor", function () {
     await treasury.connect(admin).grantRole(TREASURY_GOV_ROLE, await timelock.getAddress());
     // Admin renuncia sua propria GOVERNANCE_ROLE (simulacao de prod).
     await treasury.connect(admin).renounceRole(TREASURY_GOV_ROLE, admin.address);
+
+    // 4. CommunityGovernor (recebe o Treasury para o scan de removePOL).
+    const Governor = await ethers.getContractFactory("CommunityGovernor");
+    const governor = await Governor.deploy(
+      await gov.getAddress(),
+      await timelock.getAddress(),
+      await treasury.getAddress(),
+      VOTING_DELAY,
+      VOTING_PERIOD,
+      PROPOSAL_THRESHOLD,
+      QUORUM_NUMERATOR,
+    );
+    await governor.waitForDeployment();
+
+    // 5. Wiring: Governor recebe PROPOSER_ROLE e CANCELLER_ROLE no Timelock.
+    const PROPOSER_ROLE = await timelock.PROPOSER_ROLE();
+    const CANCELLER_ROLE = await timelock.CANCELLER_ROLE();
+    const DEFAULT_ADMIN_ROLE = await timelock.DEFAULT_ADMIN_ROLE();
+    await timelock.connect(admin).grantRole(PROPOSER_ROLE, await governor.getAddress());
+    await timelock.connect(admin).grantRole(CANCELLER_ROLE, await governor.getAddress());
 
     // 6. Mint GOV e delegate.
     await gov.connect(admin).mint(voterA.address, GOV_VOTER_A, "test:voterA");
@@ -196,6 +199,7 @@ describe("CommunityGovernor", function () {
         Governor.deploy(
           await gov.getAddress(),
           await tl.getAddress(),
+          ethers.ZeroAddress, // deploy dev sem treasury — scan de removePOL desativado
           VOTING_DELAY,
           0,
           PROPOSAL_THRESHOLD,
@@ -215,6 +219,7 @@ describe("CommunityGovernor", function () {
         Governor.deploy(
           await gov.getAddress(),
           await tl.getAddress(),
+          ethers.ZeroAddress, // deploy dev sem treasury — scan de removePOL desativado
           VOTING_DELAY,
           VOTING_PERIOD,
           PROPOSAL_THRESHOLD,

@@ -55,9 +55,9 @@ The "economic payer" is always `user` (paid via `transferFrom`).
 
 ## How much the app receives
 
-Given the default split in production (95% burn, 0% treasury, 5% rebate):
+Given the default split in production (70% burn, 20% treasury, 10% rebate — `burnBps/treasuryBps/rebateBps = 7000/2000/1000` in `ignition/parameters/production.json`):
 
-- Immediate: **5%** goes to the `appRecipient` (default is the project's `owner` in the Registry).
+- Immediate: **10%** goes to the `appRecipient` (default is the project's `owner` in the Registry).
 - Indirectly, via `RewardDistributor` of the next round: **emission share proportional to the project's burn**, which the app can capture if it stakes.
 
 Breakdown of the 3 revenue sources (rebate + stake + retained CREDIT appreciation) in [Value flow](../03-protocol-overview/03-economic-flows.md).

@@ -6,15 +6,20 @@ import {IChainlinkAggregator} from "../interfaces/IChainlinkAggregator.sol";
 /**
  * @title ChainlinkAggregatorMock
  * @notice Mock determinístico do {IChainlinkAggregator} usado em
- *         test/Treasury.buyback.test.ts para simular o feed USDC/USD.
- * @dev Decimals fixos em 8 (mesma convenção do feed USDC/USD da Chainlink).
- *      `answer` e `updatedAt` sao setaveis pelo teste; demais campos
- *      retornados por {latestRoundData} são valores constantes "OK".
+ *         test/Treasury.buyback.test.ts e test/CreditPriceOracle.test.ts
+ *         para simular o feed USDC/USD.
+ * @dev Decimals default 8 (mesma convenção do feed USDC/USD da Chainlink),
+ *      configuráveis via {setDecimals} — os consumidores de produção
+ *      ({Treasury._enforceChainlinkSanity}, {CreditPriceOracle._usdcToUsd})
+ *      leem `decimals()` em runtime, e os testes precisam exercitar feeds
+ *      com precisões diferentes (6/18). `answer` e `updatedAt` sao setaveis
+ *      pelo teste; demais campos retornados por {latestRoundData} são
+ *      valores constantes "OK".
  */
 contract ChainlinkAggregatorMock is IChainlinkAggregator {
     int256 public mockAnswer;
     uint256 public mockUpdatedAt;
-    uint8 public constant DECIMALS = 8;
+    uint8 public mockDecimals = 8;
 
     constructor() {
         // Default: USDC pegged em $1 (8 decimais => 1e8) e atualizado agora.
@@ -30,8 +35,12 @@ contract ChainlinkAggregatorMock is IChainlinkAggregator {
         mockUpdatedAt = ts;
     }
 
-    function decimals() external pure returns (uint8) {
-        return DECIMALS;
+    function setDecimals(uint8 decimals_) external {
+        mockDecimals = decimals_;
+    }
+
+    function decimals() external view returns (uint8) {
+        return mockDecimals;
     }
 
     function latestRoundData()

@@ -74,15 +74,19 @@ Two distinct notions coexist in `ProjectRegistry`:
 
 The 25% penalty is applied in RewardDistributor using `REGISTRY.isInProbation(projectId)` at claim time. Does not apply to the punitive one (which is already blocked by `isActive = false` in stake/pay).
 
-## 95/0/5 split — why 0 to treasury
+## 70/20/10 default split — the Phase 0 treasury capture
 
-Design decision: default does **not** capture a slice for the Treasury. Reasons:
+The `FeeRouter`'s `defaultSplit` is **not** hardcoded in the contract: it is set at deploy from `burnBps/treasuryBps/rebateBps` in `ignition/parameters/production.json` (the constructor receives `{ burnBps, treasuryBps, rebateBps }`). From CLP Phase 0 onward, the deploy defaults are **`(7000, 2000, 1000)`** — 70% burn / 20% treasury / 10% rebate (the same in `dev.json` and the inline defaults in `Dao.ts`).
 
-- **Preserve burn incentive.** Each cent directed to the Treasury is one cent less burned. The deflationary model depends on maximum possible burn.
-- **Treasury has other sources.** Genesis mint (10M CREDIT), slash of removed projects, future buyback, explicit slice in specific projects via `setProjectSplit`.
-- **Avoid double capture.** If the default already gave 5% to the Treasury, override proposals would have to "zero" to give anything to the app — worse UX than the inverse.
+The `FeeRouter.sol` NatSpec still describes the historical 95/0/5 split as the original intent; the **effective default on a fresh deploy is 70/20/10**. The change was made to give the Treasury a recurring source of CREDIT (the CREDIT side of the POL refill and the DAO buffer), without depending solely on external bootstrap.
 
-If in the future the DAO wants to capture directly, it just `setDefaultSplit({burnBps: 9000, treasuryBps: 500, rebateBps: 500})`. Does not require contract change.
+Design tension that Phase 0 balances:
+
+- **Burn incentive.** Each bps directed to the Treasury is one bps less burned. That is why burn still dominates (70%).
+- **Treasury has other sources.** Genesis mint (10M CREDIT), slash of removed projects, buyback, an explicit per-project slice via `setProjectSplit`, and now the recurring 20%.
+- **`treasuryBps` is CREDIT, not USDC.** Important for the POL refill (`Treasury.addPOLFromRefill`): the 20% feeds the **CREDIT side** of the Treasury; the USDC side comes from external bootstrap + `collectPOLFees` (see [Treasury](../08-contracts-reference/04-Treasury.md)).
+
+The DAO can readjust at any time via `setDefaultSplit({burnBps: ..., treasuryBps: ..., rebateBps: ...})` — no contract change required.
 
 ## Dust handling in split
 
@@ -108,7 +112,7 @@ The current choice preserves `burned + toTreasury + toApp == amount` always.
 - **Forces the caller to pass 24 values** (dynamic array would require an additional check).
 - **Immutable post-deploy**: no write function exposes change.
 
-In production, linear decay:
+In production, linear decay over 24 rounds, from 400,000 (`floor[0]`) to 16,666.67 (`floor[23]`) — an arithmetic series with step `400_000 / 24 = 16_666.666...`:
 
 ```
 floor[R] = 400_000e18 - R * (400_000/24 * 1e18)
@@ -121,7 +125,9 @@ Adjusted for 1e18-precision values:
 - ...
 - `floor[23] = 16_666.666666666666666682`
 
-Sum is ~5.2M CREDIT — well below the 10M genesis. Not a closed budget, a safety net.
+The arithmetic-series sum is `(400_000 + 16_666.666...) / 2 * 24 = 5_000_000` CREDIT **exactly** — the individual values carry a few wei of rounding dust, so the real sum is `5_000_000.000000000000000184` (5M + 184 wei across 24 entries). Well below the 10M genesis. Not a closed budget, a safety net.
+
+Matches `floorSchedule` in `ignition/parameters/production.json` (and `dev.json`) — 24 identical entries.
 
 ## CEI + ReentrancyGuard — double pattern
 

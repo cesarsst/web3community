@@ -5,7 +5,7 @@
 
 ## Visión rápida
 
-Interfaz única de pago entre usuarios y apps. Todo consumo de CREDIT pasa por `pay`, que divide en tres destinos (burn / treasury / rebate) según el split configurable. Default producción: `95/0/5`.
+Interfaz única de pago entre usuarios y apps. Todo consumo de CREDIT pasa por `pay`, que divide en tres destinos (burn / treasury / rebate) según el split configurable. Default de deploy en producción (Fase 0 del CLP): `(7000, 2000, 1000)` = 70% burn / 20% treasury / 10% rebate. El `defaultSplit` viene de los parámetros de deploy (`production.json`), no está hardcodeado — la NatSpec del `.sol` aún cita el valor histórico 95/0/5.
 
 `pay` es público — cualquier dirección puede iniciar, siempre que `user` haya aprobado al FeeRouter. El payer económico es siempre `user`; `msg.sender` es el iniciador de la tx.
 
@@ -27,7 +27,7 @@ Usa `SafeERC20`.
 | `BURN_TRACKER` | immutable | BurnTracker |
 | `REGISTRY` | immutable | ProjectRegistry |
 | `TREASURY` | immutable | Treasury |
-| `defaultSplit` | `Split` | producción: `(9500, 0, 500)` |
+| `defaultSplit` | `Split` | deploy producción: `(7000, 2000, 1000)` (seteado vía constructor a partir de `production.json`) |
 | `projectSplit` | mapping | override por proyecto |
 | `hasProjectSplit` | mapping | flag de override |
 | `appRecipient` | mapping | override explícito; 0 = owner dinámico |

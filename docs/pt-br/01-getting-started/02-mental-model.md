@@ -49,6 +49,8 @@ Quando você staka GOV, você **escolhe um projeto**. Seu peso de voto no reward
                 * (seu_peso / peso_total_no_ChatApp)
 ```
 
+(Nuance do V2 em produção: a base de `emissao_rodada` para stakers é a **fatia stakers** da emissão — 55% no default do `RewardDistributorV2`, que divide a emissão em 4 buckets. Ver [Rewards distribution](../02-core-concepts/04-rewards-distribution.md).)
+
 **Consequência prática**: você precisa escolher projetos. A seleção ativa é parte do modelo — não é passivo. Ser staker aqui é como ser um "curador de apps": você aloca capital onde acha que vai gerar uso.
 
 Referência: [Directed staking](../02-core-concepts/02-directed-staking.md). Contrato: [Staking](../08-contracts-reference/05-Staking.md).
@@ -79,9 +81,9 @@ Referência: [Burn-to-mint](../02-core-concepts/03-burn-to-mint.md). Contrato: [
 Nenhuma função privilegiada dos contratos econômicos aceita chamada direta. Todas exigem `GOVERNANCE_ROLE`, que em produção só o [`CommunityTimelock`](../08-contracts-reference/09-CommunityTimelock.md) detém. E o Timelock só executa o que foi antes aprovado pelo [`CommunityGovernor`](../08-contracts-reference/10-CommunityGovernor.md) e esperou o delay (em produção, 172800 segundos = 2 dias).
 
 ```
-  Alice propoe      Delay 1d      Votacao 7d      Fila timelock    Delay 2d      Execucao
-  (precisa de  ->  (anti-MEV)  -> (quorum 4%,  -> (enfileira no -> (tempo de  -> (qualquer
-   10k GOV                         >= 50% For)   timelock)        resposta)     um clica)
+  Alice propoe      Delay 1d      Votacao 7d       Fila timelock    Delay 2d      Execucao
+  (precisa de  ->  (anti-MEV)  -> (quorum 4%,   -> (enfileira no -> (tempo de  -> (qualquer
+   10k GOV                         For > Against)  timelock)        resposta)     um clica)
    delegados
    a si)
 ```

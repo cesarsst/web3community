@@ -9,7 +9,7 @@
 
 ### Risco: bug em contrato
 
-**Descrição**: um bug em qualquer um dos 12 contratos pode resultar em perda de fundos, falha de governança ou quebra de invariantes econômicas.
+**Descrição**: um bug em qualquer um dos 15 contratos de produção pode resultar em perda de fundos, falha de governança ou quebra de invariantes econômicas.
 
 **Mitigação**:
 
@@ -18,7 +18,7 @@
 - SafeERC20 / SafeCast em todas as conversões.
 - Custom errors em todos os reverts (economia de gas + mensagens claras).
 - Slither 0.11.5 como análise estática (`audit/slither/`). Sem findings high/medium no código do projeto no momento do deploy.
-- 462+ testes com 100% stmts coverage e 99.84% lines.
+- 858 testes (suite completa verde) com cobertura extensiva.
 - **Auditoria externa obrigatória antes de mainnet** (Trail of Bits, OpenZeppelin ou similar).
 
 **Risco residual**: bugs sutis que testes + análise estática não pegam. Auditoria externa reduz mas não elimina.
@@ -34,6 +34,8 @@
 - `timelockMinDelay = 2 dias` dá janela de resposta para holders verem proposta maliciosa e agirem.
 - `votingPeriod = 7 dias` permite discussão off-chain.
 - Execução é permissionless após delay — qualquer holder pode bloquear via proposta contrária antes da execução.
+- **Supermaioria de 75% on-chain** (`ProposalType.Supermajority` no `CommunityGovernor`): qualquer proposta contendo `Treasury.removePOL` — ou gestão de roles (`grantRole`/`revokeRole`/`renounceRole`) com target no Treasury ou no próprio Timelock — só passa com `forVotes >= 3 × againstVotes`. Fecha o vetor de drenar a liquidez protocolar (POL) por maioria simples, inclusive o bypass de re-autorizar roles.
+- **Segregação on-chain de saldos reservados no Treasury**: `transfer`/`batchTransfer`/`payRebates` de CREDIT não podem invadir `polRefillBucket + pendingGaugeRewards` (revertem com `TransferExceedsUnreservedCredit`), e depósitos nesses ledgers exigem lastro real em CREDIT (`DepositExceedsCreditBalance`). No `LiquidityGauge`, `governanceRescueRewards` é limitado ao saldo não-reservado (`totalVestingLocked` protege o vesting de usuários).
 
 **Risco residual**: se um ator acumulou muito GOV (via venda pública mal distribuída ou via compra agressiva em DEX), pode forçar propostas mesmo com quorum. A mitigação é **distribuição inicial bem feita** (via propostas da DAO escolhendo buckets adequadamente — ver [Tokenomics](01-tokenomics.md)).
 
@@ -82,7 +84,7 @@
 - Apps perdem `RECORDER_ROLE` (se tinham) via `revokeRole` quando o projeto vira `Probation` ou `Removed` — via proposta.
 - `isActive(projectId)` no `FeeRouter.pay` e `BurnTracker.burnAndRecord` bloqueia novos pagamentos assim que status muda.
 
-**Risco residual**: tempo entre o comprometimento e a execução da proposta (mínimo ~8 dias = votingDelay + period + minDelay). Durante esse tempo, usuários podem ainda pagar no projeto. Mitigação operacional: monitoramento ativo + propostas de emergência (meta-propostas com voto rápido via quorum reduzido não implementadas no v1, mas discutíveis em futuro).
+**Risco residual**: tempo entre o comprometimento e a execução da proposta (mínimo ~10 dias = votingDelay ~1d + votingPeriod ~7d + timelockMinDelay 2d). Durante esse tempo, usuários podem ainda pagar no projeto. Mitigação operacional: monitoramento ativo + propostas de emergência (meta-propostas com voto rápido via quorum reduzido não implementadas no v1, mas discutíveis em futuro).
 
 ### Risco: ETH travado indevidamente no Treasury
 
@@ -96,9 +98,9 @@
 
 **Descrição**: usuário recebe CREDIT como reward mas não consegue converter (baixa liquidez em DEX externa).
 
-**Mitigação**: **fora do protocolo**. A DAO pode aprovar uso do Treasury para seed de liquidez em DEX. O próprio bucket "10% liquidity" da distribuição inicial é para isso.
+**Mitigação**: o Treasury tem mecanismo on-chain de **POL (Protocol Owned Liquidity, Fase 1.2)**: `addPOL`/`addPOLFromRefill` provisionam liquidez CREDIT/USDC (Uniswap V3, range full) com a posição NFT custodiada no próprio Treasury; toda saída (`removePOL`) exige proposta com **supermaioria 75%** no Governor. Complementarmente, a DAO pode aprovar seed de liquidez adicional (o bucket "10% liquidity" da distribuição inicial de GOV é intenção para isso).
 
-**Risco residual**: se DEXs abandonarem o pool, usuários ficam presos ao CREDIT. Solução depende de ação da DAO + mercado externo.
+**Risco residual**: se a liquidez agregada (POL + externa) for rasa, usuários ficam presos ao CREDIT. Solução depende de ação da DAO + mercado externo.
 
 ## Riscos de operação
 
@@ -156,11 +158,19 @@
 
 **Mitigação**: diversificação de DEXs via ações da DAO. Não está implementado no v1.
 
-### Risco de oracle (aplicação futura)
+### Risco de oracle (buyback FFP)
 
-**Descrição**: quando integração DEX real do `executeBuyback` for implementada, haverá dependência de price oracle / TWAP / slippage protection.
+**Descrição**: `executeBuyback` é **real** (Fase 1.1 do pivot CLP): swap USDC → CREDIT via Uniswap V3 + queima imediata do CREDIT comprado. Depende do `CreditPriceOracle` (adapter imutável: TWAP da pool Uniswap V3 CREDIT/USDC + sanidade Chainlink USDC/USD). Oracle manipulado ou pool rasa podem induzir buyback a preço ruim.
 
-**Mitigação**: design detalhado será auditado antes da implementação. No v1, `executeBuyback` é stub — só emite evento, não executa swap.
+**Mitigação** (tudo on-chain, no `Treasury` e no adapter):
+
+- Preço é TWAP (janela default 30 min, bounds [5min, 2h]) — manipulação de spot instantâneo não basta.
+- Sanidade Chainlink USDC/USD: staleness máxima 6h + banda [0.99, 1.01] — depeg do USDC bloqueia buyback (`UsdcDepegDetected`).
+- Buyback só é elegível com spot abaixo do floor por >= `triggerDurationSecs` (default 24h) e é capado: 20% das reservas por evento, 30% do snapshot mensal (defaults; ajustáveis dentro de bounds).
+- `minCreditOut` (slippage) obrigatório; cada execução exige proposta DAO (GOVERNANCE_ROLE = Timelock).
+- Adapter sem owner/setters — trocar parâmetros de oracle exige novo deploy + `setPriceOracle` via proposta.
+
+**Risco residual**: manipulação sustentada de TWAP em pool com pouca liquidez ao longo da janela inteira. Mitigação operacional: POL (liquidez protocolar) profunda + monitoramento.
 
 ## Riscos para stakers especificamente
 
@@ -174,7 +184,7 @@
 - **Colateral lockado**: 10.000 GOV no Registry. Só volta com `removeProject` sem slash.
 - **Suspensão por governança**: `Probation` punitiva bloqueia operação (mas não queima colateral).
 - **Slash**: se má conduta comprovada, `removeProject(id, slash=true)` envia colateral para Treasury.
-- **Dependência do split**: 95% de cada pagamento é queimado. Você recebe 5% direto + (opcional, via stake) fatia da emissão.
+- **Dependência do split**: 70% de cada pagamento é queimado e 20% vai ao Treasury (split default Fase 0). Você recebe 10% direto + (opcional, via stake) fatia da emissão.
 - **Uso baixo**: se seu app não atrai usuários, burn do seu projeto é baixo, share da emissão também.
 
 ## Auditoria e bounty
@@ -188,7 +198,7 @@ Antes de mainnet:
 Status atual no repositório:
 
 - Slither sem findings high/medium no código do projeto.
-- Suite de testes 462+ testes com cobertura extensiva.
+- Suite de testes com 858 testes passando (0 falhas).
 - **Auditoria externa ainda não realizada** no momento desta doc.
 
 ## Resumo

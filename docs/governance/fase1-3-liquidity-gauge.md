@@ -121,6 +121,8 @@ Rollover (após `endTime`):
    `currentIncentiveHash`.
 2. **`governanceRescueRewards(treasury, refund)`** — opcional, se a
    governança quer reciclar o refund para a próxima rodada.
+   **Limitado ao saldo não-reservado** (ver nota abaixo): só resgata o
+   excedente sobre o CREDIT que lastreia vesting de usuários.
 3. **`notifyRewardAmount(poolId, newAmount, newDuration)`** — abre nova
    incentive. Stakers ativos da incentive antiga **continuam vestindo na
    antiga** até unstake; novos stakes vão para a nova.
@@ -177,7 +179,28 @@ imediatamente sem se preocupar com reward.
 - `unstake()`, `harvest()`, `emergencyUnstake()`, `notifyRewardAmount()`,
   `endIncentive()` e setters de governança seguem operacionais (IE10).
 
-### 6.4 Mudança de `vestingDuration`
+### 6.4 `governanceRescueRewards` limitado por `totalVestingLocked`
+
+`gauge.governanceRescueRewards(to, amount)` **não pode drenar o CREDIT que
+lastreia vesting de usuários on-chain**. O gauge mantém o acumulador
+`totalVestingLocked` (soma do CREDIT reservado por todas as
+`VestingPosition`s abertas, incrementado no `unstake` e decrementado no
+`harvest`). O rescue reverte com `RescueExceedsUnreserved(available,
+requested)` se `amount` exceder o saldo **não-reservado**:
+
+```text
+getUnreservedBalance() = max(balanceOf(gauge) - totalVestingLocked, 0)
+```
+
+Consequência: refunds de incentives encerradas (`endIncentive`) e rewards
+descartados por `emergencyUnstake` (que ficam no balance do gauge) **são**
+resgatáveis; o CREDIT que ainda pertence a vesting positions de usuários
+**não é**. Isso torna impossível a governança "confiscar" via rescue o
+CREDIT que um LP já tem direito adquirido a vestir — proteção estrutural,
+não apenas norma. Consulte `gauge.getUnreservedBalance()` antes de propor
+um rescue para saber o teto exato.
+
+### 6.5 Mudança de `vestingDuration`
 
 `gauge.setVestingDuration(newDur)`:
 

@@ -49,8 +49,10 @@ Pasos internos:
 4. Si `amount > 0`:
    - Marca `claimed[...][you] = true`.
    - Emite `Claimed`.
-   - Llama a `CREDIT.mint(you, amount, "rewardRound")`.
+   - Llama a `CREDIT.mint(you, amount, "rewardRoundV2:stakers")` (en el V1 legacy, tag `"rewardRound"`).
 5. Si `amount == 0`: no marca claimed, no acuña, retorna 0 (no-op silencioso).
+
+Lo que reclamas es tu porción del **bucket stakers** — 55% de la emisión de la ronda en el split default del V2. Los otros buckets (LPs 25%, apps 15%, bonders 5%) son push en el `finalizeRound` y no pasan por el `claim`.
 
 Esa semántica de `amount == 0` siendo no-op es intencional — si por algún motivo el cálculo retornó 0 pero puede cambiar, no "quemas" el slot de claim.
 
@@ -117,7 +119,7 @@ Por lo tanto, si stakeaste desde el inicio y el peso global es solo el tuyo, cap
 
 ### Bootstrap sin stake
 
-Si una ronda finaliza y `globalWeight == 0` en el snapshot, ningún claim funciona — `_projectShare` retorna 0 en todos los casos en el camino bootstrap. La emisión se calcula pero **no se acuña** (nadie para distribuir). CREDIT supply no cambia en esa ronda.
+Si una ronda finaliza y `globalWeight == 0` en el snapshot, ningún claim funciona — `_projectStakerShare` retorna 0 en todos los casos en el camino bootstrap. El bucket stakers se calcula pero **no se acuña** (nadie para distribuir). Los buckets LPs y bonders siguen siendo acuñados (push en el `finalizeRound`); apps no emite sin burn.
 
 ### Probation inicial durante el claim
 

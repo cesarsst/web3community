@@ -27,7 +27,7 @@ Você pode combinar as três. Muitos stakers também são usuários e votantes.
 2. Clica "pagar" — o app te direciona a assinar:
    - `CREDIT.approve(feeRouter, amount)` (uma única vez — aprova o gasto).
    - `FeeRouter.pay(projectId, you, amount)` (efetiva o pagamento).
-3. Você recebe o serviço do app. 95% do valor pago foi queimado, 5% foi para o app.
+3. Você recebe o serviço do app. Pelo split default (70/20/10): 70% do valor pago foi queimado, 20% foi para o Treasury e 10% foi para o app.
 
 **O que não é necessário:**
 

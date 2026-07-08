@@ -10,6 +10,9 @@ import {GovernorVotesQuorumFraction} from "@openzeppelin/contracts/governance/ex
 import {GovernorTimelockControl} from "@openzeppelin/contracts/governance/extensions/GovernorTimelockControl.sol";
 import {IVotes} from "@openzeppelin/contracts/governance/utils/IVotes.sol";
 import {TimelockController} from "@openzeppelin/contracts/governance/TimelockController.sol";
+import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol";
+
+import {Treasury} from "./Treasury.sol";
 
 /**
  * @title CommunityGovernor
@@ -72,6 +75,55 @@ import {TimelockController} from "@openzeppelin/contracts/governance/TimelockCon
  *      - {supportsInterface}: nao e necessario override composto aqui — no OZ
  *        5.0.2 apenas {Governor} define; deixamos como herdado.
  *
+ *      PROPOSAL TYPES (supermajoridade para remocao de POL):
+ *      A regra "remocoes >25% do POL exigem supermaioria 75%" (antes apenas
+ *      norma cultural, ver docs/governance/fase1-2-pol.md §5) e agora
+ *      enforced on-chain. {propose} escaneia targets+calldatas: qualquer call
+ *      com `target == TREASURY` e selector de {Treasury.removePOL} OU de
+ *      gestao de roles (grantRole/revokeRole/renounceRole, no TREASURY ou no
+ *      proprio Timelock — ver analise anti-bypass abaixo) marca a proposta
+ *      como {ProposalType.Supermajority}, e {_voteSucceeded} passa a
+ *      exigir `forVotes >= 3 * againstVotes` (For >= 75% dos votos decisivos
+ *      For/Against; Abstain fora da razao, coerente com o COUNTING_MODE do
+ *      {GovernorCountingSimple}).
+ *
+ *      Decisao de design — fracao ">25% do POL" NAO e mensuravel no momento
+ *      do propose: a liquidez da posicao POL muda entre propose e execute
+ *      (fees compostos, adds/removes intermediarios), entao qualquer check
+ *      proporcional no propose seria burlavel ou impreciso. Conservador por
+ *      design: TODA proposta contendo removePOL exige 75%, independente da
+ *      fracao removida.
+ *
+ *      Anti-bypass (por que chamadas aninhadas nao contornam a regra):
+ *      - O Timelock so executa exatamente os calldatas registrados na
+ *        proposta aprovada (hash de operacao cobre targets/values/calldatas);
+ *        nao ha como "injetar" um removePOL que nao foi escaneado no propose.
+ *      - {Treasury.removePOL} e gated por GOVERNANCE_ROLE, concedida em
+ *        producao APENAS ao Timelock — nenhum contrato intermediario chamado
+ *        pela proposta consegue reencaminhar a chamada ao Treasury.
+ *      - Vetor de re-autorizacao de roles (grantRole): em producao o
+ *        Timelock detem DEFAULT_ADMIN_ROLE do Treasury, entao uma proposta
+ *        poderia conceder GOVERNANCE_ROLE (ou DEFAULT_ADMIN_ROLE) do
+ *        Treasury a um terceiro que chamaria removePOL DIRETO, sem nova
+ *        votacao. Por isso o scan tambem marca como Supermajority QUALQUER
+ *        call de gestao de roles ({IAccessControl.grantRole},
+ *        {IAccessControl.revokeRole}, {IAccessControl.renounceRole}) com
+ *        target no TREASURY.
+ *      - Vetor equivalente no Timelock: conceder PROPOSER_ROLE do Timelock a
+ *        um terceiro permitiria agendar um removePOL fora do Governor (o
+ *        Timelock e o detentor da GOVERNANCE_ROLE do Treasury). O scan
+ *        portanto marca como Supermajority tambem calls de gestao de roles
+ *        com target no proprio Timelock ({timelock()}).
+ *      - Nested calls nao escapam: qualquer grantRole no Treasury/Timelock
+ *        exige `msg.sender` com a role admin correspondente (Timelock em
+ *        producao); um contrato intermediario chamado pela proposta nunca e
+ *        o Timelock, entao a indirecao falha no AccessControl.
+ *      - Batch misto: uma proposta que mistura removePOL (ou gestao de
+ *        roles do Treasury/Timelock) com outras calls e contaminada INTEIRA
+ *        pelo tipo Supermajority. Correto por design — caso contrario,
+ *        empacotar a call sensivel junto de calls populares seria exatamente
+ *        o vetor de diluicao do requisito de 75%.
+ *
  * @custom:security-contact security@web3community.example
  */
 contract CommunityGovernor is
@@ -82,6 +134,59 @@ contract CommunityGovernor is
     GovernorVotesQuorumFraction,
     GovernorTimelockControl
 {
+    // ------------------------------------------------------------------
+    // Proposal types — supermajoridade para remocao de POL
+    // ------------------------------------------------------------------
+
+    /// @notice Tipos de proposta reconhecidos por este Governor.
+    ///         - Standard: contagem padrao do {GovernorCountingSimple}
+    ///           (For > Against).
+    ///         - Supermajority: exige For >= 75% dos votos decisivos
+    ///           (`forVotes >= 3 * againstVotes`; Abstain fora da razao).
+    enum ProposalType {
+        Standard,
+        Supermajority
+    }
+
+    /// @notice Selector de {Treasury.removePOL}
+    ///         (`removePOL(uint128,uint256,uint256,uint256)` = 0x6a71d4b3).
+    ///         Derivado do proprio tipo {Treasury} — o compilador garante
+    ///         sincronia se a assinatura mudar em refactor futuro.
+    bytes4 public constant REMOVE_POL_SELECTOR = Treasury.removePOL.selector;
+
+    /// @notice Selector de {IAccessControl.grantRole}
+    ///         (`grantRole(bytes32,address)` = 0x2f2ff15d). Gestao de roles
+    ///         do Treasury/Timelock e vetor de bypass do gate de 75%
+    ///         (re-autorizar quem pode chamar removePOL) — ver NatSpec do
+    ///         contrato.
+    bytes4 public constant GRANT_ROLE_SELECTOR = IAccessControl.grantRole.selector;
+
+    /// @notice Selector de {IAccessControl.revokeRole}
+    ///         (`revokeRole(bytes32,address)` = 0xd547741f).
+    bytes4 public constant REVOKE_ROLE_SELECTOR = IAccessControl.revokeRole.selector;
+
+    /// @notice Selector de {IAccessControl.renounceRole}
+    ///         (`renounceRole(bytes32,address)` = 0x36568abe).
+    bytes4 public constant RENOUNCE_ROLE_SELECTOR = IAccessControl.renounceRole.selector;
+
+    /// @notice Endereco do {Treasury} cuja remocao de POL exige
+    ///         supermaioria. Imutavel — em deploy dev sem treasury pode ser
+    ///         `address(0)`, e nesse caso o scan de {propose} nunca marca
+    ///         proposta alguma como Supermajority.
+    address public immutable TREASURY;
+
+    /// @notice `true` se a proposta `proposalId` foi marcada como
+    ///         {ProposalType.Supermajority} no {propose} (contem ao menos
+    ///         uma call `TREASURY.removePOL`). Default `false` = Standard.
+    mapping(uint256 proposalId => bool requiresSupermajority) public proposalRequiresSupermajority;
+
+    /// @notice Emitido em todo {propose} com o tipo atribuido a proposta,
+    ///         para indexacao off-chain (subgraph/frontend sinalizam o
+    ///         requisito de 75% antes da votacao abrir).
+    /// @param proposalId Id da proposta (hashProposal).
+    /// @param proposalType Tipo atribuido ({ProposalType}).
+    event ProposalTypeSet(uint256 indexed proposalId, ProposalType proposalType);
+
     /**
      * @notice Cria o CommunityGovernor amarrado a um token ERC20Votes e a um
      *         Timelock. O nome "CommunityGovernor" trava o domain separator do
@@ -98,6 +203,10 @@ contract CommunityGovernor is
      *        ({GovernorVotesQuorumFraction._updateQuorumNumerator}).
      * @param token Token ERC20Votes fonte de voting power (GovernanceToken).
      * @param timelock Timelock que executa as propostas aprovadas.
+     * @param treasury Endereco do {Treasury} para o scan de removePOL em
+     *                 {propose}. `address(0)` e aceito (deploy dev sem
+     *                 treasury) — nesse caso nenhuma proposta e marcada como
+     *                 Supermajority.
      * @param initialVotingDelay Delay em blocos entre propor e abrir a votacao.
      * @param initialVotingPeriod Duracao da votacao em blocos (>0 obrigatorio).
      * @param initialProposalThreshold Minimo de voting power delegado para
@@ -108,6 +217,7 @@ contract CommunityGovernor is
     constructor(
         IVotes token,
         TimelockController timelock,
+        address treasury,
         uint48 initialVotingDelay,
         uint32 initialVotingPeriod,
         uint256 initialProposalThreshold,
@@ -118,7 +228,119 @@ contract CommunityGovernor is
         GovernorVotes(token)
         GovernorVotesQuorumFraction(initialQuorumNumerator)
         GovernorTimelockControl(timelock)
-    {}
+    {
+        TREASURY = treasury;
+    }
+
+    // ------------------------------------------------------------------
+    // Proposal types — propose scan + regra de contagem
+    // ------------------------------------------------------------------
+
+    /**
+     * @notice Cria uma proposta e classifica seu {ProposalType}. Se qualquer
+     *         call do batch tem `target == TREASURY` com selector de
+     *         {Treasury.removePOL} OU de gestao de roles
+     *         (grantRole/revokeRole/renounceRole), ou `target == timelock()`
+     *         com selector de gestao de roles, a proposta INTEIRA e marcada
+     *         como Supermajority (75%). Emite {ProposalTypeSet} sempre
+     *         (tambem para Standard), para indexacao off-chain.
+     * @dev Decisao de design: a fracao ">25% do POL" nao e mensuravel no
+     *      momento do propose (a liquidez da posicao muda entre propose e
+     *      execute), entao TODA proposta contendo removePOL exige 75% —
+     *      conservador por design. Gestao de roles do Treasury/Timelock
+     *      entra no mesmo gate porque re-autoriza quem pode chamar removePOL
+     *      (grant de GOVERNANCE_ROLE/DEFAULT_ADMIN_ROLE do Treasury, grant
+     *      de PROPOSER_ROLE do Timelock) — sem isso uma proposta de maioria
+     *      simples contornaria o requisito de 75%. Ver NatSpec do contrato
+     *      para a analise anti-bypass completa (timelock so executa os
+     *      calldatas da proposta; Treasury so aceita GOVERNANCE_ROLE =
+     *      timelock; nested calls falham no AccessControl; batch misto
+     *      contamina a proposta inteira).
+     *
+     *      O scan roda apos {Governor.propose} (threshold e validacoes OZ
+     *      primeiro); a marcacao e um effect interno sem interacao externa,
+     *      entao CEI e preservado. Com `TREASURY == address(0)` o scan e
+     *      pulado por completo (deploy dev sem treasury — nao ha POL a
+     *      proteger, e nenhum target legitimo e o endereco zero).
+     *
+     *      `calldatas[i].length >= 4` evita falso-positivo de conversao
+     *      `bytes4` sobre calldata curta (a conversao pad-a-zeros de
+     *      Solidity >=0.8.5 poderia casar um prefixo truncado).
+     */
+    function propose(
+        address[] memory targets,
+        uint256[] memory values,
+        bytes[] memory calldatas,
+        string memory description
+    ) public override returns (uint256) {
+        uint256 proposalId = super.propose(targets, values, calldatas, description);
+
+        ProposalType proposalType = ProposalType.Standard;
+        if (TREASURY != address(0)) {
+            address timelockAddr = timelock();
+            uint256 len = targets.length;
+            for (uint256 i = 0; i < len; ++i) {
+                if (calldatas[i].length < 4) {
+                    continue;
+                }
+                bytes4 selector = bytes4(calldatas[i]);
+                bool sensitiveTreasuryCall = targets[i] == TREASURY &&
+                    (selector == REMOVE_POL_SELECTOR || _isRoleManagementSelector(selector));
+                bool sensitiveTimelockCall = targets[i] == timelockAddr && _isRoleManagementSelector(selector);
+                if (sensitiveTreasuryCall || sensitiveTimelockCall) {
+                    proposalType = ProposalType.Supermajority;
+                    proposalRequiresSupermajority[proposalId] = true;
+                    break;
+                }
+            }
+        }
+
+        emit ProposalTypeSet(proposalId, proposalType);
+        return proposalId;
+    }
+
+    /**
+     * @dev `true` para os tres selectors de gestao de roles do
+     *      {IAccessControl} (grantRole/revokeRole/renounceRole). Usado pelo
+     *      scan de {propose} para fechar o vetor de re-autorizacao: alterar
+     *      quem detem roles no Treasury ou no Timelock muda quem pode chamar
+     *      {Treasury.removePOL}, entao exige a mesma supermaioria de 75%.
+     */
+    function _isRoleManagementSelector(bytes4 selector) internal pure returns (bool) {
+        return
+            selector == GRANT_ROLE_SELECTOR ||
+            selector == REVOKE_ROLE_SELECTOR ||
+            selector == RENOUNCE_ROLE_SELECTOR;
+    }
+
+    /**
+     * @notice Regra de sucesso da votacao. Para propostas Standard delega ao
+     *         {GovernorCountingSimple} (For > Against). Para Supermajority
+     *         exige `forVotes >= 3 * againstVotes` E `forVotes > 0`.
+     * @dev `forVotes >= 3 * againstVotes` equivale a
+     *      `forVotes / (forVotes + againstVotes) >= 75%` dos votos decisivos
+     *      — Abstain fica fora da razao, exatamente como no CountingSimple
+     *      (Abstain conta apenas para quorum). Threshold inclusivo: 75.0%
+     *      exatos passam.
+     *
+     *      `forVotes > 0` fecha o edge case de quorum atingido apenas com
+     *      Abstain: sem ele, `0 >= 3 * 0` tornaria a supermaioria MAIS fraca
+     *      que a maioria simples (que exige For > Against, falso em 0/0).
+     *
+     *      Overflow de `3 * againstVotes` e impossivel na pratica (voting
+     *      power limitado pelo cap de 100M GOV << 2^256/3); em cenario
+     *      degenerado a aritmetica checked do 0.8.x reverte em vez de
+     *      wrappear — fail-safe.
+     */
+    function _voteSucceeded(
+        uint256 proposalId
+    ) internal view override(Governor, GovernorCountingSimple) returns (bool) {
+        if (proposalRequiresSupermajority[proposalId]) {
+            (uint256 againstVotes, uint256 forVotes, ) = proposalVotes(proposalId);
+            return forVotes > 0 && forVotes >= 3 * againstVotes;
+        }
+        return super._voteSucceeded(proposalId);
+    }
 
     // ------------------------------------------------------------------
     // Overrides requeridos pela multipla heranca (Governor vs extensoes)

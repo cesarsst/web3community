@@ -51,6 +51,7 @@ Uses `SafeERC20`.
 | `pools[poolId]` | `PoolConfig` | Per-pool config |
 | `poolIdByAddress[pool]` | `uint256` | Reverse lookup (`0` = not whitelisted) |
 | `stakes[tokenId]` | `Stake` | Staked NFT state |
+| `totalVestingLocked` | `uint256` | Total CREDIT reserved for not-yet-claimed `VestingPosition`s. Segregates the balance: this portion belongs to users and CANNOT be drained via `governanceRescueRewards` |
 | `denylisted[account]` | `bool` | Anti self-dealing (D.9) |
 
 ### Struct `PoolConfig`
@@ -138,9 +139,9 @@ Closes the pool's CURRENT incentive (must be expired) and recovers the refund to
 
 #### `governanceRescueRewards(address to, uint256 amount)`
 
-Rescues orphan CREDIT in the gauge (refunds from closed incentives, forfeits from `emergencyUnstake`). `amount == type(uint256).max` transfers the entire balance.
+Rescues orphan CREDIT in the gauge (refunds from closed incentives, forfeits from `emergencyUnstake`). **On-chain segregation**: the rescue can NEVER consume CREDIT that backs not-yet-claimed `VestingPosition`s (`totalVestingLocked`) — only the surplus (`getUnreservedBalance()`). `amount == type(uint256).max` transfers the entire **unreserved** balance.
 
-- **Reverts**: `ZeroAddress`, `ZeroAmount`, `InsufficientBalance`.
+- **Reverts**: `ZeroAddress`, `ZeroAmount`, `InsufficientBalance(requested, available)`, `RescueExceedsUnreserved(available, requested)`.
 - **Events**: `RewardsRescued(to, amount)`.
 
 ### Reward notification (`REWARD_NOTIFIER_ROLE`)
@@ -194,6 +195,7 @@ Withdraws already-vested CREDIT. Compacts fully-claimed positions (anti-bloat). 
 - `vestedAmount(address user) -> (uint256 vested, uint256 claimable)` — sum across all positions.
 - `vestingCountOf(address user) -> uint256`.
 - `vestingAt(address user, uint256 index) -> VestingPosition`.
+- `getUnreservedBalance() -> uint256` — `max(balanceOf(gauge) - totalVestingLocked, 0)`. The only portion eligible for `governanceRescueRewards`.
 - `incentiveByHash(bytes32) -> IUniswapV3Staker.IncentiveKey` — useful off-chain.
 - `pendingRewardsAtStaker() -> uint256` — gauge's aggregate balance at the staker.
 
@@ -229,7 +231,8 @@ Withdraws already-vested CREDIT. Compacts fully-claimed positions (anti-bloat). 
 | `InvalidIncentiveDuration(requested)` | `< INCENTIVE_DURATION_MIN` |
 | `IncentiveNotExpired(hash, endsAt)` | `endIncentive` before `endTime` |
 | `IncentiveOverlap(poolId, currentHash)` | `notifyRewardAmount` with active incentive |
-| `InsufficientBalance(requested, available)` | Rescue exceeds balance |
+| `InsufficientBalance(requested, available)` | Rescue exceeds the gauge's total balance |
+| `RescueExceedsUnreserved(available, requested)` | Rescue exceeds the **unreserved** balance (`balance - totalVestingLocked`) — protects vesting on-chain |
 
 ## Invariants
 
@@ -237,6 +240,7 @@ Withdraws already-vested CREDIT. Compacts fully-claimed positions (anti-bloat). 
 - **IE10 (do not pause user)**: `pause` blocks ENTRY, not EXIT. `emergencyUnstake` is fail-safe always operational.
 - **D.4 14d linear vesting**: `harvest` partial. Exit before the end of vesting does NOT penalise already-created positions — vesting accumulates independently of whether the NFT is staked.
 - **D.9 anti self-dealing**: Treasury cannot stake (denylisted at bootstrap).
+- **On-chain vesting segregation**: `totalVestingLocked` (sum of `totalAmount - claimedAmount` across live positions) is untouchable by `governanceRescueRewards` — the rescue only reaches `getUnreservedBalance()`. `unstake` increments the reserve (via `_createVestingPosition`), `harvest` decrements it by the amount claimed; `emergencyUnstake` does NOT touch it (the forfeit becomes unreserved balance, previous positions preserved).
 
 ## Important notes
 

@@ -24,7 +24,8 @@ import CommunityDAOModule from "../../ignition/modules/Dao";
  *    Timelock, owner == Timelock.
  *  - Floor schedule armazenado no RewardDistributor reflete os 24 valores
  *    esperados (decay linear).
- *  - Default split do FeeRouter = 95/0/5.
+ *  - Default split do FeeRouter = 70/20/10 (Fase 0 do pivot CLP,
+ *    docs/governance/fase0-default-split.md).
  *  - Parametros economicos do Governor / BurnTracker / RewardDistributor
  *    refletem o perfil DEV (defaults).
  *  - End-to-end: propose via Governor -> queue -> execute apos delay -> efeito
@@ -395,12 +396,12 @@ describe("Ignition: CommunityDAO module", function () {
       expect(await distributor.capMax()).to.equal(DEV_CAPMAX);
     });
 
-    it("FeeRouter has 95/0/5 default split", async () => {
+    it("FeeRouter has 70/20/10 default split (Fase 0 do pivot CLP)", async () => {
       const { feeRouter } = await loadFixture(deployDaoFixture);
       const split = await feeRouter.defaultSplit();
-      expect(split.burnBps).to.equal(9500n);
-      expect(split.treasuryBps).to.equal(0n);
-      expect(split.rebateBps).to.equal(500n);
+      expect(split.burnBps).to.equal(7000n);
+      expect(split.treasuryBps).to.equal(2000n);
+      expect(split.rebateBps).to.equal(1000n);
     });
 
     it("BurnTracker has correct roundDuration and sanityCap (DEV defaults)", async () => {

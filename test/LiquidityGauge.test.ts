@@ -41,26 +41,31 @@ describe("LiquidityGauge — Fase 1.3 (CLP pivot)", function () {
   async function deployBaseFixture(creditFirst = true) {
     const [admin, governance, notifier, alice, bob, denied, other] = await ethers.getSigners();
 
-    // CREDIT real.
+    // CREDIT real + USDC mock (so para representar a outra ponta do par;
+    // gauge nao toca USDC). Iteracao para ordering, espelhando convencao
+    // dos outros testes. Redeploya AMBOS os tokens a cada tentativa: cada
+    // iteracao vira um coin flip ~50/50 independente do endereco sorteado
+    // — redeployar so o USDC deixava o loop condenado quando o CREDIT
+    // caia num endereco extremo (flakiness dependente do nonce global da
+    // full suite).
     const CreditToken = await ethers.getContractFactory("CreditToken");
-    const credit = await CreditToken.deploy("Web3Community Credit", "CREDIT", admin.address);
-    await credit.waitForDeployment();
-
-    // USDC mock (so para representar a outra ponta do par; gauge nao toca USDC).
-    // Iteracao para ordering, espelhando convencao dos outros testes.
     const ERC20Mock = await ethers.getContractFactory("ERC20Mock");
+    let credit: any = await CreditToken.deploy("Web3Community Credit", "CREDIT", admin.address);
+    await credit.waitForDeployment();
     let usdc: any = await ERC20Mock.deploy("Mock USDC", "USDC");
     await usdc.waitForDeployment();
-    const creditAddr = await credit.getAddress();
     let attempts = 0;
     let satisfied = false;
     while (attempts <= 200) {
+      const creditAddr = await credit.getAddress();
       const usdcAddr = await usdc.getAddress();
       const isCreditFirst = creditAddr.toLowerCase() < usdcAddr.toLowerCase();
       if (isCreditFirst === creditFirst) {
         satisfied = true;
         break;
       }
+      credit = await CreditToken.deploy("Web3Community Credit", "CREDIT", admin.address);
+      await credit.waitForDeployment();
       usdc = await ERC20Mock.deploy("Mock USDC", "USDC");
       await usdc.waitForDeployment();
       attempts++;

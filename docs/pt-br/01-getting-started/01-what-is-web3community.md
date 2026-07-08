@@ -36,7 +36,7 @@ Para entender a arquitetura, pense em três camadas que se sobrepõem.
 
 - **Camada política** é formada por [`CommunityGovernor`](../08-contracts-reference/10-CommunityGovernor.md) e [`CommunityTimelock`](../08-contracts-reference/09-CommunityTimelock.md). Toda decisão passa por proposta + voto + delay de 2 dias.
 - **Camada de estado** guarda os fatos: quem é dono de qual projeto ([`ProjectRegistry`](../08-contracts-reference/03-ProjectRegistry.md)), quanto de cada token está na tesouraria ([`Treasury`](../08-contracts-reference/04-Treasury.md)), quem stakou quanto em qual projeto ([`Staking`](../08-contracts-reference/05-Staking.md)), quanto foi queimado em cada rodada ([`BurnTracker`](../08-contracts-reference/06-BurnTracker.md)).
-- **Camada econômica** move valor. Usuários pagam em CREDIT através do [`FeeRouter`](../08-contracts-reference/08-FeeRouter.md) — 95% é queimado, 5% vai ao app. Stakers recebem CREDIT recém-emitido via [`RewardDistributor`](../08-contracts-reference/07-RewardDistributor.md), cuja fórmula amarra emissão futura ao burn passado.
+- **Camada econômica** move valor. Usuários pagam em CREDIT através do [`FeeRouter`](../08-contracts-reference/08-FeeRouter.md) — no split default de produção, 70% é queimado, 20% vai à tesouraria e 10% vai ao app. Stakers recebem CREDIT recém-emitido via [`RewardDistributor`](../08-contracts-reference/07-RewardDistributor.md), cuja fórmula amarra emissão futura ao burn passado.
 
 ## Os dois tokens em uma linha cada
 

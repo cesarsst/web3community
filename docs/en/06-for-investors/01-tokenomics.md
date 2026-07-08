@@ -159,7 +159,7 @@ In production, initial probation lasts 30 days. During that period, stakers in n
 | `maxBurnPerRoundPerProject` | BurnTracker | `[0, unlimited]` (0 = disables) | `10M * 1e18` |
 | `minCollateral` | ProjectRegistry | `> 0` | `10,000 GOV` |
 | `probationDuration` | ProjectRegistry | `> 0` | `30 days` |
-| `defaultSplit` | FeeRouter | sum = 10,000 bps | `(9500, 0, 500)` |
+| `defaultSplit` | FeeRouter | sum = 10,000 bps | `(7000, 2000, 1000)` — 70% burn / 20% treasury / 10% rebate (Phase 0) |
 | `votingDelay` | Governor | `> 0` blocks | `7200` (~1d) |
 | `votingPeriod` | Governor | `> 0` blocks | `50400` (~7d) |
 | `proposalThreshold` | Governor | `>= 0` GOV | `10,000 GOV` |

@@ -47,17 +47,21 @@ Pivote económico de abril/2026 (parecer `audit/economist/2026-04-24-clp-pivot.m
 
 Token utilitario ERC-20 quemable del protocolo. Supply elástico. Usado para pagar dentro de las apps del ecosistema. Minteado como reward para stakers (lazy, vía claim) y como push directo para LPs/apps/bonders por `RewardDistributorV2`. Ver [CreditToken](../08-contracts-reference/02-CreditToken.md).
 
+## CreditPriceOracle
+
+Adapter de producción del `ICreditPriceOracle` (`contracts/CreditPriceOracle.sol`). Deriva el TWAP del CREDIT en USD (18 decimales) del pool Uniswap V3 CREDIT/USDC y convierte USDC → USD vía feed Chainlink USDC/USD (staleness máxima 6h, banda de sanidad fija `[9900, 10100]` bps). Direcciones inmutables, seteadas en el constructor. Es la fuente de precio del `Treasury` en el FFP (`peekTwapPrice`).
+
 ## DAO (Decentralized Autonomous Organization)
 
 Aquí: el conjunto `CommunityGovernor` + `CommunityTimelock`, que juntos controlan **todos** los contratos económicos del protocolo en producción.
 
 ## FFP (Floating con Floor Price)
 
-Modelo de defensa de precio del CREDIT (Fase 1.1 CLP). El spot es libre por encima del floor; cuando spot < floor por >= 24h, la gobernanza puede proponer `Treasury.executeBuyback(usdcAmount, minCreditOut)` que ejecuta swap USDC->CREDIT vía Uniswap V3 y **quema** el CREDIT comprado inmediatamente. Floor calculado como `max(floorMultiplierBps × MA90 / 10000, floorAbsoluteUsd)` — default `max(0.50 × MA90, $0.10)`. Caps por evento (20%) y mensual (30%) sobre las reservas USDC del Treasury. Ver [Treasury](../08-contracts-reference/04-Treasury.md).
+Modelo de defensa de precio del CREDIT (Fase 1.1 CLP). El spot es libre por encima del floor (leído del `CreditPriceOracle` en producción); cuando spot < floor por >= 24h, la gobernanza puede proponer `Treasury.executeBuyback(usdcAmount, minCreditOut)` que ejecuta swap USDC->CREDIT vía Uniswap V3 y **quema** el CREDIT comprado inmediatamente. Floor calculado como `max(floorMultiplierBps × MA90 / 10000, floorAbsoluteUsd)` — default `max(0.50 × MA90, $0.10)`. Caps por evento (20%) y mensual (30%) sobre las reservas USDC del Treasury. Ver [Treasury](../08-contracts-reference/04-Treasury.md).
 
 ## FeeRouter
 
-Contrato que recibe pagos en CREDIT de los usuarios, divide según `split` (default 95% burn / 0% treasury / 5% rebate a la app) y dirige cada porción a su destino. Ver [FeeRouter](../08-contracts-reference/08-FeeRouter.md).
+Contrato que recibe pagos en CREDIT de los usuarios, divide según `split` (default de producción 70% burn / 20% treasury / 10% rebate a la app) y dirige cada porción a su destino. Ver [FeeRouter](../08-contracts-reference/08-FeeRouter.md).
 
 ## Finalize (de ronda)
 
@@ -144,7 +148,7 @@ Bloque de referencia para calcular voting power de una propuesta. `Governor` usa
 
 ## Split
 
-Configuración `(burnBps, treasuryBps, rebateBps)` en el `FeeRouter` que suma exactamente 10_000 bps = 100%. Default global 9500/0/500. Puede ser sobrescrito por proyecto vía `setProjectSplit` (gobernanza) o por destinatario vía `setAppRecipient` (sólo owner del proyecto, para el destino del rebate).
+Configuración `(burnBps, treasuryBps, rebateBps)` en el `FeeRouter` que suma exactamente 10_000 bps = 100%. Default global en producción: 7000/2000/1000 (`ignition/parameters/production.json`). Puede ser sobrescrito por proyecto vía `setProjectSplit` (gobernanza) o por destinatario vía `setAppRecipient` (sólo owner del proyecto, para el destino del rebate).
 
 ## Staking (direccionado)
 

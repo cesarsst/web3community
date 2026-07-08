@@ -5,9 +5,9 @@
 
 ## Visión rápida
 
-Token ERC-20 utilitario, quemado en el consumo dentro de los apps. Supply elástico sin cap hardcodeado — la inflación es controlada económicamente por el `RewardDistributor` (único holder de `MINTER_ROLE` en producción), que aplica la fórmula `min(max(alpha*burn, floor), capMax)` por ronda.
+Token ERC-20 utilitario, quemado en el consumo dentro de los apps. Supply elástico sin cap hardcodeado — la inflación es controlada económicamente por quien tiene `MINTER_ROLE` (el `RewardDistributor` V1 y/o el `RewardDistributorV2` del CLP), que aplica la fórmula `min(max(alpha*burn, floor), capMax)` por ronda.
 
-Quema en tres caminos: `burn` (self), `burnFrom` (con allowance), `burnByRole` (sin allowance, role-gated). El camino `burnByRole` existe para habilitar burn atómico por el `BurnTracker` sin exigir approve previo del usuario (UX de 1 tx en la app).
+Quema en tres caminos: `burn` (self), `burnFrom` (con allowance), `burnByRole` (sin allowance, role-gated). El camino `burnByRole` existe para habilitar burn atómico por el `BurnTracker` (consumo en apps) y por el `Treasury` (FFP buyback — el CREDIT comprado se quema inmediatamente), sin exigir approve previo.
 
 ## Herencia
 
@@ -31,19 +31,21 @@ Sin cap hardcodeado.
 
 ## Roles y permisos
 
+`MINTER_ROLE` y `BURNER_ROLE` son **plurales** por diseño — la role puede ser concedida a más de una dirección conforme el protocolo evoluciona (V1 → V2 del CLP, migraciones).
+
 | Role | En producción concedido a |
 |---|---|
 | `DEFAULT_ADMIN_ROLE` | `CommunityTimelock` (tras handoff) |
-| `MINTER_ROLE` | `RewardDistributor` |
-| `BURNER_ROLE` | `BurnTracker` |
+| `MINTER_ROLE` | `RewardDistributor` (V1) y/o `RewardDistributorV2` (Fase 1.4); durante una migración V1→V2, ambos pueden tener la role transitoriamente |
+| `BURNER_ROLE` | `BurnTracker` (consumo en apps vía `burnAndRecord`) **y** `Treasury` (FFP buyback — `burnByRole(this, creditOut, "treasury:buyback")`) |
 
 ## Funciones externas
 
 ### `mintGenesis(address to, uint256 amount)`
 
-Acuñación única de "genesis" (en producción: 10M CREDIT al Treasury). Flag `genesisMinted` impide re-ejecución.
+Acuñación única de "genesis". El `amount` es **parámetro** (no hardcodeado en el contrato) — el script de deploy elige el número exacto; en producción viene de `genesisAmount` en `ignition/parameters/production.json` (`10_000_000e18` = 10M CREDIT al Treasury). El `to` también es parámetro (destinatario sin hardcode). Flag `genesisMinted` (one-shot) impide re-ejecución incluso por el admin.
 
-- **Quién llama**: `DEFAULT_ADMIN_ROLE`.
+- **Quién llama**: `DEFAULT_ADMIN_ROLE`. NO consume `MINTER_ROLE` — el camino del genesis es separado del operacional.
 - **Revierte**:
   - `GenesisAlreadyMinted` si ya se llamó.
   - `ZeroAddress` / `ZeroAmount`.
@@ -53,15 +55,15 @@ Acuñación única de "genesis" (en producción: 10M CREDIT al Treasury). Flag `
 
 Acuña `amount` para `to`. No aplica cap (responsabilidad del caller).
 
-- **Quién llama**: `MINTER_ROLE` (en producción, `RewardDistributor`).
+- **Quién llama**: `MINTER_ROLE` (en producción, `RewardDistributor` V1 y/o `RewardDistributorV2`).
 - **Revierte**: `ZeroAddress`, `ZeroAmount`.
 - **Eventos**: `Minted(to, amount, tag)` + `Transfer(0, to, amount)`.
 
 ### `burnByRole(address from, uint256 amount, string calldata tag)`
 
-Quema `amount` del saldo de `from` **sin** consumir allowance. Usado por el `BurnTracker` para quemar atómicamente en `burnAndRecord`.
+Quema `amount` del saldo de `from` **sin** consumir allowance. Usado por el `BurnTracker` para quemar atómicamente en `burnAndRecord`, y por el `Treasury` en el FFP buyback (`burnByRole(treasury, creditOut, "treasury:buyback")`).
 
-- **Quién llama**: `BURNER_ROLE` (en producción, `BurnTracker`).
+- **Quién llama**: `BURNER_ROLE` (en producción, `BurnTracker` y `Treasury`).
 - **Revierte**: `ZeroAddress`, `ZeroAmount`, `ERC20InsufficientBalance`.
 - **Eventos**: `BurnedByRole(operator, from, amount, tag)` + `Transfer(from, 0, amount)`.
 
@@ -92,9 +94,9 @@ Quema `amount` del saldo de `from` **sin** consumir allowance. Usado por el `Bur
 
 ## Invariantes
 
-- **Genesis one-shot**: `mintGenesis` solo se ejecuta una vez por lifetime del contrato.
-- **`MINTER_ROLE` gate**: `mint` exige role; en producción, solo `RewardDistributor`.
-- **`BURNER_ROLE` gate**: `burnByRole` exige role; en producción, solo `BurnTracker`.
+- **Genesis one-shot**: `mintGenesis` solo se ejecuta una vez por lifetime del contrato. `amount` y `to` son parámetros — sin hardcode.
+- **`MINTER_ROLE` gate**: `mint` exige role; en producción, `RewardDistributor` V1 y/o `RewardDistributorV2` (role plural, migración V1→V2 posible).
+- **`BURNER_ROLE` gate**: `burnByRole` exige role; en producción, `BurnTracker` (consumo en apps) y `Treasury` (buyback). Role plural, revocable por el admin.
 - **Supply elástico**: crece con `mint`/`mintGenesis`; cae con `burn`/`burnFrom`/`burnByRole`. Sin cap hardcodeado.
 - **CEI aplicado**: `burnByRole` es checks → effect (`_burn` nativo) → sin interaction externa. Sin callback en el `_burn`.
 

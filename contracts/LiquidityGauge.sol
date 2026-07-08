@@ -231,6 +231,23 @@ contract LiquidityGauge is AccessControl, ReentrancyGuard, Pausable, IERC721Rece
     ///         (acumulacao em cada {unstake}).
     mapping(address user => VestingPosition[] positions) private _vestings;
 
+    /// @notice Total de CREDIT reservado para {VestingPosition}s ainda nao
+    ///         sacadas (soma de `totalAmount - claimedAmount` de todas as
+    ///         positions vivas). Segrega o saldo do gauge: a parcela
+    ///         `totalVestingLocked` pertence aos usuarios e NAO pode ser
+    ///         drenada via {governanceRescueRewards}.
+    /// @dev Contabilidade por caminho:
+    ///      - {unstake}: incrementa pelo valor total da position criada
+    ///        (dentro de {_createVestingPosition}).
+    ///      - {harvest}: decrementa pelo valor efetivamente sacado.
+    ///      - {emergencyUnstake}: NAO mexe — nenhuma position e criada
+    ///        (forfeit vira saldo nao-reservado) e positions previas sao
+    ///        preservadas intactas.
+    ///      - Compactacao swap-and-pop em {harvest}: NAO mexe — so remove
+    ///        positions com `claimedAmount == totalAmount` (nada nao-sacado
+    ///        e descartado), logo o decremento via harvest ja cobriu tudo.
+    uint256 public totalVestingLocked;
+
     // ------------------------------------------------------------------
     // Storage — denylist (D.9)
     // ------------------------------------------------------------------
@@ -360,6 +377,13 @@ contract LiquidityGauge is AccessControl, ReentrancyGuard, Pausable, IERC721Rece
     /// @param requested Quantia pedida.
     /// @param available Saldo do gauge.
     error InsufficientBalance(uint256 requested, uint256 available);
+
+    /// @notice Resgate de governance excede o saldo nao-reservado — a
+    ///         diferenca entre o balance de CREDIT do gauge e
+    ///         {totalVestingLocked} (CREDIT que lastreia vesting de usuarios).
+    /// @param available Saldo nao-reservado disponivel.
+    /// @param requested Quantia pedida.
+    error RescueExceedsUnreserved(uint256 available, uint256 requested);
 
     /// @notice Incentive duration fora dos limites permitidos.
     /// @param requested Duracao pedida (seg).
@@ -596,18 +620,25 @@ contract LiquidityGauge is AccessControl, ReentrancyGuard, Pausable, IERC721Rece
      *         OU rewards forfeit em {emergencyUnstake} ja claimados). Para o
      *         destinatario indicado.
      * @dev `onlyRole(GOVERNANCE_ROLE)`. Use com criterio — em producao
-     *      destinatario deve ser o Treasury.
+     *      destinatario deve ser o Treasury. Segregacao on-chain: o resgate
+     *      NUNCA pode consumir CREDIT que lastreia {VestingPosition}s nao
+     *      sacadas ({totalVestingLocked}) — apenas o excedente
+     *      ({getUnreservedBalance}); caso contrario reverte com
+     *      {RescueExceedsUnreserved}.
      * @param to Destinatario.
      * @param amount Quantidade. Se `amount == type(uint256).max`, transfere
-     *               todo o saldo de CREDIT do gauge.
+     *               todo o saldo NAO-reservado de CREDIT do gauge.
      */
     function governanceRescueRewards(address to, uint256 amount) external onlyRole(GOVERNANCE_ROLE) nonReentrant {
         if (to == address(0)) revert ZeroAddress();
         if (amount == 0) revert ZeroAmount();
         uint256 balance = CREDIT_TOKEN.balanceOf(address(this));
-        uint256 transferAmount = amount == type(uint256).max ? balance : amount;
+        uint256 locked = totalVestingLocked;
+        uint256 unreserved = balance > locked ? balance - locked : 0;
+        uint256 transferAmount = amount == type(uint256).max ? unreserved : amount;
         if (transferAmount == 0) revert ZeroAmount();
         if (transferAmount > balance) revert InsufficientBalance(transferAmount, balance);
+        if (transferAmount > unreserved) revert RescueExceedsUnreserved(unreserved, transferAmount);
         CREDIT_TOKEN.safeTransfer(to, transferAmount);
         emit RewardsRescued(to, transferAmount);
     }
@@ -797,6 +828,7 @@ contract LiquidityGauge is AccessControl, ReentrancyGuard, Pausable, IERC721Rece
         }
 
         if (claimed > 0) {
+            totalVestingLocked -= claimed; // effects antes da interaction: libera a reserva sacada
             CREDIT_TOKEN.safeTransfer(user, claimed);
         }
 
@@ -855,6 +887,19 @@ contract LiquidityGauge is AccessControl, ReentrancyGuard, Pausable, IERC721Rece
     }
 
     /**
+     * @notice Saldo de CREDIT do gauge NAO reservado para vesting de
+     *         usuarios — a unica parcela elegivel para
+     *         {governanceRescueRewards}. Operacionalmente:
+     *         `max(balanceOf(gauge) - totalVestingLocked, 0)`.
+     * @return unreserved Saldo nao-reservado atual.
+     */
+    function getUnreservedBalance() external view returns (uint256 unreserved) {
+        uint256 balance = CREDIT_TOKEN.balanceOf(address(this));
+        uint256 locked = totalVestingLocked;
+        return balance > locked ? balance - locked : 0;
+    }
+
+    /**
      * @notice Rewards atualmente acumulados no staker para `(CREDIT, address(this))`.
      *         Util para diagnostico e off-chain dashboards. NAO equivale a
      *         "rewards do tokenId" individualmente — o staker contabiliza
@@ -902,10 +947,13 @@ contract LiquidityGauge is AccessControl, ReentrancyGuard, Pausable, IERC721Rece
     }
 
     /// @dev Cria uma nova {VestingPosition} com `vestingDuration` corrente.
-    ///      `amount > 0` ja garantido pelos callers.
+    ///      `amount > 0` ja garantido pelos callers. Incrementa
+    ///      {totalVestingLocked} — o CREDIT correspondente passa a ser
+    ///      reservado e fora do alcance de {governanceRescueRewards}.
     function _createVestingPosition(address user, uint256 amount) internal {
         uint64 startedAt = uint64(block.timestamp);
         uint64 endsAt = startedAt + vestingDuration;
+        totalVestingLocked += amount;
         _vestings[user].push(
             VestingPosition({totalAmount: amount, claimedAmount: 0, startedAt: startedAt, endsAt: endsAt})
         );

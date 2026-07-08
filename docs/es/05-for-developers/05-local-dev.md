@@ -17,7 +17,7 @@ npm install
 # Compilar
 npx hardhat compile
 
-# Correr toda la suite de tests (462+ tests)
+# Correr toda la suite de tests (858 tests)
 npm test
 
 # Coverage
@@ -56,7 +56,19 @@ El archivo `dev.json` tiene defaults para desarrollo (delays cortos, quorum bajo
 - `minCollateral: 1000 GOV` (en vez de 10k en producción)
 - `probationDuration: 86400` (1 día en vez de 30d)
 
-Los otros parámetros económicos (`alpha`, `capMax`, `floorSchedule`, split) son iguales a producción.
+Los parámetros económicos `alpha`, `floorSchedule` y el split del FeeRouter (`7000/2000/1000` = 70% burn / 20% treasury / 10% rebate) son iguales a producción. En cambio `capMax` (1M en dev vs 5M en producción) y `sanityCap` (1M vs 10M) están reducidos en dev.
+
+Deploys opcionales de la Fase 1 del pivote CLP (apagados por default) vía env vars antes del comando de deploy:
+
+```bash
+# LiquidityGauge + RewardDistributorV2
+DEPLOY_CLP_PHASE1=true npx hardhat ignition deploy ./ignition/modules/Dao.ts ...
+
+# CreditPriceOracle (exige pool CREDIT/USDC y USDC reales en los parámetros)
+DEPLOY_CLP_ORACLE=true npx hardhat ignition deploy ./ignition/modules/Dao.ts ...
+```
+
+El módulo no concede ninguna role a esos contratos — el wiring de roles es acto de gobernanza.
 
 ## Direcciones post-deploy
 

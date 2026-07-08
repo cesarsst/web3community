@@ -7,7 +7,7 @@
 
 ### What is web3community?
 
-A multi-app platform governed by a DAO. Apps accept CREDIT as payment; 95% of the payment is burned, 5% goes to the app. GOV stakers in specific projects receive CREDIT emitted in the next round as a function of total burn. Detail in [What is](../01-getting-started/01-what-is-web3community.md).
+A multi-app platform governed by a DAO. Apps accept CREDIT as payment; the deploy default split is 70% burned / 20% treasury / 10% app (CLP Phase 0, adjustable by proposal). GOV stakers in specific projects receive CREDIT emitted in the next round as a function of total burn. Detail in [What is](../01-getting-started/01-what-is-web3community.md).
 
 ### What is the difference between GOV and CREDIT?
 
@@ -15,7 +15,7 @@ GOV is governance (fixed supply 100M, votes). CREDIT is utility (elastic supply,
 
 ### Where are the contracts?
 
-12 production contracts in `contracts/*.sol`. Individual reference in [08-contracts-reference](../08-contracts-reference/). On-chain addresses in [Contract addresses](../05-for-developers/02-contract-addresses.md).
+15 production contracts in `contracts/*.sol` (includes CLP pivot Phase 1: `LiquidityGauge`, `RewardDistributorV2` and `CreditPriceOracle`). Individual reference in [08-contracts-reference](../08-contracts-reference/). On-chain addresses in [Contract addresses](../05-for-developers/02-contract-addresses.md).
 
 ### Which network is running?
 
@@ -57,6 +57,10 @@ Detail in [Voting on proposals](../04-for-users/04-voting.md).
 ### What if the protocol dies?
 
 If usage drops to near zero, emission collapses, APR goes to near zero, stakers leave. The DAO can intervene (adjust α, open subsidy via Treasury, onboard new apps). But tokenomics does not save a bad product.
+
+### Is the CREDIT buyback real or "future"?
+
+**Real.** Since CLP Phase 1.1, `Treasury.executeBuyback` does the USDC → CREDIT swap via Uniswap V3 and immediately burns the bought CREDIT, defending the floor price (FFP model). The price comes from a real oracle (`CreditPriceOracle`, Uniswap V3 CREDIT/USDC TWAP + Chainlink USDC/USD sanity), set via `setPriceOracle`. Each buyback requires an approved DAO proposal (it is `GOVERNANCE_ROLE` = Timelock) and passes per-event (20%) and monthly (30%) caps over the USDC reserves. Detail in [Treasury](../08-contracts-reference/04-Treasury.md) and [CreditPriceOracle](../08-contracts-reference/14-CreditPriceOracle.md).
 
 ## Staking
 
@@ -122,7 +126,7 @@ Detail in [Submitting a project](../05-for-developers/03-submitting-a-project.md
 
 ### How much do I receive per payment?
 
-5% by default. Adjustable per project via proposal (`setProjectSplit`).
+10% by default (rebate) in the Phase 0 deploy split (`(7000, 2000, 1000)` = 70% burn / 20% treasury / 10% app). Adjustable per project via proposal (`setProjectSplit`).
 
 ### If I stake in my own project, do I earn more?
 
@@ -172,7 +176,7 @@ Yes. `gov.delegate(trustedAddress)` transfers voting power to whom you trust. Yo
 
 ### Is there pause?
 
-**No.** Conscious decision — any pause would be a capture vector.
+**On the core economic contracts (Treasury, tokens, distributor), no** — a conscious decision, any treasury pause would be a capture vector. **Exception**: the `LiquidityGauge` (CLP Phase 1.3) is `Pausable`, but the pause blocks only the ENTRY of new stakes — `unstake`/`harvest` remain operational and `emergencyUnstake` is always fail-safe (invariant IE10, "do not pause the user"). The gauge's `pause`/`unpause` is `GOVERNANCE_ROLE` (Timelock).
 
 ### Is there a guardian multisig?
 

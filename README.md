@@ -2,13 +2,13 @@
 
 DAO dual-token para uma plataforma multi-aplicativos: governança on-chain, staking direcionado por projeto e um ciclo econômico sustentado pelo consumo real dentro dos apps do ecossistema.
 
-> **Status**: testes verdes (565, coverage 100% stmts/lines em contracts/) · slither sem findings high/medium · simulação econômica cobre 3 cenários · **pendências pré-mainnet listadas em §7; requer auditoria externa + distribuição inicial antes de produção**.
+> **Status**: testes verdes (858 passing, 0 failing) · slither sem findings high/medium · simulação econômica cobre 3 cenários · **pendências pré-mainnet listadas em §7; requer auditoria externa + distribuição inicial antes de produção**.
 
 ---
 
 ## 1. Como os contratos conversam entre si
 
-Pense no protocolo como um **organismo com 12 órgãos**, cada um com uma função clara. As setas mostram quem _chama_ quem:
+Pense no protocolo como um **organismo com 15 órgãos**, cada um com uma função clara. As setas mostram quem _chama_ quem (o diagrama traz o núcleo; os auxiliares e os contratos do pivot CLP estão nas caixas abaixo):
 
 ```
                        ┌─────────────────────────────┐
@@ -47,7 +47,7 @@ Pense no protocolo como um **organismo com 12 órgãos**, cada um com uma funç�
                                           │ burn
                    ┌──────────────────────┴───────────────────┐
                    │              FeeRouter                    │  (caixa)
-                   │   split: 95% burn / 5% app rebate        │
+                   │ split: 70% burn / 20% treasury / 10% reb. │
                    └──────────────────────────────────────────┘
 
      GovernanceToken (GOV) ← staked em Staking, votado no Governor
@@ -61,6 +61,21 @@ Pense no protocolo como um **organismo com 12 órgãos**, cada um com uma funç�
      |  UserSubsidy  — singleton. Campanhas Merkle (funded do       |
      |                 Treasury em CREDIT). Onboarding de           |
      |                 primeiros usuarios dos apps.                 |
+     |                                                              |
+     +--------------------------------------------------------------+
+
+     +-- CLP Fase 1 (deploy opcional via env vars) -----------------+
+     |                                                              |
+     |  LiquidityGauge      — rewards para LPs do par CREDIT/USDC   |
+     |                        (bucket LPs, 25% default), vesting    |
+     |                        de 14 dias. (DEPLOY_CLP_PHASE1)       |
+     |  RewardDistributorV2 — emissao dividida em 4 buckets         |
+     |                        55/25/15/5 (stakers/LPs/apps/bonders).|
+     |                        Minter-alvo do CREDIT; migracao       |
+     |                        V1 -> V2 com janela de ~4 rounds.     |
+     |  CreditPriceOracle   — TWAP Uniswap V3 CREDIT/USDC + sanity  |
+     |                        Chainlink USDC/USD (oracle do FFP     |
+     |                        do Treasury). (DEPLOY_CLP_ORACLE)     |
      |                                                              |
      +--------------------------------------------------------------+
 ```
@@ -115,6 +130,8 @@ Na prática: se Alice quer **adicionar o "ChatApp" ao Registry**, ela propõe `r
 - Ajustar α, capMax, floor, split de fees, duração de rodadas
 - Dar e tirar roles (ex.: promover um novo FeeRouter)
 
+**Trava extra (on-chain):** propostas contendo `Treasury.removePOL` — ou `grantRole`/`revokeRole`/`renounceRole` com target no Treasury ou no próprio Timelock — são marcadas como `Supermajority` no `propose` e só passam com **For ≥ 3× Against** (supermaioria de 75% dos votos decisivos; Abstain fora da razão). A "norma cultural" de proteção da POL virou código no `CommunityGovernor`.
+
 **O que a DAO NÃO controla:**
 
 - Supply cap do GOV (100M, hard-coded, imutável)
@@ -151,11 +168,13 @@ Tudo gira em torno desse fluxo:
          ▼
    [ FeeRouter ] ← recebe 1000 CREDIT
          │
-         ├── (3a) queima 950 via BurnTracker.burnAndRecord(chatAppId, router, 950)
-         │         → CREDIT.totalSupply cai em 950
-         │         → BurnTracker marca: "Chat App queimou 950 no round R"
+         ├── (3a) queima 700 via BurnTracker.burnAndRecord(chatAppId, router, 700)
+         │         → CREDIT.totalSupply cai em 700
+         │         → BurnTracker marca: "Chat App queimou 700 no round R"
          │
-         └── (3b) transfere 50 pro app owner (rebate — app captura valor)
+         ├── (3b) transfere 200 pro Treasury (receita recorrente da DAO, em CREDIT)
+         │
+         └── (3c) transfere 100 pro app owner (rebate — app captura valor)
 ```
 
 ### Os 4 agentes e como cada um ganha
@@ -167,9 +186,9 @@ Tudo gira em torno desse fluxo:
 | **Staker** (Alice)            | Trava GOV em projeto, suporta liquidez | Recebe **CREDIT recém-emitido** na próxima rodada                                                |
 | **Holder de GOV** (sem stake) | Participa da governança                | Pode ver **GOV valorizar** conforme uso cresce (apreciação, não yield direto)                    |
 
-### As 3 fontes de receita de um app
+### As 4 fontes de receita de um app
 
-Isolado, o rebate de 5% do split default parece desincentivador — nenhum app web2 aceitaria entregar 95% do preço nominal. **O modelo só fecha porque o app captura valor por três vetores simultâneos**, não por um. Olhar só pro vetor (A) leva à conclusão errada de que o ecossistema é predatório com apps.
+Isolado, o rebate de 10% do split default parece desincentivador — nenhum app web2 aceitaria entregar 90% do preço nominal. **O modelo só fecha porque o app captura valor por quatro vetores simultâneos**, não por um. Olhar só pro vetor (A) leva à conclusão errada de que o ecossistema é predatório com apps.
 
 ```
    [ Usuário Charlie paga 1000 CREDIT no Chat App via feeRouter.pay() ]
@@ -177,107 +196,127 @@ Isolado, o rebate de 5% do split default parece desincentivador — nenhum app w
                                ▼
    ┌──────────────────────────────────────────────────────────────────┐
    │                       FeeRouter.pay()                             │
-   │                     split 95 / 0 / 5 default                      │
-   └────────┬─────────────────────────────────────────┬────────────────┘
-            │ 950 CREDIT queimadas                    │ 50 CREDIT → appRecipient
-            │ (registradas como burn do Chat App)     │
-            ▼                                         ▼
-   ┌───────────────────────┐            ┌────────────────────────────┐
-   │  BurnTracker          │            │  (A) REBATE DIRETO          │
-   │  burn[R][chatAppId]   │            │  ──────────────────────────│
-   │      += 950           │            │  5% × cada pagamento        │
-   └──────────┬────────────┘            │  Pago em CREDIT, na hora.   │
-              │                          │  É o fluxo de caixa        │
-              │ alimenta                 │  operacional do app.       │
-              ▼                          └────────────────────────────┘
+   │                    split 70 / 20 / 10 default                     │
+   └────────┬──────────────────────┬──────────────────┬────────────────┘
+            │ 700 CREDIT queimadas │ 200 CREDIT →     │ 100 CREDIT → appRecipient
+            │ (registradas como    │ Treasury         │
+            │  burn do Chat App)   │ (receita da DAO) ▼
+            ▼                      ▼    ┌────────────────────────────┐
+   ┌───────────────────────┐            │  (A) REBATE DIRETO          │
+   │  BurnTracker          │            │  ──────────────────────────│
+   │  burn[R][chatAppId]   │            │  10% × cada pagamento       │
+   │      += 700           │            │  Pago em CREDIT, na hora.   │
+   └──────────┬────────────┘            │  É o fluxo de caixa        │
+              │                          │  operacional do app.       │
+              │ alimenta                 └────────────────────────────┘
+              ▼
    ┌──────────────────────────────────┐
-   │  RewardDistributor (próx. rodada)│
-   │  emissao_R = min(max(α·burn,     │
-   │                     floor), cap) │
-   │  project_share =                 │
-   │    emissao × burn[chatApp] /     │
-   │             burn_total           │
+   │ RewardDistributorV2 (próx. rodada)│
+   │ emissao_R = min(max(α·burn,      │
+   │                    floor), cap)  │
+   │ 4 buckets: 55% stakers / 25% LPs │
+   │            / 15% apps / 5% bond. │
    └──────────────┬───────────────────┘
-                  │ split por peso de stake dentro do projeto
+                  │
+                  │ bucket apps (15%): push retrospectivo, proporcional
+                  │ ao burn de cada projeto no round anterior
                   ▼
    ┌──────────────────────────────────────────────────────────────────┐
-   │  (B) EMISSÃO VIA STAKE NO PRÓPRIO PROJECTID                       │
+   │  (B) BUCKET APPS DA EMISSÃO                                       │
+   │  ────────────────────────────────────────────────────────────────│
+   │  15% da emissão de cada rodada é mintado direto para o           │
+   │  `ownerRecipient` de cada projeto, proporcional ao burn dele      │
+   │  no round anterior. Não exige stake nem claim — é receita         │
+   │  automática de quem gera uso real.                                │
+   └──────────────────────────────────────────────────────────────────┘
+
+                  │ bucket stakers (55%): project_share por burn,
+                  │ depois split por peso de stake dentro do projeto
+                  ▼
+   ┌──────────────────────────────────────────────────────────────────┐
+   │  (C) EMISSÃO VIA STAKE NO PRÓPRIO PROJECTID                       │
    │  ────────────────────────────────────────────────────────────────│
    │  Se o Chat App stakea X GOV direcionado ao próprio projectId,    │
-   │  ele recebe uma fatia de `project_share` proporcional ao seu     │
-   │  peso de stake (lock × multiplier) — exatamente como qualquer    │
-   │  outro staker. Como o próprio app é quem "move" o burn do        │
-   │  projeto, ele tem vantagem informacional pra dimensionar o       │
-   │  stake. Essa é a via que transforma os 5% em algo competitivo.    │
+   │  ele recebe uma fatia do `project_share` (do bucket stakers)     │
+   │  proporcional ao seu peso de stake (lock × multiplier) —          │
+   │  exatamente como qualquer outro staker. Como o próprio app é     │
+   │  quem "move" o burn do projeto, ele tem vantagem informacional   │
+   │  pra dimensionar o stake.                                         │
    └──────────────────────────────────────────────────────────────────┘
 
    Ao longo do tempo, em paralelo:
 
    ┌──────────────────────────────────────────────────────────────────┐
-   │  (C) APRECIAÇÃO DO CREDIT RETIDO                                  │
+   │  (D) APRECIAÇÃO DO CREDIT RETIDO                                  │
    │  ────────────────────────────────────────────────────────────────│
    │  α = 0.95 ⇒ emite-se 95% do que se queima. Supply cai com uso    │
    │  real do ecossistema (simulação 52 rounds: −3.8%).                │
    │  O estoque de CREDIT que o app não vendeu ainda (do rebate A     │
-   │  + rewards B) tende a valer mais em termos reais, desde que o    │
+   │  + buckets B/C) tende a valer mais em termos reais, desde que o  │
    │  produto dos apps continue gerando demanda stable de fora.        │
    └──────────────────────────────────────────────────────────────────┘
 ```
 
-**Exemplo numérico** (mesmos números da rodada de exemplo acima):
+**Exemplo numérico** (mesmos números da rodada de exemplo da seção seguinte):
 
-- Chat App movimentou 600k CREDIT de pagamentos no round R-1.
-- **(A)** Rebate direto: 5% × 600k = **30k CREDIT** no caixa do app, imediato.
-- **(B)** Stake: se o app stakeou 50k GOV com lock 1 ano (multiplier 4x → peso 200k de 400k de peso total no projeto), ele captura 50% do `project_share` do Chat App = 50% × 570k = **285k CREDIT** na rodada seguinte.
-- **(C)** Apreciação: os 30k + 285k retidos sofrem deflação de supply junto com o resto do CREDIT.
+- Usuários movimentaram 800k CREDIT de pagamentos no Chat App no round R-1 → burn registrado = 70% × 800k = 560k.
+- **(A)** Rebate direto: 10% × 800k = **80k CREDIT** no caixa do app, imediato.
+- **(B)** Bucket apps: emissão do round = 798.000 (cálculo abaixo); bucket apps = 15% × 798.000 = 119.700; fatia do Chat App = 119.700 × (560k/840k) = **79.800 CREDIT**, push automático no `finalizeRound`.
+- **(C)** Stake: bucket stakers = 55% × 798.000 = 438.900; `project_share` do Chat App = 438.900 × (560k/840k) = 292.600. Se o app stakeou 50k GOV com lock 1 ano (multiplier 4x → peso 200k de 400k de peso total no projeto), ele captura 50% × 292.600 = **146.300 CREDIT** na rodada seguinte.
+- **(D)** Apreciação: os 80k + 79,8k + 146,3k retidos sofrem deflação de supply junto com o resto do CREDIT.
 
-Somando (A)+(B), o app captura `30k + 285k = 315k` de um volume bruto de 600k — **~52% efetivo**, não 5%. É essa matemática que o pitch para apps precisa explicitar, porque o split nominal do `FeeRouter` sozinho conta uma história enganosa.
+Somando (A)+(B)+(C), o app captura `80.000 + 79.800 + 146.300 = 306.100` de um volume bruto de 800k — **~38% efetivo**, não 10%. É essa matemática que o pitch para apps precisa explicitar, porque o split nominal do `FeeRouter` sozinho conta uma história enganosa.
 
-**Pré-requisitos para (B) fechar a conta:**
+**Pré-requisitos para (C) fechar a conta:**
 
 - O app precisa adquirir GOV (compra em DEX ou participação em rodadas de distribuição da DAO).
 - O app precisa aceitar o lock do Staking (14–365 dias) — é capital imobilizado.
 - O peso do stake do app relativo ao stake total _no seu projeto_ define a captura. Se outros stakers entrarem com muito peso no mesmo projectId, a fatia do app dilui.
 
-**Quando (B) não fecha** (app sem caixa pra comprar GOV, ou que recusa imobilizar capital), o modelo default de 5% realmente é desincentivador. Nesses casos o caminho é propor via Governor um `setProjectSplit` específico — a arquitetura permite overrides por projeto exatamente pra acomodar perfis diferentes de app.
+**Quando (C) não fecha** (app sem caixa pra comprar GOV, ou que recusa imobilizar capital), restam (A)+(B) — ~20% efetivo no exemplo acima. Se isso ainda for pouco pro perfil do app, o caminho é propor via Governor um `setProjectSplit` específico — a arquitetura permite overrides por projeto exatamente pra acomodar perfis diferentes de app.
 
 ### O ciclo de rodadas — onde o staker colhe
 
-Imagine o protocolo funcionando em **rodadas semanais**:
+Imagine o protocolo funcionando em **rodadas semanais** (cadência-alvo operacional — ver nota abaixo: o fechamento não é automático):
 
 ```
    Round R-1 (a semana que passou)                 Round R (agora)
    ┌─────────────────────────────┐                 ┌─────────────────────────────┐
    │ Charlie, David e + 10k      │                 │ Alice pode sacar rewards de │
    │ usuários queimaram CREDIT   │  closeRound()   │ R-1 baseado em:             │
-   │ nos apps.                   │  ────────────▶  │  • burn total de R-1         │
-   │                             │                 │  • burn do projeto dela       │
+   │ nos apps.                   │  (governança)   │  • burn total de R-1         │
+   │                             │  ────────────▶  │  • burn do projeto dela       │
    │ BurnTracker registrou:      │                 │  • peso do stake dela         │
-   │  totalBurn = 950_000 CREDIT │                 │                             │
+   │  totalBurn = 840_000 CREDIT │                 │                             │
    └─────────────────────────────┘                 └─────────────────────────────┘
                                                               │
                                                    finalizeRound(R-1)
                                                               │
                                                               ▼
                                                    emissao_R = min(
-                                                     max(0.95 × 950_000, floor),
+                                                     max(0.95 × 840_000, floor),
                                                      capMax
-                                                   ) = ~902_500 CREDIT
+                                                   ) = 798_000 CREDIT
 
-                                                   Esse pool é dividido:
+                                                   Esse pool é dividido em 4 buckets
+                                                   (55% stakers / 25% LPs / 15% apps
+                                                   / 5% bonders). O bucket stakers:
                                                    — por projeto, proporcional ao
                                                      seu burn no round R-1
                                                    — por staker dentro do projeto,
                                                      proporcional ao peso stakeado
 ```
 
+> **"Semanal" é cadência operacional, não automática:** `closeRound()` é `onlyRole(GOVERNANCE_ROLE)` no `BurnTracker` — em produção só o Timelock executa, via proposta aprovada (ou keeper agendado por proposta). `roundDuration = 7 dias` define quando a rodada _pode_ fechar (`isRoundReadyToClose` é só consultivo); se a governança não agir, a rodada não fecha sozinha.
+
 **Exemplo concreto**:
 
-- Chat App queimou 600k, Game App queimou 350k (total 950k).
-- Pool de 902.500 CREDIT divide: Chat App recebe ~570k, Game App ~333k.
+- Chat App queimou 560k, Game App queimou 280k (total 840k).
+- Emissão de 798.000 CREDIT; bucket stakers (55%) = 438.900.
+- Do bucket stakers: Chat App recebe 438.900 × (560k/840k) = 292.600, Game App 146.300.
 - Alice stakou 80k GOV com lock 1 ano (multiplier 4x) = peso 320k.
 - Total staked no Chat App: 400k de peso.
-- **Alice reclama 570k × (320k/400k) = 456k CREDIT** — que ela pode vender na DEX ou usar pra consumir os próprios apps do ecossistema.
+- **Alice reclama 292.600 × (320k/400k) = 234.080 CREDIT** — que ela pode vender na DEX ou usar pra consumir os próprios apps do ecossistema.
 
 ### Por que isso não é Ponzi
 
@@ -312,24 +351,27 @@ O modelo **não é imortal**. O Cenário B da simulação (death spiral) mostrou
 
 ---
 
-## 4. Os 12 contratos — referência rápida
+## 4. Os 15 contratos — referência rápida
 
 | #   | Contrato                | Função                                                                                                                     |
 | --- | ----------------------- | -------------------------------------------------------------------------------------------------------------------------- |
 | 1   | `GovernanceToken` (GOV) | ERC20Votes, cap 100M imutável, Ownable2Step. Usado em governança + staking.                                                |
 | 2   | `CreditToken` (CREDIT)  | ERC20Burnable, supply elástico, MINTER/BURNER roles, genesis one-shot de 10M.                                              |
 | 3   | `ProjectRegistry`       | Whitelist on-chain de projetos. Status machine (Pending→Active→Probation→Removed) + collateral em GOV.                     |
-| 4   | `Treasury`              | Custódia multi-ativo. Única saída: Timelock via `GOVERNANCE_ROLE`.                                                         |
+| 4   | `Treasury`              | Custódia multi-ativo + FFP (buyback-and-burn) + POL. Única saída: Timelock via `GOVERNANCE_ROLE`.                          |
 | 5   | `Staking`               | Stake direcionado por projectId. Lock ≥ 14d; multiplier 1x→4x satura aos 365d; locks maiores são aceitos sem cap.          |
 | 6   | `BurnTracker`           | Oracle interna do burn por (round, projectId). `burnAndRecord` atômico com sanityCap.                                      |
-| 7   | `RewardDistributor`     | Fórmula `min(max(α·burn, floor), capMax)`. Pull-based claim. Snapshot anti-flashloan.                                      |
-| 8   | `FeeRouter`             | Interface única de pagamento. Split 95/0/5 default, override por projeto.                                                  |
+| 7   | `RewardDistributor`     | V1 (legado). Fórmula `min(max(α·burn, floor), capMax)`. Pull-based claim. Snapshot anti-flashloan. Vira claim-only na migração pro V2. |
+| 8   | `FeeRouter`             | Interface única de pagamento. Split 70/20/10 default (burn/treasury/rebate), override por projeto.                         |
 | 9   | `CommunityTimelock`     | OZ TimelockController, 2 dias de delay. Admin único de tudo acima.                                                         |
-| 10  | `CommunityGovernor`     | Governor OZ. Voting delay 1d, period 7d, quorum 4%, threshold 10k GOV. Em L2s com block time < 12s os prazos encurtam.      |
+| 10  | `CommunityGovernor`     | Governor OZ. Voting delay 1d, period 7d, quorum 4%, threshold 10k GOV. Supermaioria 75% para propostas com `Treasury.removePOL`. Em L2s com block time < 12s os prazos encurtam. |
 | 11  | `TeamVesting`           | 1 instância por beneficiário. Cliff + linear, owner = Timelock, revogável. Funded via transfer do Treasury.                |
 | 12  | `UserSubsidy`           | Singleton de campanhas Merkle em CREDIT. Funded do Treasury. Onboarding de primeiros usuários dos apps.                    |
+| 13  | `LiquidityGauge`        | Adapter sobre o `UniswapV3Staker` canônico. Distribui o bucket LPs (25% default) com vesting de 14d; saldo de vesting protegido on-chain (`totalVestingLocked`). |
+| 14  | `RewardDistributorV2`   | Distributor bucket-aware (Fase 1.4 CLP): 55/25/15/5 stakers/LPs/apps/bonders. Minter-alvo; substitui o V1 após janela de migração de ~4 rounds. |
+| 15  | `CreditPriceOracle`     | Adapter de produção do `ICreditPriceOracle`: TWAP Uniswap V3 CREDIT/USDC + sanity check Chainlink USDC/USD (staleness 6h, banda 0,99–1,01). Alimenta o FFP do Treasury. |
 
-Os contratos 11 e 12 **não fazem parte do deploy default** do `Dao.ts` (que preserva o comportamento de 10 contratos core do caminho de produção). Eles são deployados opcionalmente via env vars `DEPLOY_TEAM_VESTING=true` / `DEPLOY_USER_SUBSIDY=true` (ver §7 e `docs/pt-br/09-advanced/02-mainnet-deployment.md` para o fluxo recomendado em mainnet).
+Os contratos 11–15 **não fazem parte do deploy default** do `Dao.ts` (que preserva o comportamento de 10 contratos core do caminho de produção). Eles são deployados opcionalmente via env vars `DEPLOY_TEAM_VESTING=true` / `DEPLOY_USER_SUBSIDY=true` / `DEPLOY_CLP_PHASE1=true` (LiquidityGauge + RewardDistributorV2, sem nenhuma role concedida pelo módulo) / `DEPLOY_CLP_ORACLE=true` (CreditPriceOracle) — ver §7 e `docs/pt-br/09-advanced/02-mainnet-deployment.md` para o fluxo recomendado em mainnet.
 
 ---
 
@@ -342,7 +384,7 @@ npm install
 # compilar
 npx hardhat compile
 
-# rodar toda a suite (565 testes)
+# rodar toda a suite (858 testes)
 npm test
 
 # coverage
@@ -414,8 +456,8 @@ Itens marcados **[DESIGN]** exigem decisão arquitetural pendente (contrato aind
 
    Até a proposta #2 executar, **0 GOV existe em circulação**. O bootstrap do primeiro proposer usa o padrão documentado em `docs/pt-br/09-advanced/02-mainnet-deployment.md` (deployer multi-sig faz mint mínimo para passar o `proposalThreshold` imediatamente antes de `acceptOwnership`).
 
-5. **[DESIGN]** **Treasury sem receita recorrente** — `treasuryBps = 0` por default significa que o Treasury **não acumula receita operacional automática**. As únicas entradas recorrentes são slash e doações. Para ativar tesouraria com cash flow antes de habilitar buyback real, a DAO precisa aprovar uma proposta do tipo `setDefaultSplit({burnBps: 9000, treasuryBps: 500, rebateBps: 500})` (valores a serem decididos pela DAO). Essa proposta é **pré-requisito** para qualquer buyback operacional ter lastro.
-6. **[DESIGN]** **`Treasury.executeBuyback` é stub v1** — só emite `BuybackRequested`. Integração DEX real (escolha de venue, TWAP, slippage, resistência a frontrunning) está em fase separada e depende do item 5 acima para ter orçamento.
+5. **[DESIGN]** **Lastro USDC do Treasury** — o split default agora é `70/20/10` (burn/treasury/rebate) direto em `ignition/parameters/production.json`, então o Treasury **acumula receita recorrente automática de 20% de cada pagamento — em CREDIT** (pré-requisito Fase 0 do CLP satisfeito em deploy fresh). Atenção: `treasuryBps` é denominado em CREDIT, não USDC. As fontes de USDC (lastro do buyback FFP e da perna USDC do POL) continuam sendo bootstrap externo via proposta + `collectPOLFees` — dimensionar esse bootstrap é a decisão pendente.
+6. **[OPS]** **`Treasury.executeBuyback` é real** (Fase 1.1 CLP) — `executeBuyback(usdcAmount, minCreditOut)` faz swap USDC → CREDIT no Uniswap V3 e **queima o CREDIT comprado imediatamente** (`burnByRole`; compra e queima CREDIT, **nunca GOV**). Gatilhos FFP on-chain: spot < floor (`max(0.5 × MA90, $0.10)`) por ≥ 24h (`triggerDurationSecs`), sanity Chainlink USDC/USD em [0,99, 1,01], caps de 20%/evento e 30%/mês sobre o USDC do Treasury, slippage máx 1% via `minCreditOut`. O preço vem do **`CreditPriceOracle` real** (TWAP Uniswap V3 CREDIT/USDC + sanity Chainlink) — deployável via `DEPLOY_CLP_ORACLE=true` e setado no Treasury via governança. Pendências operacionais: keeper para `recordDailyPrice` (cooldown 22h; MA90 exige 90 amostras) e bootstrap de USDC (item 5).
 7. **[OPS]** **TeamVesting e UserSubsidy opcionais no `Dao.ts`** — `ignition/modules/Dao.ts` aceita env vars `DEPLOY_TEAM_VESTING=true` e `DEPLOY_USER_SUBSIDY=true` (default `false` em ambas, preservando caminho de 10 contratos core). Em mainnet, a recomendação é **deployar esses auxiliares via módulos separados após a DAO aprovar beneficiários e schedules** (ver `ignition/modules/TeamVesting.ts` / `UserSubsidy.ts`). Ativar os flags no deploy all-in-one só é seguro quando os placeholders (beneficiários, datas) já foram substituídos por valores reais e auditados.
 8. **[OPS]** Multi-sig Safe como segundo `CANCELLER_ROLE` no Timelock para emergências.
 9. **[OPS]** Bug bounty via Immunefi antes ou logo após mainnet.

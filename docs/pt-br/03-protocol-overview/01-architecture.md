@@ -3,7 +3,7 @@
 **Para quem é:** dev querendo mapa completo de dependências entre contratos.
 **Pré-requisitos:** [Dual-token](../02-core-concepts/01-dual-token-economy.md), [Governança](../02-core-concepts/05-governance.md).
 
-## Mapa completo (pós-pivot CLP, Fase 1)
+## Mapa completo (pós-pivot CLP, Fase 1) — 15 contratos de produção
 
 ```
                                +-----------------------------+
@@ -65,6 +65,15 @@
        |                                |
    Treasury.polTokenId          LiquidityGauge.stake(tokenId, poolId)
 
+   +---------------------------+
+   |    CreditPriceOracle      |   adapter ICreditPriceOracle (tudo immutable)
+   | TWAP Uniswap V3           |   <- Treasury.priceOracle (setado via
+   |   CREDIT/USDC (observe)   |      setPriceOracle pelo governance)
+   | x Chainlink USDC/USD      |   recordDailyPrice / executeBuyback leem
+   |   (staleness 6h + banda   |      peekTwapPrice(twapWindowSecs)
+   |    [0.99, 1.01])          |
+   +---------------------------+
+
    Contratos auxiliares:
    +----------------+   +------------------+
    |  TeamVesting   |   |   UserSubsidy    |
@@ -92,7 +101,9 @@
 | `RewardDistributorV2._calculateClaim` | `ProjectRegistry.isInProbation(projectId)` | penalty |
 | `RewardDistributorV2._claim` | `CREDIT.mint(user, amount, "rewardRoundV2:stakers")` | bucket stakers (lazy) |
 | `Treasury.executeBuyback` | `swapRouter.exactInputSingle(USDC→CREDIT)` + `CREDIT.burnByRole(self, ...)` | FFP buyback |
-| `Treasury.recordDailyPrice` | `priceOracle.peekTwapPrice(twapWindowSecs)` | atualiza MA90 + breach |
+| `Treasury.recordDailyPrice` | `priceOracle.peekTwapPrice(twapWindowSecs)` | atualiza MA90 + breach (`CreditPriceOracle` em produção) |
+| `CreditPriceOracle.peekTwapPrice` | `POOL.observe([window, 0])` | tick médio → preço TWAP CREDIT/USDC em 18 dec |
+| `CreditPriceOracle.peekTwapPrice` | `CHAINLINK_USDC_FEED.latestRoundData()` | converte USDC→USD (staleness 6h + banda 0.99–1.01) |
 | `Treasury.addPOL` / `addPOLFromRefill` | `NPM.mint` ou `NPM.increaseLiquidity` | provisiona POL |
 | `Treasury.flushPendingGaugeRewards` | `gauge.notifyRewardAmount(poolId, amount, duration)` | drena fallback |
 | `LiquidityGauge.stake` | `NPM.safeTransferFrom(user→staker, tokenId, IncentiveKey)` | auto-stake no staker oficial |
@@ -196,6 +207,9 @@ RewardDistributorV2   -> OZ: IERC20, SafeERC20, AccessControl, ReentrancyGuard
 LiquidityGauge        -> OZ: IERC20, SafeERC20, IERC721, IERC721Receiver,
                               AccessControl, ReentrancyGuard, Pausable
                           + interfaces: IUniswapV3Staker, IUniswapV3Pool
+CreditPriceOracle     -> OZ: IERC20Metadata, Math
+                          + interfaces: ICreditPriceOracle, IUniswapV3Pool,
+                                        IChainlinkAggregator
 FeeRouter             -> OZ: IERC20, SafeERC20, AccessControl, ReentrancyGuard
                           + CreditToken, BurnTracker, ProjectRegistry, Treasury
 CommunityTimelock     -> OZ: TimelockController
@@ -240,7 +254,7 @@ Em ambos os casos, o atacante precisaria manter a posição por **pelo menos um 
 
 - Uniswap V3 — pool CREDIT/USDC, swap router, NPM, UniswapV3Staker. Endereços canônicos da Uniswap Foundation.
 - Chainlink USDC/USD — feed para sanity check antes do buyback.
-- TWAP oracle do CREDIT — `priceOracle` setado via governance.
+- TWAP oracle do CREDIT — `CreditPriceOracle` (adapter de produção, contrato próprio com tudo immutable), setado no Treasury via `setPriceOracle`. A confiança externa fica nos dados que ele lê: observações da pool Uniswap V3 (cardinality suficiente para a janela TWAP) e feed Chainlink USDC/USD.
 - Integridade de dados off-chain na `metadataURI` dos projetos (o Registry guarda só o CID).
 
 ---

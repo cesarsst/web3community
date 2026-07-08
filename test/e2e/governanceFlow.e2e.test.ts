@@ -537,12 +537,13 @@ describe("E2E: GovernanceFlow — propostas on-chain atingindo contratos economi
     await distributor.connect(voter).finalizeRound(1);
 
     // Emissao da rodada 1 = min(max(alpha * burn_0, floor[1]), capMax).
-    // alpha novo * 950 << floor[1] (~383k), entao e floor[1].
+    // alpha novo * 700 << floor[1] (~383k), entao e floor[1].
+    // (burn = 70% do pagamento de 1000 — split default 70/20/10 da Fase 0.)
     const FLOOR_INITIAL = 400_000n * 10n ** 18n;
     const FLOOR_STEP = FLOOR_INITIAL / 24n;
     const floor1 = FLOOR_INITIAL - FLOOR_STEP;
     const round1 = await distributor.roundData(1);
     expect(round1.totalEmission).to.equal(floor1);
-    expect(round1.totalBurnAtFinalize).to.equal(950n * 10n ** 18n);
+    expect(round1.totalBurnAtFinalize).to.equal(700n * 10n ** 18n);
   });
 });

@@ -79,9 +79,9 @@ Referencia: [Burn-to-mint](../02-core-concepts/03-burn-to-mint.md). Contrato: [R
 Ninguna función privilegiada de los contratos económicos acepta llamada directa. Todas exigen `GOVERNANCE_ROLE`, que en producción solo lo tiene [`CommunityTimelock`](../08-contracts-reference/09-CommunityTimelock.md). Y el Timelock solo ejecuta lo que antes fue aprobado por [`CommunityGovernor`](../08-contracts-reference/10-CommunityGovernor.md) y esperó el delay (en producción, 172800 segundos = 2 días).
 
 ```
-  Alice propone    Delay 1d      Votacion 7d     Cola timelock    Delay 2d      Ejecucion
-  (requiere   ->  (anti-MEV)  -> (quorum 4%,  -> (encola en    -> (tiempo de -> (cualquiera
-   10k GOV                         >= 50% For)    el timelock)     respuesta)    hace clic)
+  Alice propone    Delay 1d      Votacion 7d      Cola timelock    Delay 2d      Ejecucion
+  (requiere   ->  (anti-MEV)  -> (quorum 4%,   -> (encola en    -> (tiempo de -> (cualquiera
+   10k GOV                         For > Against)   el timelock)     respuesta)    hace clic)
    delegados
    a si)
 ```

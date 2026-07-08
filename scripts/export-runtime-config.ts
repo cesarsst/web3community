@@ -57,6 +57,21 @@ for (const [futureId, addr] of Object.entries(raw)) {
   if (name) addresses[name] = addr;
 }
 
+// Contratos dev deployados fora do Ignition pelo deploy-prod-sim (USDC mock,
+// DevSwapPool, CreditPriceOracle, DevFaucet) — mesclados quando existirem.
+const devFile = resolve(
+  __dirname,
+  "..",
+  "ignition",
+  "deployments",
+  `chain-${CHAIN_ID}`,
+  "dev_addresses.json",
+);
+if (existsSync(devFile)) {
+  const devRaw = JSON.parse(readFileSync(devFile, "utf8")) as Record<string, string>;
+  Object.assign(addresses, devRaw);
+}
+
 const body = {
   chainId: CHAIN_ID,
   rpcUrl: PUBLIC_RPC_URL,

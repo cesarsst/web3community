@@ -60,7 +60,7 @@ Onde `support`:
 Variantes:
 
 - `castVoteWithReason(proposalId, support, reason)` — anexa razão em string (indexada em evento).
-- `castVoteBySig(proposalId, support, v, r, s)` — voto via assinatura (EIP-712, permite gasless via relayer).
+- `castVoteBySig(proposalId, support, voter, signature)` — voto via assinatura (EIP-712, permite gasless via relayer; assinatura OZ 5.x, com nonce por voter).
 - `castVoteWithReasonAndParamsBySig(...)` — versão com razão + params.
 
 ## Sua voting power
@@ -86,6 +86,14 @@ Definido em `GovernorCountingSimple`:
 
 Se ambas as condições verdadeiras quando a janela fecha → `Succeeded`. Caso contrário → `Defeated`.
 
+### Exceção: supermaioria de 75% (`removePOL`)
+
+Propostas que contenham **qualquer** call de `Treasury.removePOL` — ou de gestão de roles (`grantRole`/`revokeRole`/`renounceRole`) com target no Treasury ou no próprio Timelock, que seria o vetor de bypass — são marcadas como `Supermajority` no momento do `propose` (evento `ProposalTypeSet`). Para essas, a condição 2 muda:
+
+- `forVotes >= 3 × againstVotes` **e** `forVotes > 0` — ou seja, For ≥ 75% dos votos decisivos (Abstain conta só para o quorum, fica fora da razão).
+
+Um batch misto (uma call sensível no meio de várias inofensivas) contamina a proposta inteira: 75% para tudo. O quorum da condição 1 continua o mesmo.
+
 ## Após `Succeeded`
 
 Qualquer um (não precisa ser o proposer) pode chamar:
@@ -107,7 +115,7 @@ Que executa as chamadas efetivas (`targets[].call(calldatas[])`) via Timelock.
 
 ## Cancelamento
 
-- O proposer pode cancelar **sua própria** proposta enquanto ela está `Pending` (voting delay) ou `Active` (period).
+- O proposer pode cancelar **sua própria** proposta apenas enquanto ela está `Pending` (durante o voting delay, antes da votação abrir) — restrição do `Governor.cancel` do OZ 5.x.
 - Governança pode cancelar via proposta contrária (meta-proposta).
 - Cancelamentos pós-queue também invalidam a operação no Timelock (`Timelock.cancel`).
 

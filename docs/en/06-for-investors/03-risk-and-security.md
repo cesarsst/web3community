@@ -9,7 +9,7 @@
 
 ### Risk: contract bug
 
-**Description**: a bug in any of the 12 contracts can result in loss of funds, governance failure, or broken economic invariants.
+**Description**: a bug in any of the 15 production contracts can result in loss of funds, governance failure, or broken economic invariants.
 
 **Mitigation**:
 
@@ -18,7 +18,7 @@
 - SafeERC20 / SafeCast in all conversions.
 - Custom errors in every revert (gas saving + clear messages).
 - Slither 0.11.5 as static analysis (`audit/slither/`). No high/medium findings in project code at deploy time.
-- 462+ tests with 100% stmt coverage and 99.84% lines.
+- 858 tests (full suite green) with extensive coverage.
 - **External audit mandatory before mainnet** (Trail of Bits, OpenZeppelin, or similar).
 
 **Residual risk**: subtle bugs that tests + static analysis do not catch. External audit reduces but does not eliminate.
@@ -34,6 +34,8 @@
 - `timelockMinDelay = 2 days` gives a response window for holders to see a malicious proposal and act.
 - `votingPeriod = 7 days` allows off-chain discussion.
 - Execution is permissionless after the delay — any holder can block via counter-proposal before execution.
+- **On-chain 75% supermajority** (`ProposalType.Supermajority` in `CommunityGovernor`): any proposal containing `Treasury.removePOL` — or role management (`grantRole`/`revokeRole`/`renounceRole`) targeting the Treasury or the Timelock itself — only passes with `forVotes >= 3 × againstVotes`. Closes the vector of draining protocol-owned liquidity (POL) by simple majority, including the bypass of re-authorizing roles.
+- **On-chain segregation of reserved balances in the Treasury**: CREDIT `transfer`/`batchTransfer`/`payRebates` cannot eat into `polRefillBucket + pendingGaugeRewards` (they revert with `TransferExceedsUnreservedCredit`), and deposits into those ledgers require real CREDIT backing (`DepositExceedsCreditBalance`). In `LiquidityGauge`, `governanceRescueRewards` is limited to the unreserved balance (`totalVestingLocked` protects users' vesting).
 
 **Residual risk**: if an actor accumulated a lot of GOV (via badly distributed public sale or aggressive buying on DEX), they can force proposals even with quorum. The mitigation is **well-designed initial distribution** (via DAO proposals picking buckets properly — see [Tokenomics](01-tokenomics.md)).
 
@@ -82,7 +84,7 @@
 - Apps lose `RECORDER_ROLE` (if they had it) via `revokeRole` when the project becomes `Probation` or `Removed` — via proposal.
 - `isActive(projectId)` in `FeeRouter.pay` and `BurnTracker.burnAndRecord` blocks new payments as soon as status changes.
 
-**Residual risk**: time between the compromise and execution of the proposal (minimum ~8 days = votingDelay + period + minDelay). During that time, users can still pay in the project. Operational mitigation: active monitoring + emergency proposals (meta-proposals with fast voting via reduced quorum not implemented in v1, but debatable in the future).
+**Residual risk**: time between the compromise and execution of the proposal (minimum ~10 days = votingDelay ~1d + votingPeriod ~7d + timelockMinDelay 2d). During that time, users can still pay in the project. Operational mitigation: active monitoring + emergency proposals (meta-proposals with fast voting via reduced quorum not implemented in v1, but debatable in the future).
 
 ### Risk: ETH stuck in Treasury
 
@@ -96,7 +98,7 @@
 
 **Description**: user receives CREDIT as reward but cannot convert (low liquidity on external DEX).
 
-**Mitigation**: **outside the protocol**. The DAO can approve using the Treasury to seed liquidity on DEX. The "10% liquidity" bucket of the initial distribution is for that.
+**Mitigation**: the Treasury has an on-chain **POL (Protocol Owned Liquidity, Phase 1.2)** mechanism: `addPOL`/`addPOLFromRefill` provision CREDIT/USDC liquidity (Uniswap V3, full range) with the NFT position custodied by the Treasury itself; every outflow (`removePOL`) requires a proposal with a **75% supermajority** in the Governor. In addition, the DAO can approve seeding extra liquidity (the "10% liquidity" bucket of the initial GOV distribution is intended for that).
 
 **Residual risk**: if DEXs abandon the pool, users are stuck with CREDIT. Solution depends on DAO action + external market.
 
@@ -156,11 +158,17 @@
 
 **Mitigation**: diversification of DEXs via DAO actions. Not implemented in v1.
 
-### Oracle risk (future application)
+### Oracle risk (FFP buyback)
 
-**Description**: when real `executeBuyback` DEX integration is implemented, there will be dependency on price oracle / TWAP / slippage protection.
+**Description**: `executeBuyback` is **real** (CLP pivot Phase 1.1): USDC → CREDIT swap via Uniswap V3 + immediate burn of the bought CREDIT. It depends on `CreditPriceOracle` (immutable adapter: TWAP of the Uniswap V3 CREDIT/USDC pool + Chainlink USDC/USD sanity). A manipulated oracle or a shallow pool could induce a buyback at a bad price.
 
-**Mitigation**: detailed design will be audited before implementation. In v1, `executeBuyback` is a stub — only emits an event, does not execute a swap.
+**Mitigation** (all on-chain, in the `Treasury` and the adapter):
+
+- The price is a TWAP (default 30 min window, bounds [5min, 2h]) — manipulating the instantaneous spot is not enough.
+- Chainlink USDC/USD sanity: max 6h staleness + band [0.99, 1.01] — a USDC depeg blocks the buyback (`UsdcDepegDetected`).
+- A buyback is only eligible with spot below the floor for >= `triggerDurationSecs` (default 24h) and is capped: 20% of reserves per event, 30% of the monthly snapshot (defaults; adjustable within bounds).
+- `minCreditOut` (slippage) is mandatory; each execution requires a DAO proposal (GOVERNANCE_ROLE = Timelock).
+- The adapter has no owner/setters — changing oracle parameters requires a new deploy + `setPriceOracle` via proposal.
 
 ## Risks for stakers specifically
 
@@ -188,7 +196,7 @@ Before mainnet:
 Current status in the repository:
 
 - Slither with no high/medium findings in project code.
-- Test suite with 462+ tests and extensive coverage.
+- Test suite with 858 tests passing (0 failures).
 - **External audit not yet performed** at the time of this doc.
 
 ## Summary

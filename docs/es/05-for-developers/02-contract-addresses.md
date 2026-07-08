@@ -42,13 +42,16 @@ El orden en este índice corresponde al orden numérico en `08-contracts-referen
 | 05 | `Staking` | `contracts/Staking.sol` |
 | 06 | `BurnTracker` | `contracts/BurnTracker.sol` |
 | 07 | `RewardDistributor` | `contracts/RewardDistributor.sol` |
+| 07b | `RewardDistributorV2` | `contracts/RewardDistributorV2.sol` |
 | 08 | `FeeRouter` | `contracts/FeeRouter.sol` |
 | 09 | `CommunityTimelock` | `contracts/CommunityTimelock.sol` |
 | 10 | `CommunityGovernor` | `contracts/CommunityGovernor.sol` |
 | 11 | `TeamVesting` | `contracts/TeamVesting.sol` |
 | 12 | `UserSubsidy` | `contracts/UserSubsidy.sol` |
+| 13 | `LiquidityGauge` | `contracts/LiquidityGauge.sol` |
+| — | `CreditPriceOracle` | `contracts/CreditPriceOracle.sol` |
 
-Doc detallada por contrato en [`08-contracts-reference/`](../08-contracts-reference/).
+Son **15 contratos de producción** en total. Doc detallada por contrato en [`08-contracts-reference/`](../08-contracts-reference/).
 
 ## Versiones de dependencias
 
@@ -80,6 +83,13 @@ const GOVERNOR = deployed['CommunityDAOModule#CommunityGovernor'];
 `TeamVesting` y `UserSubsidy` tienen módulos Ignition separados (`ignition/modules/TeamVesting.ts` y `ignition/modules/UserSubsidy.ts`) — deployados bajo demanda vía propuesta de la DAO, no en el bootstrap.
 
 Cada `TeamVesting` es una instancia separada (uno por beneficiario). Sus direcciones quedan en deployments dedicados.
+
+`RewardDistributorV2`, `LiquidityGauge` y `CreditPriceOracle` son deployables opcionalmente por el propio `Dao.ts` (Fase F) vía env vars:
+
+- `DEPLOY_CLP_PHASE1=true` -> `LiquidityGauge` + `RewardDistributorV2` (futures `CommunityDAOModule#phaseF_LiquidityGauge` / `#phaseF_RewardDistributorV2`).
+- `DEPLOY_CLP_ORACLE=true` -> `CreditPriceOracle` (future `CommunityDAOModule#phaseF_CreditPriceOracle`).
+
+El módulo **no concede ninguna role** a esos contratos — la migración V1 -> V2 (MINTER_ROLE del CREDIT), whitelist de pools en el gauge y `Treasury.setPriceOracle(oracle)` son actos de gobernanza vía propuesta.
 
 ## Verificación on-chain
 

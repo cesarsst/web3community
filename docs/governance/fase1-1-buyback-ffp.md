@@ -46,13 +46,22 @@ batched, dependendo da preferência operacional):
 
 | Setter | Argumento | Origem |
 |---|---|---|
-| `setPriceOracle(ICreditPriceOracle)` | adapter de TWAP CREDIT/USD | `contracts/interfaces/ICreditPriceOracle.sol` (escrever adapter sobre Uniswap V3 pool) |
+| `setPriceOracle(ICreditPriceOracle)` | adapter de TWAP CREDIT/USD | `contracts/CreditPriceOracle.sol` — adapter de producao **ja existe** (implementa `ICreditPriceOracle`) |
 | `setSwapRouter(IUniswapV3SwapRouter)` | router Uniswap V3 oficial da rede | endereço público da Uniswap |
 | `setSwapFeeTier(uint24)` | tier do pool CREDIT/USDC (default 3000 = 0.3%) | escolha da rede |
 | `setChainlinkFeed(IChainlinkAggregator)` | feed Chainlink USDC/USD | endereço oficial Chainlink (ex.: Mainnet `0x8fF...`, Sepolia `0xA2F...`) |
 
 Sem essas 4 chamadas + `BURNER_ROLE`, qualquer call a `executeBuyback`
 reverte com `BuybackInfraMissing`. **É proposital** — fail-safe por padrão.
+
+> **Nota (2026-07) — oracle adapter deixou de ser pendência.** O
+> `setPriceOracle` já tem uma implementação de produção do
+> `ICreditPriceOracle`: `contracts/CreditPriceOracle.sol` (TWAP do pool
+> Uniswap V3 CREDIT/USDC com sanity check Chainlink USDC/USD). Não é mais
+> necessário "escrever o adapter" antes do buyback — resta apenas
+> **deployá-lo** com os parâmetros da rede (pool, tokens, feed, janela) e
+> passar o endereço em `setPriceOracle`. Ver `Dao.ts` (deploy opcional via
+> env `DEPLOY_CLP_ORACLE`).
 
 ## 3. Como preparar a proposta DAO de `executeBuyback`
 
@@ -197,6 +206,7 @@ significa que **só passam via Governor + Timelock**.
 ## 8. Referências
 
 - Contrato: [`contracts/Treasury.sol`](../../contracts/Treasury.sol).
+- Contrato (oracle adapter de produção): [`contracts/CreditPriceOracle.sol`](../../contracts/CreditPriceOracle.sol).
 - Interfaces: [`contracts/interfaces/ICreditPriceOracle.sol`](../../contracts/interfaces/ICreditPriceOracle.sol),
   [`contracts/interfaces/IUniswapV3SwapRouter.sol`](../../contracts/interfaces/IUniswapV3SwapRouter.sol),
   [`contracts/interfaces/IChainlinkAggregator.sol`](../../contracts/interfaces/IChainlinkAggregator.sol),

@@ -252,7 +252,8 @@ describe("E2E: StakingRewards — peso, share, snapshot e claim multi-actor", fu
     expect(previewA).to.be.gt(0n);
     expect(previewB).to.be.gt(0n);
 
-    // Share A / Share B ~ burn A / burn B = 1900 / 950 = 2 (95% de 2000 / 95% de 1000).
+    // Share A / Share B ~ burn A / burn B = 1400 / 700 = 2 (70% de 2000 / 70% de 1000,
+    // split default 70/20/10 da Fase 0).
     expect(previewA * 1_000n).to.be.gte(previewB * 1_990n);
     expect(previewA * 1_000n).to.be.lte(previewB * 2_010n);
 
@@ -573,13 +574,13 @@ describe("E2E: StakingRewards — peso, share, snapshot e claim multi-actor", fu
     // Bob e "noise" — nao stakeia; existe apenas para consumir slot.
     void bob;
 
-    // Burns IGUAIS em A e F no round 0. (95% de 1000 = 950 queimados em cada).
+    // Burns IGUAIS em A e F no round 0. (70% de 1000 = 700 queimados em cada).
     await credit.connect(payer).approve(await feeRouter.getAddress(), 2_000n * 10n ** 18n);
     await feeRouter.connect(payer).pay(1n, payer.address, 1_000n * 10n ** 18n);
     await feeRouter.connect(payer).pay(projectF, payer.address, 1_000n * 10n ** 18n);
 
-    expect(await burnTracker.getBurnForProjectInRound(0, 1n)).to.equal(950n * 10n ** 18n);
-    expect(await burnTracker.getBurnForProjectInRound(0, projectF)).to.equal(950n * 10n ** 18n);
+    expect(await burnTracker.getBurnForProjectInRound(0, 1n)).to.equal(700n * 10n ** 18n);
+    expect(await burnTracker.getBurnForProjectInRound(0, projectF)).to.equal(700n * 10n ** 18n);
 
     // Round 0 close + finalize (usa bootstrap: sem burn prev, usa globalWeight).
     await time.increase(DEV_ROUND_DURATION + 1n);
@@ -741,8 +742,8 @@ describe("E2E: StakingRewards — peso, share, snapshot e claim multi-actor", fu
     await feeRouter.connect(payer).pay(projectA, payer.address, 1_000n * 10n ** 18n);
     await feeRouter.connect(payer).pay(projectB, payer.address, 1_000n * 10n ** 18n);
 
-    // burn round 0 total = 1900 (950 + 950).
-    const burnTotal = 1_900n * 10n ** 18n;
+    // burn round 0 total = 1400 (700 + 700 — split 70/20/10).
+    const burnTotal = 1_400n * 10n ** 18n;
 
     // 2 rodadas: finalize 0 + 1.
     await time.increase(DEV_ROUND_DURATION + 1n);

@@ -9,7 +9,7 @@ Pre-condições para você poder claim da rodada R-1:
 
 1. Você tinha posição stakada em `(user, projectId)` no bloco do snapshot (setado em `finalizeRound(R-1)`).
 2. A governança chamou `BurnTracker.closeRound()` fechando a rodada R-1 (currentRound virou R).
-3. Alguém — pode ser você — chamou `RewardDistributor.finalizeRound(R-1)`.
+3. Alguém — pode ser você — chamou `RewardDistributorV2.finalizeRound(R-1)` (rodadas antigas da janela de migração são reivindicadas no V1).
 4. Você ainda **não** reivindicou essa combinação `(R-1, projectId)`.
 
 ## Descobrindo o que pode claim
@@ -49,8 +49,10 @@ Passos internos:
 4. Se `amount > 0`:
    - Marca `claimed[...][you] = true`.
    - Emite `Claimed`.
-   - Chama `CREDIT.mint(you, amount, "rewardRound")`.
+   - Chama `CREDIT.mint(you, amount, "rewardRoundV2:stakers")` (no V1 legado, tag `"rewardRound"`).
 5. Se `amount == 0`: não marca claimed, não cunha, retorna 0 (no-op silencioso).
+
+O que você reivindica é a sua fatia do **bucket stakers** — 55% da emissão da rodada no split default do V2. Os outros buckets (LPs 25%, apps 15%, bonders 5%) são push no `finalizeRound` e não passam pelo `claim`.
 
 Essa semântica de `amount == 0` sendo no-op é intencional — se por algum motivo o cálculo retornou 0 mas pode mudar, você não "queima" o slot de claim.
 
@@ -117,11 +119,11 @@ Portanto, se você stakou logo no início e o peso global só é o seu, você ca
 
 ### Bootstrap sem stake
 
-Se uma rodada finaliza e `globalWeight == 0` no snapshot, nenhum claim funciona — `_projectShare` retorna 0 em todos os casos no caminho bootstrap. A emissão é calculada mas **não é cunhada** (ninguém para distribuir). CREDIT supply não muda naquela rodada.
+Se uma rodada finaliza e `globalWeight == 0` no snapshot, nenhum claim funciona — `_projectStakerShare` retorna 0 em todos os casos no caminho bootstrap. O bucket stakers é calculado mas **não é cunhado** (ninguém para distribuir). Os buckets LPs e bonders continuam sendo cunhados (push no `finalizeRound`); apps não emite sem burn.
 
 ### Probation inicial durante o claim
 
-`RewardDistributor._calculateClaim` lê `REGISTRY.isInProbation(projectId)` **no momento do claim**, não do finalize. Se a probation inicial terminou entre finalize e claim, você recebe share cheio (probation é por tempo; `probationEndsAt` é setado na ativação e não muda).
+`RewardDistributorV2._calculateClaim` lê `REGISTRY.isInProbation(projectId)` **no momento do claim**, não do finalize. Se a probation inicial terminou entre finalize e claim, você recebe share cheio (probation é por tempo; `probationEndsAt` é setado na ativação e não muda).
 
 ### Projeto vira `Removed` entre finalize e claim
 

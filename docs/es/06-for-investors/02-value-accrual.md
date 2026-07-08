@@ -14,15 +14,15 @@ Si **cero** usuarios compran CREDIT para usar los apps, ningún mecanismo descri
 ## Caminos por los cuales CREDIT adquiere presión de compra
 
 1. **Consumo en los apps**: el usuario necesita CREDIT para pagar servicios. Compra en DEX, genera presión de compra.
-2. **Retención por los apps**: los apps reciben rebate en CREDIT (5% default) y emisión vía stake (si stakearon). Mientras no venden, retiran CREDIT de circulación en DEX.
+2. **Retención por los apps**: los apps reciben rebate en CREDIT (10% default) y emisión vía stake (si stakearon). Mientras no venden, retiran CREDIT de circulación en DEX.
 3. **Retención por los stakers**: los stakers reciben CREDIT como reward. Quien mantiene (en vez de vender inmediatamente) retira CREDIT de circulación.
 4. **Subsidios por la DAO**: `UserSubsidy` distribuye CREDIT pre-financiado del Treasury a primeros usuarios. Eso **no crea demanda**, pero crea usuarios iniciales que pueden generar demanda recurrente tras el subsidio.
-5. **Programas de buyback**: la DAO puede aprobar buyback de GOV con CREDIT/stable vía Treasury (ver `executeBuyback`, actualmente stub v1).
+5. **Buyback de CREDIT (FFP)**: `Treasury.executeBuyback(usdcAmount, minCreditOut)` es **real** — compra CREDIT con USDC del Treasury (swap Uniswap V3) y **quema inmediatamente** el CREDIT comprado (`burnByRole`). El precio viene del `CreditPriceOracle` (TWAP Uniswap V3 CREDIT/USDC + sanidad Chainlink USDC/USD). Solo ejecuta vía propuesta DAO y bajo condiciones on-chain: spot TWAP por debajo del floor FFP por al menos `triggerDurationSecs` (default 24h), USDC sin depeg, cap por evento (default 20% de las reservas) y cap mensual (default 30% del snapshot). Presión de compra + reducción de supply en el mismo acto.
 
 ## Caminos por los cuales CREDIT sale de circulación
 
-1. **Burn en pagos**: principal. 95% default de cada pago se quema vía `BurnTracker.burnAndRecord` → `CreditToken.burnByRole`.
-2. **Burn por retención** (indirecto): incluso sin quemar, el CREDIT retenido por apps/stakers/DAO está "fuera" del float en circulación.
+1. **Burn en pagos**: principal. 70% default de cada pago se quema vía `BurnTracker.burnAndRecord` → `CreditToken.burnByRole` (split Fase 0: 70% burn / 20% treasury / 10% rebate).
+2. **Burn por buyback**: cada `executeBuyback` quema 100% del CREDIT comprado — no recicla al Treasury.
 
 ## Dinámica de supply
 
@@ -48,7 +48,7 @@ Si el uso está creciendo (`burn_R > burn_{R-1}`), el supply aún puede caer per
 1. **Stakers comprando GOV en DEX externa** para stakear en proyectos (cuanto más optimistas sobre el protocolo, más GOV stakeado).
 2. **Apps comprando GOV** para stakear en su propio proyecto y capturar emisión — la vía (B) descrita en [Flujo de valor](../03-protocol-overview/03-economic-flows.md).
 3. **Nuevos proyectos comprando GOV** para cumplir `minCollateral` (10.000 GOV por listado).
-4. **Buybacks aprobados por la DAO** vía `Treasury.executeBuyback` (una vez implementada la integración DEX).
+4. **Programas de recompra de GOV aprobados por la DAO** — atención: **no hay mecanismo dedicado on-chain para GOV**. El `Treasury.executeBuyback` compra y quema **CREDIT**, no GOV. La recompra de GOV exigiría propuestas usando las transferencias genéricas del Treasury.
 
 ## Caminos por los cuales GOV sale de circulación
 
@@ -85,6 +85,8 @@ amount = total_emission
        × (mi_peso / peso_total_del_proyecto)  // mi fraccion en el proyecto
        × (1 o 1/4 si probation)               // penalizacion
 ```
+
+Bajo el `RewardDistributorV2` (Fase 1.4 del pivote CLP, activado por migración de gobernanza), la emisión se divide en 4 buckets antes de esa cuenta — default `[5500, 2500, 1500, 500]` bps = **55% stakers** / 25% LPs / 15% apps / 5% bonders. Es decir, sustituye `total_emission` por `0.55 × total_emission` en la fórmula de arriba.
 
 El reward es en CREDIT. El staker puede vender (presión de venta) o retener.
 

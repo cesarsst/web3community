@@ -5,7 +5,7 @@
 
 ## Onde estamos: V1 (legado) → V2 (bucket-aware split)
 
-Esta página descreve o modelo **V2** (Fase 1.4 do pivot CLP), que está em produção a partir de abril/2026. O modelo V1 (pré-pivot) continua funcionando em modo claim-only durante uma janela de migração de 4 rounds — para detalhes ver [RewardDistributor (V1)](../08-contracts-reference/07-RewardDistributor.md).
+Esta página descreve o modelo **V2** (Fase 1.4 do pivot CLP), que está em produção a partir de abril/2026. O modelo V1 (pré-pivot) continua funcionando em modo claim-only durante uma janela de migração de 4 rounds — para detalhes ver [RewardDistributor (V1)](../08-contracts-reference/07-RewardDistributor.md). O pré-requisito da Fase 1.4 no lado dos fees está satisfeito: o split default do `FeeRouter` em produção é **`70/20/10`** (`burnBps=7000, treasuryBps=2000, rebateBps=1000` em `ignition/parameters/production.json`), dando ao Treasury receita recorrente em CREDIT.
 
 O V2 reescreve a finalização de rodada para **dividir a emissão em 4 buckets** simultâneos:
 
@@ -168,7 +168,7 @@ Em `finalizeRound`, V2 mint `bondersAmount` direto para o Treasury e chama `Trea
 Quando governance decide refilar o POL, propõe `addPOLFromRefill(creditAmount, usdcAmount, ...)` no Treasury. O contrato:
 
 1. Debita `creditAmount` do `polRefillBucket` (CEI).
-2. Casa com `usdcAmount` do balance livre do Treasury (vem do `treasuryBps` do FeeRouter).
+2. Casa com `usdcAmount` do balance livre do Treasury. Atenção à denominação: a fatia `treasuryBps` do FeeRouter (20% no split default `70/20/10` de produção) chega em **CREDIT**, não em USDC — as fontes reais de USDC são bootstrap externo e `collectPOLFees`.
 3. Chama `NPM.increaseLiquidity` (ou `mint` na primeira vez).
 
 A Fase 3 do roadmap CLP recicla esse bucket para um `BondDepository` — usuários vendem ETH/CREDIT em troca de CREDIT vested, e o protocolo acumula POL através de bonds. Por enquanto, o bucket sustenta o POL diretamente.

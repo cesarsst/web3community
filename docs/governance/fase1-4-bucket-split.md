@@ -29,10 +29,36 @@ Decisões operacionais congeladas em
     via `addPOLFromRefill(creditAmount, usdcAmount, ...)`.
   - `pendingGaugeRewards` (uint256): fallback para o bucket LPs quando
     `gauge.paused()` no momento de `finalizeRound` (red flag E.3 #2). Drenado
-    via `flushPendingGaugeRewards(duration)` apos despausar.
+    via `flushPendingGaugeRewards(amount, poolId, duration)` apos despausar
+    (`amount == 0` = drena tudo; `poolId == 0` = pool default do gauge —
+    poolIds são 1-based).
   - `liquidityGauge` (address): destino do flush, configurado via
     `setLiquidityGauge(gauge, poolId)`.
   - 2 roles novas: `POL_REFILL_DEPOSITOR_ROLE`, `GAUGE_FALLBACK_DEPOSITOR_ROLE`.
+
+  > **Segregação on-chain dos ledgers reservados (red flag E.3 #2
+  > mitigada em código).** `polRefillBucket` e `pendingGaugeRewards` são
+  > earmarks contábeis de CREDIT que **não** fazem parte do saldo livre
+  > do Treasury. Isso agora é **enforced on-chain nos dois lados** (ver
+  > `contracts/Treasury.sol`):
+  >
+  > - **Saídas**: `transfer`, `batchTransfer`, `payRebates` e `addPOL` de
+  >   CREDIT passam por `_enforceUnreservedCredit` e revertem com
+  >   `TransferExceedsUnreservedCredit` se tentarem invadir
+  >   `polRefillBucket + pendingGaugeRewards`. O teto de saída livre é
+  >   `unreservedCreditBalance()` = `balanceOf(CREDIT)` menos os dois
+  >   ledgers reservados.
+  > - **Entradas**: `depositPolRefill` e `depositPendingGaugeRewards`
+  >   revertem com `DepositExceedsCreditBalance` se a reserva agregada
+  >   pós-depósito exceder o saldo real de CREDIT (anti-DoS por ledger
+  >   inflado sem lastro). O fluxo legítimo do V2 (mint antes do deposit
+  >   na mesma tx) segue funcionando.
+  >
+  > Válvulas de governança `writeDownPolRefillBucket` /
+  > `writeDownPendingGaugeRewards` (eventos `PolRefillWrittenDown` /
+  > `PendingGaugeWrittenDown`) permitem reduzir os ledgers de forma
+  > auditável (escape do freeze / reciclagem). Antes, a segregação era
+  > apenas convenção contábil; agora é invariante do contrato.
 
 - **`contracts/ProjectRegistry.sol`** (estendido). `ownerRecipient(projectId)`
   com timelock 48h (red flag E.3 #1). Setter `proposeOwnerRecipient` →
@@ -66,10 +92,25 @@ Setter `setBucketBps([s, l, a, b])` reverte com `BucketBpsOutOfBounds` ou
 
 Em ordem rígida (governance approval cada um):
 
-1. **Fase 0 split `(7000, 2000, 1000)` precisa estar live**. Sem isso, o
-   Treasury não recebe USDC do FeeRouter, e o bucket bonders acumula CREDIT
-   no `polRefillBucket` sem poder ser usado em `addPOLFromRefill` (que exige
-   USDC matching). Verificar com `FeeRouter.getSplit()`.
+1. **Fase 0 split `(7000, 2000, 1000)` precisa estar live**.
+   **[SATISFEITO em deploy fresh]** — o split já está assado em
+   `ignition/parameters/production.json` (e `dev.json`):
+   `burnBps: 7000`, `treasuryBps: 2000`, `rebateBps: 1000`. Num deploy
+   novo o `FeeRouter` nasce em 70/20/10 e este pré-requisito é atendido
+   sem proposta. Em redes já deployadas com o split antigo, executar a
+   proposta da Fase 0 (`docs/governance/fase0-default-split.md`) antes.
+   Verificar com `FeeRouter.getSplit()`.
+
+   > **Correção de racional (2026-07).** O `treasuryBps` do FeeRouter é
+   > denominado em **CREDIT**, não em USDC: `FeeRouter.pay` transfere
+   > CREDIT ao Treasury (engorda o saldo livre de CREDIT), mas **não**
+   > fornece o lado USDC de `addPOLFromRefill`. As fontes reais de USDC
+   > são bootstrap externo (OTC/donation) + `collectPOLFees`. Logo, "Fase
+   > 0 live" habilita o acúmulo do `polRefillBucket` (CREDIT), mas o
+   > `addPOLFromRefill` só fecha quando há USDC matching no Treasury. A
+   > válvula `Treasury.writeDownPolRefillBucket` permite reciclar o bucket
+   > bonders se o USDC não vier (ver §4.2). Ver comentário em `Dao.ts`.
+
 2. **Fase 1.1 (FFP buyback)** precisa estar configurada com oracle/router/feed
    Chainlink.
 3. **Fase 1.2 (POL)** precisa estar configurada com `positionManager` e a
@@ -150,9 +191,16 @@ if (GAUGE.paused()) {
 ```
 
 `pendingGaugeRewards` acumula. Quando governance despausar o gauge, basta
-uma proposta `Treasury.flushPendingGaugeRewards(duration)` para drenar o
-ledger inteiro de uma só vez. Importante: `duration` deve respeitar
-`INCENTIVE_DURATION_MIN` do gauge (1h em dev, sugestão 7d em prod).
+uma proposta `Treasury.flushPendingGaugeRewards(amount, poolId, duration)`
+para drenar o ledger. Sentinelas: `amount == 0` drena o ledger **inteiro**
+de uma só vez; `poolId == 0` usa a pool default (poolIds do gauge são
+**1-based**, então `0` não é um pool real) — equivale ao comportamento
+original `(0, 0, duration)`. Para flush parcial, passar `amount > 0`
+(reverte com `PendingGaugeRewardsInsufficient` se `amount > pendingGaugeRewards`).
+Importante: `duration` deve respeitar `INCENTIVE_DURATION_MIN` do gauge
+(1h em dev, sugestão 7d em prod). Se a incentive da pool ainda estiver
+ativa (`IncentiveOverlap`), o flush parcial + `poolId` explícito permite
+escapar do freeze descrito na review de segurança.
 
 ### 4.2 Bucket bonders sem USDC matching
 
@@ -166,6 +214,11 @@ Caso a Fase 0 split não esteja live (ex.: Treasury sem USDC), o
   tradicional.
 - **Longo prazo**: alterar `bucketBps` via `setBucketBps` para reduzir o
   bucket bonders e redistribuir para outros (respeitando bounds).
+- **Válvula de reciclagem**: `Treasury.writeDownPolRefillBucket(amount)`
+  (governance-only, evento `PolRefillWrittenDown`) reduz o ledger
+  `polRefillBucket` de forma auditável, liberando o CREDIT
+  correspondente de volta ao saldo livre do Treasury — útil se o USDC de
+  matching nunca chegar e a governança decidir redirecionar esse CREDIT.
 
 ### 4.3 Projeto `Removed` durante claim
 

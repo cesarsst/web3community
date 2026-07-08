@@ -60,7 +60,20 @@ describe("Governance: Fase 0 — setDefaultSplit(7000, 2000, 1000)", function ()
   ].join("\n");
 
   async function deployFixture() {
-    const deployed = await hre.ignition.deploy(CommunityDAOModule);
+    // Seed EXPLICITO do split ANTIGO (95/0/5) via parametros ignition.
+    // Racional: a Fase 0 foi ratificada ANTES do deploy do protocolo, entao
+    // o split novo (70/20/10) foi assado direto nos defaults do modulo e
+    // nos parameters JSON (dev + production) — em fresh deploy a proposta
+    // desta suite nunca sera executada on-chain. O teste permanece como
+    // validacao dos MECANISMOS de governanca (propose -> vote -> queue ->
+    // execute -> setDefaultSplit) e da paridade de calldata com
+    // `scripts/governance/propose-fase0-default-split.ts`, simulando um
+    // sistema deployado antes da Fase 0.
+    const deployed = await hre.ignition.deploy(CommunityDAOModule, {
+      parameters: {
+        CommunityDAOModule: { burnBps: 9500, treasuryBps: 0, rebateBps: 500 },
+      },
+    });
 
     const [deployer, voter, proposer, lowPowerProposer] = await ethers.getSigners();
     void deployer;
@@ -125,7 +138,8 @@ describe("Governance: Fase 0 — setDefaultSplit(7000, 2000, 1000)", function ()
       feeRouter,
     );
 
-    // Pre-condicao: split atual e o seed 95/0/5 (ignition default).
+    // Pre-condicao: split atual e o seed 95/0/5 (override explicito do
+    // fixture — os defaults do modulo ja sao 70/20/10 pos-Fase 0).
     const initialSplit = await feeRouter.defaultSplit();
     expect(initialSplit.burnBps).to.equal(9500);
     expect(initialSplit.treasuryBps).to.equal(0);

@@ -9,7 +9,7 @@ La única fuente de **valor externo** en el sistema es el usuario final que paga
 
 La liquidez del par CREDIT/USDC se construye por dos vías complementarias en el Credit Liquidity Protocol (CLP):
 
-1. **POL** — Protocol-Owned Liquidity. El propio Treasury custodia una posición NFT en el pool. Construida por (a) seed inicial del genesis CREDIT + USDC del Treasury, (b) refill vía bucket bonders + USDC del `treasuryBps`.
+1. **POL** — Protocol-Owned Liquidity. El propio Treasury custodia una posición NFT en el pool. Construida por (a) seed inicial del genesis CREDIT + USDC del Treasury, (b) refill vía bucket bonders (CREDIT) casado con USDC de bootstrap externo o de fees de la posición POL (`collectPOLFees`) — la porción `treasuryBps` está denominada en **CREDIT**, no USDC.
 2. **LPs externos** — usuarios que provisionan liquidez en el pool y stakean el NFT en el `LiquidityGauge`. Reciben incentives en CREDIT (bucket LPs del V2, default 25% de la emisión).
 
 El camino típico de un pago:
@@ -28,15 +28,15 @@ El camino típico de un pago:
         v
    [ FeeRouter ]
         |
-        | split por defecto 95/0/5 (recomendacion CLP: 70/20/10)
+        | split por defecto 70/20/10 (Fase 0, horneado en los parametros de deploy)
         |
-        +-------> burnBps quemados (via BurnTracker)
+        +-------> burnBps (70%) quemados (via BurnTracker)
         |         - CREDIT.totalSupply disminuye
         |         - burn registrado en el BurnTracker para el Chat App
         |
-        +-------> treasuryBps -> Treasury (USDC funding para refill POL)
+        +-------> treasuryBps (20%) -> Treasury (en CREDIT; engrosa el saldo libre)
         |
-        +-------> rebateBps -> app owner (rebate directo)
+        +-------> rebateBps (10%) -> app owner (rebate directo)
 ```
 
 **El valor real entró en el protocolo en la etapa 1.** Todas las etapas siguientes redistribuyen ese valor.
@@ -66,46 +66,50 @@ Con el pivote CLP, el **LP** entra como agente formal — antes era sólo extern
 
 Notá: **no hay yield "del aire"**. El CREDIT minteado para Alice (staker), Bob (LP) y ChatApp (apps bucket) existe porque Charlie quemó CREDIT. Ningún actor recibe valor que no provino de algún actor aguas arriba.
 
-## Las 3 fuentes de ingreso de una app
+## Las 4 fuentes de ingreso de una app
 
-El split por defecto de 5% directo parece poco. Pero la cuenta cierra — si la app también stakeó en su propio proyecto — por tres vectores simultáneos:
+El split por defecto de 10% directo parece poco. Pero la cuenta cierra — especialmente si la app también stakea en su propio proyecto — por vectores simultáneos:
 
 ### (A) Rebate directo
 
-5% de cada pago. Instantáneo, en CREDIT. Es el flujo de caja operacional.
+10% de cada pago (`rebateBps = 1000`). Instantáneo, en CREDIT. Es el flujo de caja operacional.
 
-### (B) Emisión vía stake en el propio `projectId`
+### (B) Push del bucket apps
+
+15% de la emisión de cada ronda (`bucketBps[apps] = 1500` en el `RewardDistributorV2`) es minteado **directamente** al `ownerRecipient` de cada proyecto en el `finalizeRound`, proporcional al burn que el proyecto generó en la ronda anterior. No exige stake ni claim — es push retrospectivo por burn.
+
+### (C) Emisión vía stake en el propio `projectId`
 
 Si la app adquirió GOV (por ejemplo, comprando en DEX o recibiendo vía propuesta de distribución) y stakeó en `projectId = propio`, captura parte de la share de rewards de ese proyecto en la ronda siguiente.
 
 ¿Cómo?
 
-1. Cuando Charlie paga, 95% se quema y va a `burnByRoundProject[R][projectId=app]`.
-2. En la ronda R+1, la emisión es proporcional a ese burn.
-3. Si la app tiene peso de staking dentro del propio `projectId`, recibe parte de esa emisión.
+1. Cuando Charlie paga, 70% se quema y va a `burnByRoundProject[R][projectId=app]`.
+2. En la ronda R+1, la emisión es proporcional a ese burn — y el **bucket stakers (55% de la emisión)** se reparte entre proyectos por el burn.
+3. Si la app tiene peso de staking dentro del propio `projectId`, recibe parte de esa share.
 
 **Ejemplo numérico** (ronda hipotética):
 
 - ChatApp mueve 600.000 CREDIT en pagos en la ronda R-1.
-- (A) Rebate directo: 5% × 600k = **30.000 CREDIT** instantáneo.
-- En la ronda R, `projectShare_ChatApp = 902.500 × 600k/950k = 570.000 CREDIT`.
-- Si ChatApp stakeó 50k GOV con lock de 365d (multiplier 4x, peso 200k), y el peso total en el proyecto es 400k, captura 50% × 570k = **285.000 CREDIT**.
-- Suma (A) + (B) = **315.000 CREDIT** de un volumen bruto de 600k = **~52,5%** efectivo.
+- (A) Rebate directo: 10% × 600k = **60.000 CREDIT** instantáneo.
+- Burn de ChatApp: 70% × 600k = 420.000 CREDIT en `burnByRoundProject[R-1][42]`. Supongamos burn total de la ronda = 950.000 (otras apps suman el resto) → emisión de la ronda R = 0,95 × 950k = 902.500 CREDIT.
+- (B) Bucket apps: 15% × 902.500 = 135.375; push de ChatApp = `135.375 × 420k/950k` = **59.850 CREDIT** (directo en el `finalizeRound`, sin stake).
+- (C) Bucket stakers: 55% × 902.500 = 496.375; `projectShare_ChatApp = 496.375 × 420k/950k = 219.450 CREDIT`. Si ChatApp stakeó 50k GOV con lock de 365d (multiplier 4x, peso 200k), y el peso total en el proyecto es 400k, captura 50% × 219.450 = **109.725 CREDIT**.
+- Suma (A) + (B) + (C) = **229.575 CREDIT** de un volumen bruto de 600k = **~38,3%** efectivo.
 
 El split **nominal** cuenta una historia engañosa. El split **económico efectivo** para una app que también stake depende de cuánto stake y de la competencia de otros stakers en el mismo `projectId`.
 
-### (C) Apreciación del CREDIT retenido
+### (D) Apreciación del CREDIT retenido
 
 Como `alpha < 1`, el supply de CREDIT cae si el uso se mantiene constante. El CREDIT que la app recibió (rebate + rewards) y aún no vendió tiende a apreciarse en términos reales — siempre que la demanda por CREDIT (generada por el uso de las apps) se sostenga.
 
 **Trampa**: si la app vende todo el CREDIT inmediatamente, renuncia a (C). Si retiene, queda expuesta a volatilidad. Es decisión de la app.
 
-## Cuándo (B) no cierra la cuenta
+## Cuándo (C) no cierra la cuenta
 
-Apps sin capital para adquirir GOV no capturan (B). Para esos casos:
+Apps sin capital para adquirir GOV no capturan (C) — les quedan (A) y (B). Para esos casos:
 
-- El split por defecto (95/0/5) puede ser **desincentivador**.
-- La DAO puede aprobar `setProjectSplit(projectId, custom)` vía propuesta. Por ejemplo: `8000/0/2000` (20% rebate) para apps estratégicas que no logran stakear.
+- Si el rebate de 10% + push del bucket apps aún no cierran la cuenta, la DAO puede aprobar `setProjectSplit(projectId, custom)` vía propuesta. Por ejemplo: `8000/0/2000` (20% rebate) para apps estratégicas que no logran stakear.
 - Alternativamente, se puede financiar adquisición inicial de GOV vía `Treasury` (propuesta de transferencia directa).
 
 La arquitectura permite ajuste por proyecto exactamente para ese tipo de acomodación.
@@ -133,10 +137,11 @@ La arquitectura permite ajuste por proyecto exactamente para ese tipo de acomoda
 
                                                             roundData[R-1].totalEmission = 902_500
                                                             roundData[R-1].snapshotBlock = block.number
+                                                            bucketEmissionByRound[R-1][stakers] = 55% * 902_500 = 496_375
 
-                                                            Stakers pueden claim:
-                                                              project_share(42) = 902_500 * 600k/950k = 570k
-                                                              alice_claim = 570k * aliceW/projectW
+                                                            Stakers pueden claim (base = bucket stakers, NO emision total):
+                                                              project_share(42) = 496_375 * 600k/950k = 313_500
+                                                              alice_claim = 313_500 * aliceW/projectW
 ```
 
 ## Rotación de CREDIT
@@ -144,7 +149,7 @@ La arquitectura permite ajuste por proyecto exactamente para ese tipo de acomoda
 CREDIT entra al supply por **dos** vías solamente:
 
 1. `CreditToken.mintGenesis` — one-shot, 10M al Treasury, en el deploy.
-2. `CreditToken.mint` — por el `RewardDistributor`, en los claims.
+2. `CreditToken.mint` — por los distribuidores con `MINTER_ROLE`: V1 en los claims (ventana de migración) y `RewardDistributorV2` en los claims lazy del bucket stakers + en los pushes del `finalizeRound` (apps, LPs/gauge, bonders/Treasury).
 
 Y sale por **una** vía:
 

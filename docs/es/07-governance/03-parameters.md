@@ -44,13 +44,42 @@ Admin en producción = `CommunityTimelock`. Propuestas:
 
 ### Treasury
 
+Movimiento de fondos (todas `GOVERNANCE_ROLE` = Timelock):
+
 | Función | Qué hace | Bound on-chain |
 |---|---|---|
-| `transfer(token, to, amount)` | Envía ERC-20 | `balance suficiente` |
-| `batchTransfer(token, recipients[], amounts[])` | Batch de transfers | arrays válidos, saldo total suficiente |
+| `transfer(token, to, amount)` | Envía ERC-20 | saldo suficiente; para CREDIT, no puede invadir las reservas `polRefillBucket + pendingGaugeRewards` (`TransferExceedsUnreservedCredit`) |
+| `batchTransfer(token, recipients[], amounts[])` | Batch de transfers | arrays válidos, saldo total suficiente, misma regla de reservas para CREDIT |
 | `payRebates(token, apps[], amounts[], round)` | Batch con evento semántico | idem |
-| `executeBuyback(stable, amountIn, minGovOut, swapData)` | Stub v1 — solo emite evento | `stable != 0, amountIn > 0, minGovOut > 0` |
+| `executeBuyback(usdcAmount, minCreditOut)` | **Buyback real (FFP, Fase 1.1)**: swap USDC → CREDIT vía Uniswap V3 + burn inmediato del CREDIT comprado | infra seteada (oracle/router/feed); spot TWAP < floor por >= `triggerDurationSecs`; sanidad Chainlink USDC/USD; `usdcAmount` <= cap por evento y cap mensual; `minCreditOut > 0` |
 | `sweepETH(to, amount)` | Retira ETH | `balance suficiente` |
+
+Parámetros FFP (buyback/floor) — setters `GOVERNANCE_ROLE`, bounds vía `_checkBounds` (`ParamOutOfBounds` si está fuera):
+
+| Función | Bound on-chain | Default |
+|---|---|---|
+| `setFloorMultiplierBps(bps)` | `[3000, 8000]` | `5000` (floor relativo = 50% de la MA90) |
+| `setFloorAbsoluteUsd(value)` | `[1e16 ($0.01), 1e19 ($10.00)]` | `1e17` ($0.10) |
+| `setTriggerDurationSecs(secs)` | `[1 hour, 7 days]` | `24 hours` |
+| `setTwapWindowSecs(secs)` | `[5 minutes, 2 hours]` | `30 minutes` |
+| `setChainlinkSanityLowBps(bps)` | `[9000, 9999]` | `9900` (0.99) |
+| `setChainlinkSanityHighBps(bps)` | `[10001, 11000]` | `10100` (1.01) |
+| `setCapPerEventBps(bps)` | `[100, 5000]` | `2000` (20% de las reservas USDC) |
+| `setCapMonthlyBps(bps)` | `[100, 7000]` | `3000` (30% del snapshot mensual) |
+| `setSlippageMaxBps(bps)` | `[10, 500]` | `100` (1%) |
+| `setSwapFeeTier(fee)` | `!= 0` (fail-fast en el swap si el pool no existe) | `3000` (0.3%) |
+| `setPriceOracle(oracle)` / `setSwapRouter(router)` / `setChainlinkFeed(feed)` | sin bound; `address(0)` deshabilita/pausa el buyback | `address(0)` hasta que la propuesta lo setee |
+
+POL y saldos reservados (Fases 1.2/1.3):
+
+| Función | Qué hace | Observación |
+|---|---|---|
+| `addPOL(...)` / `addPOLFromRefill(creditAmount, usdcAmount, ...)` | Provisiona liquidez CREDIT/USDC (posición NFT custodiada en el Treasury) | `GOVERNANCE_ROLE` |
+| `removePOL(liquidityAmount, amount0Min, amount1Min, deadline)` | Remueve liquidez POL | `GOVERNANCE_ROLE` **+ supermayoría 75% en el Governor** (scan de `propose`) |
+| `collectPOLFees(amount0Max, amount1Max)` | Colecta fees de la posición POL | `GOVERNANCE_ROLE` |
+| `depositPolRefill(amount)` / `depositPendingGaugeRewards(amount)` | Acreditan los ledgers reservados | roles dedicadas; la reserva agregada post-depósito no puede exceder `balanceOf(CREDIT)` (`DepositExceedsCreditBalance`) |
+| `flushPendingGaugeRewards(amount, poolId, duration)` | Drena el ledger a incentive en el gauge (`0` = todo / pool default) | `GOVERNANCE_ROLE` |
+| `writeDownPolRefillBucket(amount)` / `writeDownPendingGaugeRewards(amount)` | Válvulas de write-down de los ledgers (escape/reciclaje) | `GOVERNANCE_ROLE`, eventos auditables |
 
 ### Staking
 
@@ -71,17 +100,39 @@ Sin parámetros ajustables. `MIN_LOCK`, `MAX_LOCK`, `MULTIPLIER_PRECISION`, `MAX
 | Función | Qué hace | Bound on-chain | Valor en producción |
 |---|---|---|---|
 | `finalizeRound(round)` | Graba emisión inmutable de la ronda | secuencial, ronda cerrada en el tracker | — |
-| `setAlpha(new)` | Ajusta alpha | `[MIN_ALPHA=0.5e18, MAX_ALPHA=1.1e18]` | `0.95e18` |
+| `setAlpha(new)` | Ajusta alpha | `[MIN_ALPHA=0.5e18, MAX_ALPHA=0.99e18]` | `0.95e18` |
 | `setCapMax(new)` | Ajusta techo por ronda | `[MIN_CAPMAX=1e18, MAX_CAPMAX=100M*1e18]` | `5M CREDIT` |
 | `grantRole(GOVERNANCE_ROLE, addr)` | idem | — | — |
 
 `floorSchedule` es **inmutable** tras el deploy.
 
+### RewardDistributorV2 (deploy opcional — Fase F / pivote CLP)
+
+Hereda `setAlpha`/`setCapMax`/`finalizeRound` con los mismos bounds del V1, y añade el split de emisión en 4 buckets:
+
+| Función | Qué hace | Bound on-chain | Valor default |
+|---|---|---|---|
+| `setBucketBps([stakers, lps, apps, bonders])` | Split de la emisión por ronda | suma `== 10.000`; `stakers >= 3000`; `lps >= 500`; `apps <= 2500`; `bonders <= 2000` | `[5500, 2500, 1500, 500]` (55/25/15/5) |
+
+### LiquidityGauge (deploy opcional — Fase F / pivote CLP)
+
+| Función | Qué hace | Bound on-chain |
+|---|---|---|
+| `addPool(pool)` / `setPoolEnabled(poolId, enabled)` | Whitelist de pools Uniswap V3 | — |
+| `setVestingDuration(newDuration)` | Vesting de los rewards de LP | `[VESTING_DURATION_MIN=1d, VESTING_DURATION_MAX=90d]` |
+| `setDenylist(account, denied)` / `pause()` / `unpause()` | Controles operacionales | — |
+| `endIncentive(poolId)` | Termina incentive y recupera refund | — |
+| `governanceRescueRewards(to, amount)` | Rescata CREDIT **no reservado** | limitado por `getUnreservedBalance()` — `totalVestingLocked` (vesting de usuarios) es intocable (`RescueExceedsUnreserved`) |
+
+### CreditPriceOracle
+
+**Sin parámetros ajustables** — adapter inmutable por diseño (sin owner, sin setters, sin storage mutable): pool, tokens, feed Chainlink, staleness (6h) y banda de sanidad (`[9900, 10100]` bps) se fijan en el constructor. Para cambiar cualquier cosa, se deploya otro adapter y la gobernanza lo apunta vía `Treasury.setPriceOracle(oracle)`.
+
 ### FeeRouter
 
 | Función | Qué hace | Bound on-chain | Valor en producción |
 |---|---|---|---|
-| `setDefaultSplit(split)` | Split global default | `burnBps + treasuryBps + rebateBps == 10.000` | `(9500, 0, 500)` |
+| `setDefaultSplit(split)` | Split global default | `burnBps + treasuryBps + rebateBps == 10.000` | `(7000, 2000, 1000)` — 70% burn / 20% treasury / 10% rebate (Fase 0) |
 | `setProjectSplit(id, split)` | Override por proyecto | idem | — |
 | `clearProjectSplit(id)` | Remueve override | el override tiene que existir | — |
 
@@ -129,6 +180,8 @@ Todos los cambios son `onlyGovernance` (necesitan venir vía propuesta aprobada 
 | `updateQuorumNumerator(new)` | Ajusta numerador del quorum | `[0, 100]` | `4` |
 | `relay(target, value, data)` | Ejecuta operación arbitraria como si fuera el governor (rara) | — | — |
 
+**Supermayoría 75% (enforced on-chain, no ajustable).** El `propose` escanea el batch: si cualquier call tiene target en el `TREASURY` (immutable, seteado en el constructor) con selector de `Treasury.removePOL` (`0x6a71d4b3`) o de gestión de roles (`grantRole`/`revokeRole`/`renounceRole`), o target en el propio Timelock con selector de gestión de roles, la propuesta entera se marca `ProposalType.Supermajority` (evento `ProposalTypeSet`) y sólo pasa con `forVotes >= 3 × againstVotes` y `forVotes > 0` (For >= 75% de los votos decisivos; Abstain fuera de la razón). Un batch mixto contamina la propuesta entera — por diseño.
+
 ## Parámetros inmutables
 
 La DAO **no puede** alterar:
@@ -142,12 +195,15 @@ La DAO **no puede** alterar:
 | `MULTIPLIER_PRECISION` del Staking | `Staking` | 1e18 |
 | `MIN_ROUND_DURATION` | `BurnTracker` | 1 día |
 | `MAX_ROUND_DURATION` | `BurnTracker` | 30 días |
-| `MIN_ALPHA`, `MAX_ALPHA` | `RewardDistributor` | `0.5e18`, `1.1e18` |
+| `MIN_ALPHA`, `MAX_ALPHA` | `RewardDistributor` | `0.5e18`, `0.99e18` (reducido de `1.1e18` — ver `audit/economist/2026-04-22-consistency-audit.md` C2; garantiza IE1 α<1 permanente por construcción) |
 | `MIN_CAPMAX`, `MAX_CAPMAX` | `RewardDistributor` | `1e18`, `100M*1e18` |
 | `FLOOR_SCHEDULE_LENGTH` | `RewardDistributor` | 24 |
 | `PROBATION_PENALTY_DENOM` | `RewardDistributor` | 4 (25%) |
 | `floorSchedule` (valores) | `RewardDistributor` | grabados en el deploy |
 | `_BPS_DENOMINATOR` | `FeeRouter` | 10.000 |
+| Regla de supermayoría 75% (`removePOL` / gestión de roles en Treasury/Timelock) | `CommunityGovernor` | `forVotes >= 3 × againstVotes`; `TREASURY` es `immutable` |
+| Bounds de los buckets del V2 | `RewardDistributorV2` | `MIN_BUCKET_STAKERS_BPS=3000`, `MIN_BUCKET_LPS_BPS=500`, `MAX_BUCKET_APPS_BPS=2500`, `MAX_BUCKET_BONDERS_BPS=2000` |
+| Configuración entera del oracle | `CreditPriceOracle` | pool/tokens/feed/staleness 6h/banda `[9900, 10100]` — todo en el constructor |
 | Direcciones de los contratos | deploy | fijos |
 | `CommunityGovernor` `name` (EIP-712) | `CommunityGovernor` | "CommunityGovernor" |
 
@@ -171,7 +227,7 @@ governor.propose(targets, values, calldatas, description);
 Prerrequisitos:
 
 - El proposer tiene >= 10k GOV delegados.
-- El valor nuevo `0.90e18` está dentro de `[MIN_ALPHA=0.5e18, MAX_ALPHA=1.1e18]`. Si está fuera, la ejecución revierte (incluso con el voto aprobado).
+- El valor nuevo `0.90e18` está dentro de `[MIN_ALPHA=0.5e18, MAX_ALPHA=0.99e18]`. Si está fuera, la ejecución revierte (incluso con el voto aprobado).
 
 ## Efecto temporal de los cambios
 
@@ -205,6 +261,16 @@ event ProjectSplitCleared(uint256 indexed projectId);
 # ProjectRegistry
 event MinCollateralUpdated(uint256 oldMin, uint256 newMin);
 event ProbationDurationUpdated(uint64 oldDuration, uint64 newDuration);
+
+# Treasury (FFP)
+event BuybackParamsUpdated(bytes32 indexed paramKey, uint256 newValue);
+event BuybackInfraUpdated(bytes32 indexed paramKey, address indexed addrOrZero, uint256 numericOrZero);
+
+# RewardDistributorV2
+event BucketBpsUpdated(uint16[4] oldBps, uint16[4] newBps);
+
+# CommunityGovernor
+event ProposalTypeSet(uint256 indexed proposalId, ProposalType proposalType);
 ```
 
 Los indexadores externos deben monitorear y mostrar el histórico de parámetros para transparencia.

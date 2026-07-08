@@ -45,8 +45,8 @@ Ver [GovernanceToken](../08-contracts-reference/01-GovernanceToken.md) para refe
 | Símbolo | CREDIT | idem |
 | Supply cap hardcoded | **Não existe** | `CreditToken` não aplica cap |
 | Padrão | ERC-20 + ERC20Burnable + AccessControl | herança em `CreditToken` |
-| Genesis | 10.000.000 CREDIT para `Treasury`, one-shot | `mintGenesis`, flag `genesisMinted` |
-| Mint subsequente | apenas `MINTER_ROLE` | concedida ao `RewardDistributor` no deploy |
+| Genesis | 10.000.000 CREDIT para `Treasury`, one-shot — o valor é **parâmetro de deploy** (`genesisAmount` em `ignition/parameters/production.json`), não hardcoded no contrato | `mintGenesis`, flag `genesisMinted` |
+| Mint subsequente | apenas `MINTER_ROLE` | concedida ao `RewardDistributor` (V1) no deploy; o `RewardDistributorV2` é o **minter alvo** — durante a migração de 4 rounds coexistem dois minters, até governança revogar a role do V1 |
 | Burn | via `burn`, `burnFrom` (ERC20Burnable) **ou** `burnByRole` | `burnByRole` sem allowance, exige `BURNER_ROLE` |
 
 **Por que não tem supply cap hardcoded?**
@@ -79,8 +79,8 @@ Estas diferenças não são decoração — elas modelam a separação entre "qu
 |---|---|
 | [GovernanceToken](../08-contracts-reference/01-GovernanceToken.md) | GOV ERC20Votes |
 | [CreditToken](../08-contracts-reference/02-CreditToken.md) | CREDIT ERC20Burnable com roles |
-| [RewardDistributor](../08-contracts-reference/07-RewardDistributor.md) | Único `MINTER_ROLE` em CREDIT |
-| [BurnTracker](../08-contracts-reference/06-BurnTracker.md) | Único `BURNER_ROLE` nativo em CREDIT |
+| [RewardDistributor](../08-contracts-reference/07-RewardDistributor.md) / [RewardDistributorV2](../08-contracts-reference/07b-RewardDistributorV2.md) | `MINTER_ROLE` em CREDIT — V1 recebe no deploy; V2 é o minter alvo (dois minters durante a migração de 4 rounds, V1 vira claim-only e perde a role após o cutoff) |
+| [BurnTracker](../08-contracts-reference/06-BurnTracker.md) | `BURNER_ROLE` em CREDIT para o burn de uso (via `FeeRouter`); o [Treasury](../08-contracts-reference/04-Treasury.md) também recebe `BURNER_ROLE` (via proposta) para queimar o CREDIT comprado no buyback FFP |
 | [FeeRouter](../08-contracts-reference/08-FeeRouter.md) | Entrypoint de pagamento que aciona o burn |
 
 ---

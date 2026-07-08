@@ -27,7 +27,7 @@ Three healthy ways to close that window:
 | Phase | When | Actors | Deliverable |
 |---|---|---|---|
 | **F0 — Pre-deploy** | T-8 to T-1 weeks | Auditors, multisig, team | Audited code, monitoring up, operational multisig |
-| **F1 — Deploy** | Day D | Deployer (multisig) | 12 contracts on-chain, verified on Etherscan |
+| **F1 — Deploy** | Day D | Deployer (multisig) | 10 core contracts on-chain, verified on Etherscan (of 15 production contracts in the repo; auxiliaries and CLP Phase 1 are optional) |
 | **F2 — Bootstrap** | D+1 to D+12 | Deployer → Governor | `acceptOwnership` executed; Timelock is owner |
 | **F3 — Distribution** | D+12 to D+90 | DAO (multisig + holders) | GOV distributed via proposals |
 | **F4 — Full handoff** | D+90+ | Community | Multisig loses voting majority |
@@ -58,7 +58,14 @@ These are **not** in the main module and need to exist before the deploy or befo
 
 ### Optional auxiliary deploy in `Dao.ts`
 
-`ignition/modules/Dao.ts` supports two build-time env vars:
+`ignition/modules/Dao.ts` supports build-time env vars (all default `false`):
+
+- `DEPLOY_TEAM_VESTING` — `TeamVesting` (1 beneficiary).
+- `DEPLOY_USER_SUBSIDY` — `UserSubsidy` (Merkle singleton).
+- `DEPLOY_CLP_PHASE1` — `LiquidityGauge` + `RewardDistributorV2` (CLP pivot Phase 1).
+- `DEPLOY_CLP_ORACLE` — `CreditPriceOracle` (CREDIT/USDC TWAP adapter + Chainlink sanity).
+
+The module **grants no role** to the CLP contracts and does not call `Treasury.setPriceOracle` — those are post-deploy governance acts (see "CLP post-deploy wiring" below).
 
 ```bash
 # Default (recommended production path) — 10 core contracts:
@@ -71,7 +78,15 @@ DEPLOY_TEAM_VESTING=true DEPLOY_USER_SUBSIDY=true \
 npx hardhat ignition deploy ./ignition/modules/Dao.ts \
   --parameters ignition/parameters/production.json \
   --network mainnet
+
+# With CLP Phase 1 (gauge + distributorV2 + oracle):
+DEPLOY_CLP_PHASE1=true DEPLOY_CLP_ORACLE=true \
+npx hardhat ignition deploy ./ignition/modules/Dao.ts \
+  --parameters ignition/parameters/production.json \
+  --network mainnet
 ```
+
+`DEPLOY_CLP_ORACLE` should only be enabled with **real** `creditUsdcPool` and `usdcAddress` in the parameters — the `CreditPriceOracle` constructor reverts with `ZeroAddress` (or `PoolTokenMismatch`) if pool/USDC are placeholders. `usdcUsdFeed` may be `address(0)` (1 USDC = 1 USD fallback). That is why the flag is separate from `DEPLOY_CLP_PHASE1`.
 
 In mainnet, **only enable the flags when the TeamVesting constructor placeholders (beneficiary address, cliff/duration dates) are replaced by real, audited values**. The default `ZeroAddress` for `teamVestingBeneficiary` causes the constructor to revert with `ZeroAddress` — this is intentional, avoiding a silent deploy with a visually invisible placeholder. In dev/testnet, pass the deployer's own address as a placeholder via `ignition/parameters/*.json`.
 
@@ -134,11 +149,22 @@ Ignition is idempotent — if an error mid-run, resumes from the last confirmed 
 
 Genesis mint happens **before** `DEFAULT_ADMIN_ROLE` renunciation on CreditToken (`mintGenesis` is `onlyRole(DEFAULT_ADMIN_ROLE)`).
 
+> **New CommunityGovernor argument**: the Governor's constructor gained the **Treasury** address (3rd position, after `token` and `timelock`) in Phase 1.2. `Dao.ts` already passes the immutable `treasury` — required for the `propose` scan that applies the 75% supermajority to `Treasury.removePOL` and to Treasury/Timelock role management (see [CommunityGovernor](../08-contracts-reference/10-CommunityGovernor.md)). External deploy scripts that instantiate the Governor via constructor must propagate this argument.
+
+### CLP post-deploy wiring (only if the Phase 1 flags are used)
+
+`Dao.ts` deploys the CLP contracts but does **not** wire them. These acts are governance proposals (via the Timelock) after bootstrap:
+
+1. **`Treasury.setPriceOracle(creditPriceOracle)`** — enables `recordDailyPrice` and `executeBuyback` (until then they revert with `BuybackInfraMissing`). Also `setSwapRouter` and `setChainlinkFeed`.
+2. **`CreditToken.grantRole(MINTER_ROLE, rewardDistributorV2)`** — during a V1→V2 migration, both distributors may hold the role transiently.
+3. **`LiquidityGauge.addPool(...)` + `grantRole(REWARD_NOTIFIER_ROLE, ...)`** and **`LiquidityGauge.setDenylist(treasury, true)`** (anti self-dealing D.9).
+4. **`Treasury.setLiquidityGauge(gauge, poolId)`** — destination of the `flushPendingGaugeRewards` fallback.
+
 ### Post-deploy verification — BEFORE any other action
 
 Each item is a mandatory assert via `cast` or hardhat console:
 
-- [ ] **12 contracts verified on Etherscan**.
+- [ ] **10 core contracts verified on Etherscan** (GovernanceToken, CreditToken, CommunityTimelock, ProjectRegistry, Treasury, Staking, BurnTracker, RewardDistributor, FeeRouter, CommunityGovernor). If the CLP flags are used, also verify LiquidityGauge, RewardDistributorV2 and/or CreditPriceOracle.
 - [ ] **Timelock has `PROPOSER_ROLE` and `CANCELLER_ROLE`**:
   ```
   cast call $TIMELOCK 'hasRole(bytes32,address)(bool)' $(cast keccak "PROPOSER_ROLE") $GOVERNOR
@@ -156,7 +182,7 @@ Each item is a mandatory assert via `cast` or hardhat console:
 - [ ] **`pendingOwner(GOV) == timelock`**.
 - [ ] **`CREDIT.balanceOf(treasury) == 10_000_000e18`** and **`CREDIT.totalSupply() == 10_000_000e18`**.
 - [ ] **`GOV.totalSupply() == 0`** — nobody has received GOV yet.
-- [ ] **FeeRouter split = (9500, 0, 500)**.
+- [ ] **FeeRouter split = (7000, 2000, 1000)** — 70% burn / 20% treasury / 10% rebate (CLP Phase 0, baked into `production.json`). The `defaultSplit` comes from the deploy parameters, it is not hardcoded in the contract.
 
 If **any** fails: stop. Do not advance to F2. Investigate.
 

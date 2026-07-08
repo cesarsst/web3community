@@ -3,7 +3,7 @@
 **Audience:** auditors, offensive security, researchers.
 **Prerequisites:** general knowledge of the architecture.
 
-This document consolidates invariants, identified attack surfaces, and mitigations implemented in the 12 contracts.
+This document consolidates invariants, identified attack surfaces, and mitigations implemented in the 15 production contracts.
 
 ## Global invariants
 
@@ -74,6 +74,24 @@ This document consolidates invariants, identified attack surfaces, and mitigatio
 - `ProjectRegistry.registerProject` and `activateProject` are `onlyRole(GOVERNANCE_ROLE)`.
 - Callers check `isActive` and revert with `ProjectNotActive`.
 
+### I8 — On-chain segregation of reserved balances (CLP Phase 1.4)
+
+**Statement**: CREDIT that backs internal obligations cannot be drained by generic outflows.
+
+- **Treasury**: `polRefillBucket + pendingGaugeRewards <= balanceOf(CREDIT)` — enforced on both sides. Outflows (`transfer`/`batchTransfer`/`payRebates`/`addPOL`) revert with `TransferExceedsUnreservedCredit`; deposits revert with `DepositExceedsCreditBalance`. The ledgers are only consumed by dedicated paths (`addPOLFromRefill`, `flushPendingGaugeRewards`) and the `writeDown*` valves.
+- **LiquidityGauge**: `totalVestingLocked` (CREDIT of not-yet-claimed `VestingPosition`s) is untouchable by `governanceRescueRewards` — the rescue only reaches `getUnreservedBalance()` (`RescueExceedsUnreserved`).
+
+These balances used to be an off-chain "accounting norm"; now they are enforced invariants.
+
+### I9 — 75% supermajority for POL removal (CLP Phase 1.2)
+
+**Statement**: proposals containing `Treasury.removePOL` — or role management on the Treasury/Timelock that would re-authorize who can call it — require `forVotes >= 3 * againstVotes` AND `forVotes > 0` (75% of the decisive For/Against votes).
+
+**Where it is enforced**:
+
+- `CommunityGovernor.propose` scans `targets`/`calldatas` and marks `ProposalType.Supermajority` for the `removePOL` selector (Treasury target) and `grantRole`/`revokeRole`/`renounceRole` (Treasury **or** Timelock target).
+- `CommunityGovernor._voteSucceeded` applies the 3:1 ratio. A mixed batch contaminates the entire proposal. The "cultural norm" became code.
+
 ## Attack surfaces and mitigations
 
 ### Reentrancy
@@ -84,12 +102,14 @@ This document consolidates invariants, identified attack surfaces, and mitigatio
 
 **Guarded contracts**:
 
-- `Treasury.transfer`, `batchTransfer`, `payRebates`, `executeBuyback`, `sweepETH`.
+- `Treasury.transfer`, `batchTransfer`, `payRebates`, `executeBuyback`, `sweepETH`, `recordDailyPrice`, `addPOL`, `removePOL`, `collectPOLFees`, `addPOLFromRefill`, `depositPolRefill`, `depositPendingGaugeRewards`, `flushPendingGaugeRewards`, `writeDownPolRefillBucket`, `writeDownPendingGaugeRewards`.
 - `Staking.stake`, `increaseStake`, `extendLock`, `unstake`, `unstakeAll`.
 - `BurnTracker.burnAndRecord`.
 - `RewardDistributor.claim`, `claimMany`.
 - `FeeRouter.pay`.
 - `UserSubsidy.claim`, `closeCampaign`.
+- `LiquidityGauge.stake`, `unstake`, `emergencyUnstake`, `harvest`, `notifyRewardAmount`, `endIncentive`, `governanceRescueRewards`.
+- `CreditPriceOracle` — no guard: it is `view`, no state writes.
 
 ### Integer overflow / underflow
 
@@ -229,8 +249,7 @@ Status at the time of this doc: **zero high/medium findings** in project code. L
 
 ## Test suite
 
-- Total: 462+ tests.
-- Coverage: 100% statements, 99.84% lines.
+- Total: **858 tests passing, 0 failing** (`npm test`, ~60s). Includes the CLP Phase 1 suites (`CreditPriceOracle`, `CommunityGovernor.supermajority`, `Treasury.segregation`, `Treasury.polRefill`, `LiquidityGauge`).
 - End-to-end integration tests in `test/ignition/Dao.test.ts`.
 - Economic simulation in `scripts/simulation/` — 52 rounds × 3 scenarios (base, growth, death spiral).
 

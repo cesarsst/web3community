@@ -301,11 +301,25 @@ contract Treasury is AccessControl, ReentrancyGuard {
     ///         `RewardDistributorV2` em cada `finalizeRound`. Drenado via
     ///         {addPOLFromRefill} quando governance casa o lado USDC do
     ///         Treasury para refill do POL.
-    /// @dev Aproximacao auditavel: `polRefillBucket <= IERC20(CREDIT).balanceOf(this)`
-    ///      em todo momento (invariante off-chain monitoravel — nao
-    ///      enforced on-chain pois Treasury aceita CREDIT de outras fontes,
-    ///      e enforce estrito tornaria todo deposit de CREDIT que nao seja
-    ///      bucket bonders contabilizado erroneamente).
+    /// @dev Invariante ENFORCED ON-CHAIN (ambos os lados):
+    ///      `polRefillBucket + pendingGaugeRewards <= IERC20(CREDIT).balanceOf(this)`.
+    ///      Lado das ENTRADAS: {depositPolRefill} e
+    ///      {depositPendingGaugeRewards} revertem com
+    ///      {DepositExceedsCreditBalance} se a reserva total pos-deposito
+    ///      exceder o saldo real de CREDIT — um depositor bugado ou
+    ///      comprometido nao consegue inflar o ledger alem do lastro (o que
+    ///      congelaria toda saida generica de CREDIT). O depositor (V2)
+    ///      minta o CREDIT para este Treasury ANTES de registrar no ledger,
+    ///      na mesma tx, entao o check passa no fluxo legitimo.
+    ///      Lado das SAIDAS: toda saida generica de CREDIT ({transfer},
+    ///      {batchTransfer}, {payRebates}, {addPOL}) exige
+    ///      `amount <= unreservedCreditBalance()` (saldo menos os dois
+    ///      ledgers), revertendo com {TransferExceedsUnreservedCredit}. Os
+    ///      ledgers so sao consumidos pelos caminhos dedicados
+    ///      {addPOLFromRefill} e {flushPendingGaugeRewards} (que decrementam
+    ///      o ledger ANTES da interacao externa, CEI, e movem no maximo o
+    ///      valor decrementado) e pelas valvulas governance
+    ///      {writeDownPolRefillBucket}/{writeDownPendingGaugeRewards}.
     uint256 public polRefillBucket;
 
     /// @notice Ledger interno do fallback de rewards para LPs quando o
@@ -429,10 +443,25 @@ contract Treasury is AccessControl, ReentrancyGuard {
     event PendingGaugeDeposited(uint256 amount, uint256 newPendingTotal);
 
     /// @notice Emitido em {flushPendingGaugeRewards}.
-    /// @param amount Quantidade total drenada para o gauge.
+    /// @param amount Quantidade drenada para o gauge nesta chamada (pode ser
+    ///               parcial — o restante permanece em `pendingGaugeRewards`).
     /// @param poolId Pool alvo no gauge.
     /// @param duration Duracao da incentive criada (seg).
     event PendingGaugeFlushed(uint256 amount, uint256 indexed poolId, uint32 duration);
+
+    /// @notice Emitido em {writeDownPolRefillBucket} — reducao explicita do
+    ///         ledger pelo governance, liberando a parcela para o saldo
+    ///         livre (nao move tokens).
+    /// @param amount Quantidade baixada do ledger.
+    /// @param newBucketTotal Saldo do `polRefillBucket` apos a operacao.
+    event PolRefillWrittenDown(uint256 amount, uint256 newBucketTotal);
+
+    /// @notice Emitido em {writeDownPendingGaugeRewards} — reducao explicita
+    ///         do ledger pelo governance, liberando a parcela para o saldo
+    ///         livre (nao move tokens).
+    /// @param amount Quantidade baixada do ledger.
+    /// @param newPendingTotal Saldo de `pendingGaugeRewards` apos a operacao.
+    event PendingGaugeWrittenDown(uint256 amount, uint256 newPendingTotal);
 
     /// @notice Emitido em {setLiquidityGauge}.
     /// @param gauge Endereco do `LiquidityGauge` (`address(0)` desabilita).
@@ -449,6 +478,25 @@ contract Treasury is AccessControl, ReentrancyGuard {
     error EmptyBatch();
     error InsufficientBalance(address token, uint256 requested, uint256 available);
     error ETHTransferFailed();
+
+    /// @notice Saida generica de CREDIT excede o saldo nao-reservado — o
+    ///         balance de CREDIT menos os ledgers `polRefillBucket` e
+    ///         `pendingGaugeRewards` (que lastreiam POL refill e rewards de
+    ///         gauge pendentes). Aplicado em {transfer}, {batchTransfer},
+    ///         {payRebates} (soma do batch) e {addPOL}.
+    /// @param available Saldo nao-reservado disponivel.
+    /// @param requested Quantia pedida (ou soma das parcelas de CREDIT do batch).
+    error TransferExceedsUnreservedCredit(uint256 available, uint256 requested);
+
+    /// @notice Deposito em ledger ({depositPolRefill} ou
+    ///         {depositPendingGaugeRewards}) elevaria a reserva total
+    ///         (`polRefillBucket + pendingGaugeRewards`) acima do saldo real
+    ///         de CREDIT do Treasury — o ledger nao pode registrar lastro
+    ///         que nao existe (invariante da Fase 1.4, enforced tambem no
+    ///         lado das entradas).
+    /// @param reservedAfter Reserva total que resultaria do deposito.
+    /// @param creditBalance Saldo real de CREDIT do Treasury.
+    error DepositExceedsCreditBalance(uint256 reservedAfter, uint256 creditBalance);
 
     // ------------------------------------------------------------------
     // Errors — Fase 1.1 (FFP buyback)
@@ -500,8 +548,9 @@ contract Treasury is AccessControl, ReentrancyGuard {
     // Errors — Fase 1.4 (bucket bonders + gauge fallback)
     // ------------------------------------------------------------------
 
-    /// @notice Tentativa de {addPOLFromRefill} com `creditAmount` superior
-    ///         ao saldo atual de `polRefillBucket`.
+    /// @notice Tentativa de {addPOLFromRefill} (ou
+    ///         {writeDownPolRefillBucket}) com quantia superior ao saldo
+    ///         atual de `polRefillBucket`.
     error PolRefillBucketInsufficient(uint256 requested, uint256 available);
 
     /// @notice {flushPendingGaugeRewards} chamado mas `liquidityGauge` ainda
@@ -515,6 +564,12 @@ contract Treasury is AccessControl, ReentrancyGuard {
 
     /// @notice {flushPendingGaugeRewards} chamado com ledger zerado.
     error NoPendingGaugeRewards();
+
+    /// @notice {flushPendingGaugeRewards} ou {writeDownPendingGaugeRewards}
+    ///         com `amount` superior ao saldo atual de `pendingGaugeRewards`.
+    /// @param requested Quantia pedida.
+    /// @param available Saldo atual do ledger.
+    error PendingGaugeRewardsInsufficient(uint256 requested, uint256 available);
 
     // ------------------------------------------------------------------
     // Constructor
@@ -569,6 +624,19 @@ contract Treasury is AccessControl, ReentrancyGuard {
         return token.balanceOf(address(this));
     }
 
+    /**
+     * @notice Saldo de CREDIT do Treasury NAO reservado pelos ledgers
+     *         internos (`polRefillBucket + pendingGaugeRewards`). E o teto
+     *         para qualquer saida generica de CREDIT ({transfer},
+     *         {batchTransfer}, {payRebates}, {addPOL}).
+     * @return unreserved `max(balanceOf(CREDIT) - reservado, 0)`.
+     */
+    function unreservedCreditBalance() public view returns (uint256 unreserved) {
+        uint256 bal = IERC20(CREDIT_TOKEN).balanceOf(address(this));
+        uint256 reserved = _reservedCredit();
+        return bal > reserved ? bal - reserved : 0;
+    }
+
     // ------------------------------------------------------------------
     // Views — FFP
     // ------------------------------------------------------------------
@@ -618,11 +686,16 @@ contract Treasury is AccessControl, ReentrancyGuard {
     }
 
     // ------------------------------------------------------------------
-    // Governance-gated state changes — ERC-20 (originais, inalterados)
+    // Governance-gated state changes — ERC-20 (originais; saida de CREDIT
+    // limitada ao nao-reservado desde a Fase 1.4 — segregacao on-chain)
     // ------------------------------------------------------------------
 
     /**
      * @notice Transfere `amount` de `token` do treasury para `to`.
+     * @dev Quando `token == CREDIT_TOKEN`, `amount` e limitado a
+     *      {unreservedCreditBalance} — reverte com
+     *      {TransferExceedsUnreservedCredit} se invadir os ledgers
+     *      `polRefillBucket`/`pendingGaugeRewards`.
      */
     function transfer(IERC20 token, address to, uint256 amount) external onlyRole(GOVERNANCE_ROLE) nonReentrant {
         _transfer(token, to, amount);
@@ -631,6 +704,8 @@ contract Treasury is AccessControl, ReentrancyGuard {
     /**
      * @notice Transfere `amounts[i]` de `token` para `recipients[i]`, para
      *         todo i in [0, recipients.length).
+     * @dev Quando `token == CREDIT_TOKEN`, a SOMA das parcelas e validada
+     *      contra {unreservedCreditBalance} (nao cada parcela isolada).
      */
     function batchTransfer(
         IERC20 token,
@@ -644,6 +719,8 @@ contract Treasury is AccessControl, ReentrancyGuard {
     /**
      * @notice Paga rebates a apps (batch transfer com evento semantico de
      *         rodada).
+     * @dev Mesma segregacao de {batchTransfer}: soma das parcelas de CREDIT
+     *      limitada a {unreservedCreditBalance}.
      */
     function payRebates(
         IERC20 token,
@@ -1041,7 +1118,11 @@ contract Treasury is AccessControl, ReentrancyGuard {
      *      1. {positionManager} ja setado via {setPositionManager}.
      *      2. {USDC_TOKEN} setado no construtor (se zero, reverte com
      *         {BuybackInfraMissing}).
-     *      3. Treasury ja tem `creditAmount` e `usdcAmount` em saldo.
+     *      3. Treasury ja tem `creditAmount` e `usdcAmount` em saldo
+     *         LIVRE — `creditAmount` e validado contra
+     *         {unreservedCreditBalance} (reverte com
+     *         {TransferExceedsUnreservedCredit} se invadir os buckets
+     *         `polRefillBucket`/`pendingGaugeRewards`).
      *         Para o seed inicial, isso exige que a proposta DAO
      *         tambem mint CREDIT (Treasury com `MINTER_ROLE` temporario
      *         no `CreditToken`) e que o USDC chegue por bootstrap
@@ -1078,6 +1159,9 @@ contract Treasury is AccessControl, ReentrancyGuard {
         if (USDC_TOKEN == address(0) || address(positionManager) == address(0)) {
             revert BuybackInfraMissing();
         }
+        // Segregacao: {addPOL} consome CREDIT do saldo LIVRE do Treasury —
+        // injecao lastreada pelo bucket bonders usa {addPOLFromRefill}.
+        _enforceUnreservedCredit(CREDIT_TOKEN, creditAmount, IERC20(CREDIT_TOKEN).balanceOf(address(this)));
 
         (address token0, address token1, uint256 d0, uint256 d1) = _orderTokens(creditAmount, usdcAmount);
         _approveNPM(token0, token1, d0, d1);
@@ -1309,14 +1393,16 @@ contract Treasury is AccessControl, ReentrancyGuard {
      *         pelo `RewardDistributorV2` apos cunhar CREDIT diretamente para
      *         este Treasury — o ledger e contabil, nao move tokens aqui.
      * @dev `onlyRole(POL_REFILL_DEPOSITOR_ROLE)` + `nonReentrant`. Reverte
-     *      com {ZeroAmount} se `amount == 0`. Sem checagem on-chain de saldo
-     *      real (CREDIT eh mintado pelo distributor *antes* desta chamada
-     *      dentro da mesma tx; bookkeeping aqui e ledger off-balance):
-     *      qualquer mismatch entre o ledger e o saldo real cai em
-     *      {addPOLFromRefill} via `creditAmount > polRefillBucket`, que
-     *      reverte. Atomicidade do `finalizeRound` (com `nonReentrant` no
-     *      lado do distributor) garante que mint+depositPolRefill nao podem
-     *      ser interleaved.
+     *      com {ZeroAmount} se `amount == 0` e com
+     *      {DepositExceedsCreditBalance} se a reserva total pos-deposito
+     *      (`polRefillBucket + amount + pendingGaugeRewards`) exceder o
+     *      saldo real de CREDIT — o ledger nunca registra lastro
+     *      inexistente. Como o V2 minta o CREDIT para este Treasury *antes*
+     *      desta chamada dentro da mesma tx (atomicidade garantida pelo
+     *      `nonReentrant` do `finalizeRound` no lado do distributor), o
+     *      check passa sempre no fluxo legitimo; um depositor bugado ou
+     *      comprometido nao consegue inflar o ledger e congelar as saidas
+     *      genericas de CREDIT ({_enforceUnreservedCredit}).
      * @param amount Quantidade (em CREDIT wei) a acumular.
      */
     function depositPolRefill(uint256 amount) external onlyRole(POL_REFILL_DEPOSITOR_ROLE) nonReentrant {
@@ -1324,6 +1410,11 @@ contract Treasury is AccessControl, ReentrancyGuard {
             revert ZeroAmount();
         }
         uint256 newTotal = polRefillBucket + amount;
+        uint256 reservedAfter = newTotal + pendingGaugeRewards;
+        uint256 creditBalance = IERC20(CREDIT_TOKEN).balanceOf(address(this));
+        if (reservedAfter > creditBalance) {
+            revert DepositExceedsCreditBalance(reservedAfter, creditBalance);
+        }
         polRefillBucket = newTotal;
         emit PolRefillDeposited(amount, newTotal);
     }
@@ -1337,9 +1428,15 @@ contract Treasury is AccessControl, ReentrancyGuard {
      *      e com {BuybackInfraMissing} se infra POL nao setada.
      *
      *      Reusa internamente o pipeline de {addPOL} ({_orderTokens} +
-     *      {_approveNPM} + {_provisionLiquidity}). USDC vem do balance do
-     *      Treasury (alimentado por `treasuryBps` do FeeRouter — split
-     *      `(7000, 2000, 1000)` deve estar live; vide gate documental no
+     *      {_approveNPM} + {_provisionLiquidity}). USDC vem do saldo LIVRE
+     *      do Treasury. ATENCAO (racional economico): a fatia `treasuryBps`
+     *      do FeeRouter e denominada em CREDIT (`FeeRouter.pay` transfere
+     *      CREDIT ao Treasury), portanto NAO alimenta o lado USDC desta
+     *      funcao. As fontes reais de USDC sao off-protocol: bootstrap
+     *      externo (seed da DAO) e os fees da posicao POL coletados via
+     *      {collectPOLFees}. Sem USDC para casar, o bucket bonders cresce
+     *      sem consumo — governance pode reciclar bucket antigo para o
+     *      saldo livre via {writeDownPolRefillBucket} (vide
      *      `docs/governance/fase1-4-bucket-split.md`).
      *
      *      Decremento do bucket acontece ANTES do call externo (CEI). Se o
@@ -1401,8 +1498,12 @@ contract Treasury is AccessControl, ReentrancyGuard {
      *         `RewardDistributorV2` detecta `gauge.paused() == true` no
      *         momento de `finalizeRound`. CREDIT ja foi cunhado para este
      *         Treasury antes da chamada (analogamente a {depositPolRefill}).
-     * @dev `onlyRole(GAUGE_FALLBACK_DEPOSITOR_ROLE)` + `nonReentrant`. Sem
-     *      caminho de drenagem alem de {flushPendingGaugeRewards} —
+     * @dev `onlyRole(GAUGE_FALLBACK_DEPOSITOR_ROLE)` + `nonReentrant`.
+     *      Reverte com {DepositExceedsCreditBalance} se a reserva total
+     *      pos-deposito exceder o saldo real de CREDIT (mesma justificativa
+     *      de {depositPolRefill}). Caminhos de drenagem:
+     *      {flushPendingGaugeRewards} (parcial ou total, poolId explicito)
+     *      e a valvula governance {writeDownPendingGaugeRewards} —
      *      governance e responsavel por chamar `flush` apos despausar o
      *      gauge. Vide red flag E.3 #2 do parecer 2026-04-24-clp-pivot.md.
      * @param amount Quantidade (em CREDIT wei) a acumular.
@@ -1412,22 +1513,48 @@ contract Treasury is AccessControl, ReentrancyGuard {
             revert ZeroAmount();
         }
         uint256 newTotal = pendingGaugeRewards + amount;
+        uint256 reservedAfter = polRefillBucket + newTotal;
+        uint256 creditBalance = IERC20(CREDIT_TOKEN).balanceOf(address(this));
+        if (reservedAfter > creditBalance) {
+            revert DepositExceedsCreditBalance(reservedAfter, creditBalance);
+        }
         pendingGaugeRewards = newTotal;
         emit PendingGaugeDeposited(amount, newTotal);
     }
 
     /**
-     * @notice Drena `pendingGaugeRewards` para o `liquidityGauge` via
-     *         `notifyRewardAmount(poolId, amount, duration)`.
+     * @notice Drena `amount` de `pendingGaugeRewards` para o
+     *         `liquidityGauge` via `notifyRewardAmount(poolId, amount,
+     *         duration)`. Aceita flush PARCIAL e `poolId` explicito.
      * @dev `onlyRole(GOVERNANCE_ROLE)` + `nonReentrant`. Reverte se gauge
-     *      nao setado, gauge esta paused, ou ledger zerado. Usa o `poolId`
-     *      configurado em {setLiquidityGauge}; `duration` e parametro
-     *      explicito da chamada para que governance escolha (compativel
-     *      com {INCENTIVE_DURATION_MIN} do gauge). Approves CREDIT para o
-     *      gauge (modelo pull do gauge).
+     *      nao setado, gauge esta paused, ledger zerado
+     *      ({NoPendingGaugeRewards}) ou `amount` acima do ledger
+     *      ({PendingGaugeRewardsInsufficient}). Sentinelas:
+     *      - `amount == 0`: drena o ledger INTEIRO (comportamento original).
+     *      - `poolId == 0`: usa o `liquidityGaugePoolId` default de
+     *        {setLiquidityGauge} (poolIds do gauge sao 1-based, 0 nunca e
+     *        pool valida).
+     *      Flush parcial + poolId explicito sao a defesa contra o freeze
+     *      por `IncentiveOverlap`: o gauge rejeita nova incentive enquanto
+     *      houver incentive ativa na pool, e o `RewardDistributorV2` recria
+     *      incentives a cada `finalizeRound` — com `roundDuration ~=
+     *      gaugeIncentiveDuration` a janela de flush na pool default tende
+     *      a zero. Governance pode entao drenar para OUTRA pool
+     *      whitelistada sem re-apontar {setLiquidityGauge}, ou em ultima
+     *      instancia usar {writeDownPendingGaugeRewards}.
+     *      `duration` e parametro explicito da chamada para que governance
+     *      escolha (compativel com {INCENTIVE_DURATION_MIN} do gauge).
+     *      Approves CREDIT para o gauge (modelo pull do gauge); CEI: ledger
+     *      decrementado ANTES das interactions.
+     * @param amount Quantidade a drenar (0 = ledger inteiro).
+     * @param poolId Pool alvo no gauge (0 = `liquidityGaugePoolId` default).
      * @param duration Duracao da incentive (seg).
      */
-    function flushPendingGaugeRewards(uint32 duration) external onlyRole(GOVERNANCE_ROLE) nonReentrant {
+    function flushPendingGaugeRewards(
+        uint256 amount,
+        uint256 poolId,
+        uint32 duration
+    ) external onlyRole(GOVERNANCE_ROLE) nonReentrant {
         ILiquidityGaugeRewards gauge = liquidityGauge;
         if (address(gauge) == address(0)) {
             revert LiquidityGaugeNotSet();
@@ -1435,14 +1562,21 @@ contract Treasury is AccessControl, ReentrancyGuard {
         if (gauge.paused()) {
             revert LiquidityGaugePaused();
         }
-        uint256 amount = pendingGaugeRewards;
-        if (amount == 0) {
+        uint256 pending = pendingGaugeRewards;
+        if (pending == 0) {
             revert NoPendingGaugeRewards();
         }
-        uint256 poolId = liquidityGaugePoolId;
+        if (amount == 0) {
+            amount = pending;
+        } else if (amount > pending) {
+            revert PendingGaugeRewardsInsufficient(amount, pending);
+        }
+        if (poolId == 0) {
+            poolId = liquidityGaugePoolId;
+        }
 
         // Effects.
-        pendingGaugeRewards = 0;
+        pendingGaugeRewards = pending - amount;
 
         // Interactions.
         IERC20(CREDIT_TOKEN).forceApprove(address(gauge), amount);
@@ -1450,6 +1584,60 @@ contract Treasury is AccessControl, ReentrancyGuard {
         IERC20(CREDIT_TOKEN).forceApprove(address(gauge), 0);
 
         emit PendingGaugeFlushed(amount, poolId, duration);
+    }
+
+    /**
+     * @notice Reduz `polRefillBucket` em `amount` SEM mover tokens — a
+     *         parcela baixada volta ao saldo LIVRE de CREDIT do Treasury
+     *         (deixa de ser reservada por {_enforceUnreservedCredit}).
+     * @dev `onlyRole(GOVERNANCE_ROLE)` + `nonReentrant`. Valvula explicita
+     *      de reciclagem do bucket bonders: o bucket cresce a cada rodada
+     *      (5% da emissao) sem contrapartida on-chain de USDC para casar em
+     *      {addPOLFromRefill} (ver NatSpec la) — sem esta valvula a reserva
+     *      cresceria monotonicamente ate dominar o balanco de CREDIT.
+     *      Auditavel: passa pelo Timelock (proposta) e emite
+     *      {PolRefillWrittenDown}. Reverte com {ZeroAmount} se `amount == 0`
+     *      e {PolRefillBucketInsufficient} se `amount > polRefillBucket`.
+     * @param amount Quantidade a baixar do ledger.
+     */
+    function writeDownPolRefillBucket(uint256 amount) external onlyRole(GOVERNANCE_ROLE) nonReentrant {
+        if (amount == 0) {
+            revert ZeroAmount();
+        }
+        uint256 bucket = polRefillBucket;
+        if (amount > bucket) {
+            revert PolRefillBucketInsufficient(amount, bucket);
+        }
+        uint256 newBucket = bucket - amount;
+        polRefillBucket = newBucket;
+        emit PolRefillWrittenDown(amount, newBucket);
+    }
+
+    /**
+     * @notice Reduz `pendingGaugeRewards` em `amount` SEM mover tokens — a
+     *         parcela baixada volta ao saldo LIVRE de CREDIT do Treasury.
+     * @dev `onlyRole(GOVERNANCE_ROLE)` + `nonReentrant`. Valvula de escape
+     *      para o cenario em que {flushPendingGaugeRewards} fica inviavel
+     *      indefinidamente (ex.: `IncentiveOverlap` permanente em todas as
+     *      pools whitelistadas do gauge) — sem ela o CREDIT do ledger
+     *      ficaria congelado para sempre, ja que a segregacao bloqueia as
+     *      saidas genericas. Auditavel: passa pelo Timelock e emite
+     *      {PendingGaugeWrittenDown}. Reverte com {ZeroAmount} se
+     *      `amount == 0` e {PendingGaugeRewardsInsufficient} se
+     *      `amount > pendingGaugeRewards`.
+     * @param amount Quantidade a baixar do ledger.
+     */
+    function writeDownPendingGaugeRewards(uint256 amount) external onlyRole(GOVERNANCE_ROLE) nonReentrant {
+        if (amount == 0) {
+            revert ZeroAmount();
+        }
+        uint256 pending = pendingGaugeRewards;
+        if (amount > pending) {
+            revert PendingGaugeRewardsInsufficient(amount, pending);
+        }
+        uint256 newPending = pending - amount;
+        pendingGaugeRewards = newPending;
+        emit PendingGaugeWrittenDown(amount, newPending);
     }
 
     // ------------------------------------------------------------------
@@ -1501,6 +1689,7 @@ contract Treasury is AccessControl, ReentrancyGuard {
         if (bal < amount) {
             revert InsufficientBalance(address(token), amount, bal);
         }
+        _enforceUnreservedCredit(address(token), amount, bal);
         emit Transferred(address(token), to, amount);
         token.safeTransfer(to, amount);
     }
@@ -1540,6 +1729,10 @@ contract Treasury is AccessControl, ReentrancyGuard {
         if (bal < total) {
             revert InsufficientBalance(address(token), total, bal);
         }
+        // Segregacao: valida a SOMA das parcelas do batch contra o saldo
+        // nao-reservado de CREDIT (parcelas individuais poderiam passar
+        // isoladas e ainda assim drenar os buckets em agregado).
+        _enforceUnreservedCredit(address(token), total, bal);
 
         for (uint256 i = 0; i < len; ) {
             address to = recipients[i];
@@ -1589,6 +1782,38 @@ contract Treasury is AccessControl, ReentrancyGuard {
     function _checkBounds(uint256 value, uint256 min, uint256 max) private pure {
         if (value < min || value > max) {
             revert ParamOutOfBounds(value, min, max);
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // Internal helpers — Fase 1.4 (segregacao dos buckets de CREDIT)
+    // ------------------------------------------------------------------
+
+    /**
+     * @dev Total de CREDIT reservado pelos ledgers internos —
+     *      `polRefillBucket` (bucket bonders) + `pendingGaugeRewards`
+     *      (fallback do gauge). Nenhuma saida generica de CREDIT pode
+     *      consumir esta parcela.
+     */
+    function _reservedCredit() internal view returns (uint256 reserved) {
+        return polRefillBucket + pendingGaugeRewards;
+    }
+
+    /**
+     * @dev Reverte com {TransferExceedsUnreservedCredit} se `token` for o
+     *      CREDIT e `amount` exceder `creditBalance - _reservedCredit()`.
+     *      No-op para qualquer outro token. `creditBalance` e passado pelo
+     *      caller (ja lido para o check de saldo) para evitar segunda
+     *      leitura externa.
+     */
+    function _enforceUnreservedCredit(address token, uint256 amount, uint256 creditBalance) private view {
+        if (token != CREDIT_TOKEN) {
+            return;
+        }
+        uint256 reserved = _reservedCredit();
+        uint256 unreserved = creditBalance > reserved ? creditBalance - reserved : 0;
+        if (amount > unreserved) {
+            revert TransferExceedsUnreservedCredit(unreserved, amount);
         }
     }
 

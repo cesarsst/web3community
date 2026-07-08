@@ -81,7 +81,7 @@ No privileged function of the economic contracts accepts a direct call. All requ
 ```
   Alice proposes    Delay 1d      Voting 7d       Timelock queue   Delay 2d      Execution
   (needs 10k   ->  (anti-MEV)  -> (quorum 4%,  -> (queued in   ->  (response  -> (anyone
-   GOV                             >= 50% For)     timelock)        time)         clicks)
+   GOV                             For > Against)  timelock)        time)         clicks)
    delegated
    to self)
 ```

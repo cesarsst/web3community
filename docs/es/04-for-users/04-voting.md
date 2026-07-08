@@ -86,6 +86,14 @@ Definido en `GovernorCountingSimple`:
 
 Si ambas condiciones son verdaderas cuando cierra la ventana → `Succeeded`. En caso contrario → `Defeated`.
 
+### Excepción: supermayoría de 75% (`removePOL`)
+
+Las propuestas que contengan **cualquier** call de `Treasury.removePOL` — o de gestión de roles (`grantRole`/`revokeRole`/`renounceRole`) con target en el Treasury o en el propio Timelock, que sería el vector de bypass — se marcan como `Supermajority` en el momento del `propose` (evento `ProposalTypeSet`). Para esas, la condición 2 cambia:
+
+- `forVotes >= 3 × againstVotes` **y** `forVotes > 0` — es decir, For ≥ 75% de los votos decisivos (Abstain cuenta sólo para el quorum, queda fuera de la razón).
+
+Un batch mixto (una call sensible en medio de varias inofensivas) contamina la propuesta entera: 75% para todo. El quorum de la condición 1 sigue siendo el mismo.
+
 ## Tras `Succeeded`
 
 Cualquiera (no necesita ser el proposer) puede llamar:

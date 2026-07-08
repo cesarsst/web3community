@@ -11,7 +11,7 @@ emissao_R = min( max( alpha * burn_{R-1}, floor(R) ), capMax )
 
 Definida em `RewardDistributor.finalizeRound`. Três camadas:
 
-1. **`alpha * burn_{R-1}`** — base econômica. Em produção `alpha = 0.95`, ou seja, emite-se 95% do que foi queimado na rodada anterior. Se ninguém queimou nada, esse termo é zero.
+1. **`alpha * burn_{R-1}`** — base econômica. Em produção `alpha = 0.95` (**parâmetro de deploy**: `alpha = 950000000000000000` em `ignition/parameters/production.json`; os bounds `[MIN_ALPHA=0.5, MAX_ALPHA=0.99]` são `constant` no código), ou seja, emite-se 95% do que foi queimado na rodada anterior. Se ninguém queimou nada, esse termo é zero.
 2. **`max(..., floor(R))`** — garante piso mínimo durante o bootstrap. O `floorSchedule` tem 24 entradas. Rodadas >= 24 não têm floor. Em produção, o floor cai linearmente de 400k CREDIT (rodada 0) a ~16.666 CREDIT (rodada 23).
 3. **`min(..., capMax)`** — teto duro. Em produção `capMax = 5.000.000 CREDIT`. Ajustável via governança dentro de `[1, 100M] CREDIT`.
 
@@ -115,7 +115,7 @@ Se qualquer um desses elos se rompe, o loop desacelera. **Nenhuma fórmula salva
 
 Ajustável via `GOVERNANCE_ROLE` (Timelock, que só executa após proposta aprovada):
 
-- `alpha` dentro de `[0.5, 0.99]` — `RewardDistributor.setAlpha`. A faixa foi reduzida (antes `[0.5, 1.1]`) para garantir a invariante econômica IE1 (α < 1 permanente) por construção — a governança não pode mais votar valor inflacionário. Ver parecer em `audit/economist/2026-04-22-consistency-audit.md` (C2).
+- `alpha` dentro de `[0.5, 0.99]` — `RewardDistributor.setAlpha`. O default 0.95 é parâmetro de deploy; os bounds são constantes imutáveis (`MIN_ALPHA`/`MAX_ALPHA`). A faixa foi reduzida (antes `[0.5, 1.1]`) para garantir a invariante econômica IE1 (α < 1 permanente) por construção — a governança não pode mais votar valor inflacionário. Ver parecer em `audit/economist/2026-04-22-consistency-audit.md` (C2).
 - `capMax` dentro de `[1, 100M] CREDIT` — `RewardDistributor.setCapMax`
 - `roundDuration` dentro de `[1 dia, 30 dias]` — `BurnTracker.setRoundDuration`
 - `maxBurnPerRoundPerProject` (0 = desabilita) — `BurnTracker.setMaxBurnPerRoundPerProject`

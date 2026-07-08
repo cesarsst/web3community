@@ -23,9 +23,9 @@ import {Treasury} from "./Treasury.sol";
  *          2. `treasuryBps` e transferido ao `Treasury` multi-ativo da DAO.
  *          3. `rebateBps` e transferido ao `appRecipient` do projeto (rebate
  *             de revenue share para o app).
- *         O split default global e 95/0/5 (95% burn / 0% treasury / 5% app),
- *         coerente com a decisao economica de "venda direta de CREDIT + 5%
- *         revenue share do burn pra apps". Splits podem ser substituidos
+ *         O split default global seedado nos deploys e 70/20/10 (70% burn /
+ *         20% treasury / 10% app — ver ignition/parameters/*.json); o valor
+ *         e parametro do constructor. Splits podem ser substituidos
  *         por-projeto via governanca (`setProjectSplit`), e o recipient de
  *         rebate por-projeto e setavel pelo owner (`setAppRecipient`).
  * @dev Invariantes economicas atendidas nesta unidade:
@@ -158,7 +158,7 @@ contract FeeRouter is AccessControl, ReentrancyGuard {
     // ------------------------------------------------------------------
 
     /// @notice Split global default aplicado a projetos sem override.
-    ///         Seed inicial 95/0/5 (confirmado na decisao economica).
+    ///         Seed atual dos deploys: 70/20/10 (ignition/parameters/*.json).
     Split public defaultSplit;
 
     /// @notice Override por-projeto. Use {hasProjectSplit} para saber se
@@ -335,7 +335,7 @@ contract FeeRouter is AccessControl, ReentrancyGuard {
      *      Mesmo que um ERC-20 customizado com callback tentasse reentrar
      *      via `transfer` ou `approve`, o guard reverteria. `BurnTracker`
      *      tem seu proprio `nonReentrant`, cross-contract seguro.
-     *      Gas: tipico ~180-220k para o caminho 95/0/5 (uma `transferFrom`,
+     *      Gas: tipico ~180-220k para um split sem treasury (uma `transferFrom`,
      *      uma `transfer`, uma `approve`, uma chamada ao tracker que faz
      *      `_burn`). Splits que incluem treasury adicionam ~35k.
      * @param projectId Projeto ao qual o pagamento e atribuido. Deve estar Active.

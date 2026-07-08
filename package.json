@@ -22,7 +22,10 @@
     "lint:ts": "eslint --no-error-on-unmatched-pattern '{scripts,test,ignition}/**/*.ts' 'hardhat.config.ts'",
     "format": "prettier --write '**/*.{ts,js,json,md,sol}'",
     "format:check": "prettier --check '**/*.{ts,js,json,md,sol}'",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "deploy:prod-sim": "hardhat run scripts/deploy-prod-sim.ts --network localhost",
+    "sync:frontend": "bash scripts/sync-frontend.sh",
+    "deploy:prod-sim:sync": "npm run deploy:prod-sim && npm run sync:frontend"
   },
   "devDependencies": {
     "@nomicfoundation/hardhat-ignition-ethers": "^0.15.0",

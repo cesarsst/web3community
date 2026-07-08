@@ -22,8 +22,8 @@ A partir do pivot CLP (Fase 1, abril/2026), o Treasury também executa quatro fu
 
 O Treasury recebe:
 
-- **Genesis mint de CREDIT** (10M em produção). Única entrada "programática" inicial.
-- **Fatia de `treasuryBps`** do split do `FeeRouter` (default 0; recomendação CLP: subir para `(7000, 2000, 1000)` para alimentar USDC do refill POL).
+- **Genesis mint de CREDIT** (10M em produção — parâmetro `genesisAmount` do deploy). Única entrada "programática" inicial.
+- **Fatia de `treasuryBps`** do split do `FeeRouter` (default de produção: `2000` = 20%, split `(7000, 2000, 1000)`). Chega em **CREDIT** — quem paga via `FeeRouter.pay` paga em CREDIT.
 - **Colateral de slash** de projetos removidos com `slash == true`.
 - **Subsídios devolvidos** de campanhas `UserSubsidy.closeCampaign`.
 - **Bucket bonders** do `RewardDistributorV2` (5% da emissão por rodada — ledger `polRefillBucket`).
@@ -40,7 +40,7 @@ Operações típicas, todas via proposta:
 - **Executar FFP buyback** — `executeBuyback(usdcAmount, minCreditOut)` swap USDC → CREDIT + queima imediata (Fase 1.1).
 - **Adicionar POL** — `addPOL(creditAmount, usdcAmount, ...)` provisiona liquidez no par CREDIT/USDC (Fase 1.2).
 - **Refilar POL com bucket bonders** — `addPOLFromRefill(creditAmount, usdcAmount, ...)` casa CREDIT do ledger com USDC do balance livre.
-- **Drenar fallback gauge** — `flushPendingGaugeRewards(duration)` envia ledger acumulado de volta para o gauge após despausar.
+- **Drenar fallback gauge** — `flushPendingGaugeRewards(amount, poolId, duration)` envia o ledger acumulado (total ou parcial) de volta para o gauge após despausar.
 - **Financiar operações off-chain** — `transfer` para um multisig operacional.
 
 ## Fees — o FeeRouter
@@ -54,36 +54,30 @@ function pay(uint256 projectId, address user, uint256 amount)
 
 O `user` precisa ter dado `approve(feeRouter, amount)` em CREDIT **antes**. `msg.sender` é quem iniciou a tx — pode ser o próprio user, o app, um relayer, uma smart wallet.
 
-## Split padrão — 95 / 0 / 5
+## Split padrão — 70 / 20 / 10
 
 Em produção (`ignition/parameters/production.json`):
 
 ```
-burnBps     = 9500   (95% queimado via BurnTracker)
-treasuryBps = 0      (nada para o Treasury no default)
-rebateBps   = 500    (5% para o appRecipient)
+burnBps     = 7000   (70% queimado via BurnTracker)
+treasuryBps = 2000   (20% para o Treasury)
+rebateBps   = 1000   (10% para o appRecipient)
 ```
 
 A soma tem que ser exatamente 10_000 (`_BPS_DENOMINATOR`). Splits diferentes são rejeitados com `InvalidSplit`.
 
-Decisão de design: 0% para treasury no default **para não erodir o incentivo ao burn**. O Treasury recebe receita por outras vias (genesis já cunhado, slash, doações, buyback gerenciado). Se no futuro a DAO quiser capturar parte direta, basta propor `setDefaultSplit({burnBps: 9000, treasuryBps: 500, rebateBps: 500})` — a arquitetura permite.
+Decisão de design: este é o split "Fase 0" recomendado no parecer CLP, assado nos parâmetros de deploy — o pré-requisito da Fase 1.4 (Treasury com receita recorrente) é satisfeito num deploy fresh, sem depender de proposta posterior. O trade-off é explícito: queima 70% (em vez dos 95% do desenho pré-CLP), captura 20% para o cofre e sobe o rebate para 10%. Se a DAO quiser rebalancear, basta propor `setDefaultSplit` — a arquitetura permite.
 
-### Consequência estrutural — Treasury sem receita recorrente no default
+### Receita recorrente do split — e a denominação importa
 
-Com `treasuryBps = 0` em produção, o Treasury **não acumula receita operacional automática**. As entradas recorrentes do split são zero — restam apenas:
+Com `treasuryBps = 2000`, o Treasury acumula **receita operacional recorrente em CREDIT** (pagamentos via `FeeRouter.pay` são em CREDIT). Além dela, entram:
 
 - Slash de colateral de projetos removidos com `slash == true` (eventual).
 - Sobras de campanhas `UserSubsidy.closeCampaign` (eventual).
 - Doações externas e ETH enviados direto.
 - Bucket bonders e fallback gauge (Fase 1.4) — esses **acumulam em ledgers separados** (`polRefillBucket` e `pendingGaugeRewards`), não no balance livre. O bucket bonders é earmarkado para refill POL; só serve para esse fim.
 
-**Para a Fase 1.4 (CLP) operar plenamente — ou seja, para `addPOLFromRefill` ter USDC para casar com o CREDIT do bucket bonders —, o Treasury precisa de USDC entrando recorrentemente.** A única fonte estrutural disso é elevar `treasuryBps > 0` no `FeeRouter`. A recomendação operacional do parecer é `(7000, 2000, 1000)` (70% burn / 20% treasury / 10% rebate), que:
-
-- Reduz a queima de 95% para 70% — mais CREDIT em circulação.
-- Direciona 20% para o Treasury em USDC/CREDIT (depende de quem paga e como).
-- Mantém 10% de rebate para apps.
-
-Essa decisão é da DAO via `setDefaultSplit`. Sem ela, o bucket bonders fica acumulando CREDIT no ledger sem que governance consiga drenar (faltaria USDC).
+**Atenção à denominação no refill do POL**: `addPOLFromRefill` casa CREDIT do `polRefillBucket` com **USDC** do balance livre — e a fatia `treasuryBps` chega em CREDIT, não em USDC. As fontes reais de USDC do Treasury são **bootstrap externo** (doação/venda aprovada pela DAO) e **`collectPOLFees`** (fees da própria posição POL acumulam em ambos os tokens do par). Se faltar USDC, o CREDIT do bucket não fica preso para sempre: governança pode reciclá-lo via `writeDownPolRefillBucket` (ver "Segregação on-chain" abaixo).
 
 ## Override por projeto
 
@@ -95,7 +89,7 @@ feeRouter.setProjectSplit(projectId, Split({burnBps, treasuryBps, rebateBps}));
 
 A flag `hasProjectSplit[projectId]` sinaliza que existe override. `clearProjectSplit` remove.
 
-Uso típico: um app de alto volume que aceitaria taxa efetiva maior (porque tem outra fonte de receita) pode negociar `8000/1500/500` (15% treasury), financiando mais agressivamente o cofre.
+Uso típico: um app de alto volume que aceitaria taxa efetiva maior (porque tem outra fonte de receita) pode negociar `6000/3000/1000` (30% treasury), financiando mais agressivamente o cofre do que o default de 20%.
 
 ## Recipient do rebate
 
@@ -138,24 +132,24 @@ user chama pay(projectId, user, 1000)
                       transferFrom(user, this, 1000)
                       FeeRouter tem 1000 CREDIT
                                       |
-                                      | split = 9500/0/500
+                                      | split = 7000/2000/1000
                                       v
-                        burned = 950, toTreasury = 0, toApp = 50
+                        burned = 700, toTreasury = 200, toApp = 100
                                       |
           +---------------------------+----------------------------+
           |                           |                            |
           v                           v                            v
-   approve(tracker, 950)       (sem transfer ao            transfer(appRecipient, 50)
-   tracker.burnAndRecord       Treasury nesse split)
+   approve(tracker, 700)       transfer(treasury, 200)      transfer(appRecipient, 100)
+   tracker.burnAndRecord
                                                               appRecipient eh
                                                               projectOwner por default
                                       |
    tracker chama                      |
-   credit.burnByRole(router, 950)    |
+   credit.burnByRole(router, 700)     |
                                       |
-   CREDIT.totalSupply -= 950          |
-   burnByRoundProject[R][pid] += 950  |
-   totalBurnByRound[R] += 950         |
+   CREDIT.totalSupply -= 700          |
+   burnByRoundProject[R][pid] += 700  |
+   totalBurnByRound[R] += 700         |
                                       v
                               Paid event emitted
 ```
@@ -171,6 +165,8 @@ O uso é de **cortesia** — o protocolo opera primariamente em ERC-20 (CREDIT, 
 ## Buyback — FFP real (Fase 1.1)
 
 A partir do pivot CLP, `executeBuyback(uint256 usdcAmount, uint256 minCreditOut)` **executa swap real** de USDC → CREDIT via Uniswap V3 + queima imediata. Defesa do **floor price** segundo o modelo Floating-com-Floor-Price (FFP). Detalhes em [Treasury](../08-contracts-reference/04-Treasury.md).
+
+O `priceOracle` tem implementação de produção real: o **`CreditPriceOracle`** (`contracts/CreditPriceOracle.sol`), adapter do `ICreditPriceOracle` que deriva o TWAP do CREDIT em USD (18 decimais) da pool Uniswap V3 CREDIT/USDC e converte USDC → USD via feed Chainlink USDC/USD (staleness máxima de 6h + banda de sanidade fixa `[9900, 10100]` bps, espelhando os defaults do Treasury). Todos os endereços do oracle são `immutable`.
 
 Pré-condições verificadas on-chain (todas obrigatórias):
 
@@ -200,7 +196,7 @@ API:
 - `collectPOLFees(amount0Max, amount1Max)` — coleta fees acumulados, sem auto-compound.
 - `polTokensOrdered()` view — devolve ordem real `(token0, token1)` no pool, útil para o proponente DAO calcular `amount{0,1}Min`.
 
-A política "supermaioria 75% para remoções > 25%" é responsabilidade do `CommunityGovernor` (proposal type), não deste contrato.
+A supermaioria de 75% para remoção de POL é responsabilidade do `CommunityGovernor` (proposal type), não deste contrato — e agora está **on-chain**: toda proposta contendo `Treasury.removePOL` (qualquer fração, não só > 25%) é marcada `Supermajority` no `propose` e só vence com `forVotes >= 3 × againstVotes`. Ver [Governança](05-governance.md).
 
 ## Bucket bonders e refill POL (Fase 1.4)
 
@@ -222,7 +218,7 @@ Treasury.addPOLFromRefill (Timelock executa proposta)
   -> NPM.increaseLiquidity (ou mint se primeira)
 ```
 
-USDC vem do balance livre do Treasury — depende de `treasuryBps > 0` no `FeeRouter` (ver seção anterior).
+USDC vem do balance livre do Treasury — e como a fatia `treasuryBps` do `FeeRouter` chega em CREDIT, as fontes reais de USDC são bootstrap externo e `collectPOLFees` (ver seção "Receita recorrente do split").
 
 A Fase 3 do roadmap CLP recicla esse bucket para um `BondDepository` — usuários trocam ETH/CREDIT por CREDIT vested, e o protocolo acumula POL via bonds. Por enquanto, o ledger sustenta o POL diretamente.
 
@@ -238,14 +234,28 @@ RewardDistributorV2.finalizeRound(R) com gauge.paused() == true
   -> emit GaugePauseFallback(R, lpsAmount)
 ```
 
-Após despausar o gauge, governance chama `Treasury.flushPendingGaugeRewards(duration)`:
+Após despausar o gauge, governance chama `Treasury.flushPendingGaugeRewards(amount, poolId, duration)`:
 
 ```
 Treasury.flushPendingGaugeRewards (Timelock executa)
   -> requer gauge não-paused, ledger > 0
+  -> amount = 0 e sentinela: drena o ledger inteiro; amount parcial permitido
+     (amount > ledger reverte com PendingGaugeRewardsInsufficient)
+  -> poolId = 0 e sentinela: usa o poolId default configurado
+     (os poolIds do gauge sao 1-based)
   -> approve(gauge, amount), gauge.notifyRewardAmount(poolId, amount, duration)
   -> reset approve
 ```
+
+O flush parcial + poolId explícito existem para evitar freeze: se uma incentive equivalente já estiver ativa no gauge (`IncentiveOverlap`), governance consegue drenar por partes ou para outro pool.
+
+## Segregação on-chain dos ledgers (invariante virou código)
+
+Os dois ledgers contábeis (`polRefillBucket` e `pendingGaugeRewards`) são **enforced on-chain nos dois sentidos**:
+
+- **Saídas genéricas não invadem reservas**: `transfer`, `batchTransfer`, `payRebates` e `addPOL` em CREDIT são limitadas a `unreservedCreditBalance()` (= `balanceOf(CREDIT) − polRefillBucket − pendingGaugeRewards`). Tentativa de invadir reverte com `TransferExceedsUnreservedCredit`. As únicas saídas que tocam as reservas são as dedicadas (`addPOLFromRefill` e `flushPendingGaugeRewards`), que decrementam o ledger correspondente.
+- **Depósitos exigem lastro**: `depositPolRefill` e `depositPendingGaugeRewards` revertem com `DepositExceedsCreditBalance` se a reserva agregada pós-depósito exceder o `balanceOf(CREDIT)` — impossível inflar o ledger sem o CREDIT correspondente (o V2 minta antes de depositar, na mesma tx).
+- **Válvulas de escape auditáveis**: `writeDownPolRefillBucket` / `writeDownPendingGaugeRewards` (governance, eventos `PolRefillWrittenDown` / `PendingGaugeWrittenDown`) reduzem explicitamente um ledger, liberando o CREDIT para o balance livre — escape de freeze e reciclagem do bucket bonders.
 
 ## Resumo
 
@@ -253,7 +263,7 @@ Treasury.flushPendingGaugeRewards (Timelock executa)
 |---|---|---|
 | Treasury | Custódia multi-ativo | `GOVERNANCE_ROLE` nas saídas |
 | FeeRouter | Interface de pagamento | `GOVERNANCE_ROLE` nos setters, público no `pay` |
-| Split default | 95% burn / 0% treasury / 5% rebate (recomendação CLP: `(7000, 2000, 1000)`) | Ajustável por proposta |
+| Split default | 70% burn / 20% treasury / 10% rebate (`(7000, 2000, 1000)` em produção) | Ajustável por proposta |
 | Split por projeto | Override via `setProjectSplit` | `GOVERNANCE_ROLE` |
 | Recipient do rebate | Owner do projeto (dinâmico) ou explícito | Owner do projeto (setter) |
 | Buyback FFP | Real (Fase 1.1) — swap USDC→CREDIT + queima | `GOVERNANCE_ROLE` |

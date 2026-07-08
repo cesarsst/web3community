@@ -36,6 +36,13 @@
  *      de burn via FeeRouter.pay — dados reais pro frontend.
  *   9. Ciclo completo de rewards V2: propostas #6/#7 (closeRound) +
  *      finalizeRound(0..1) + claim do bucket stakers.
+ *  10. Infra dev de mercado (rede local): USDC mock + DevSwapPool
+ *      (AMM CREDIT/USDC que alimenta TWAP) + CreditPriceOracle (feed
+ *      Chainlink = 0x0 -> 1 USDC = 1 USD) + DevFaucet (ETH+CREDIT+USDC).
+ *      Proposta #8 funda o faucet/seed via Treasury e aponta
+ *      setPriceOracle/setSwapRouter pro par dev — buyback funcional.
+ *      Enderecos extras persistidos em ignition/deployments/
+ *      chain-<id>/dev_addresses.json (mesclados pelo export-runtime-config).
  *
  * Uso:
  *   # terminal 1
@@ -53,7 +60,7 @@
  *     estiver baixo (nodes rebootados podem zerar a conta #0).
  */
 import hre, { ethers } from "hardhat";
-import { existsSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import type { DeploymentParameters } from "@nomicfoundation/ignition-core";
 // ATENCAO: o modulo Ignition e importado DINAMICAMENTE dentro de main().
@@ -95,6 +102,23 @@ const SEED_PAYMENT = 100n * 10n ** 18n;
 // Pool "CREDIT/USDC" whitelistada no LiquidityGauge. Endereco arbitrario —
 // o gauge nao chama metodos da pool (mesmo padrao dos testes unitarios).
 const MOCK_POOL = "0x" + "11".repeat(20);
+
+// ---------- Infra dev de mercado (steps 13-15) ----------
+// Seed da DevSwapPool: 500k CREDIT / 50k USDC => preco inicial $0.10/CREDIT.
+const POOL_SEED_CREDIT = 500_000n * 10n ** 18n;
+const POOL_SEED_USDC = 50_000n * 10n ** 6n; // USDC mock tem 6 decimais
+
+// Funding do DevFaucet.
+const FAUCET_CREDIT = 100_000n * 10n ** 18n;
+const FAUCET_USDC = 100_000n * 10n ** 6n;
+const FAUCET_ETH = 500n * 10n ** 18n;
+
+// Drip por claim: 1 ETH (gas) + 100 CREDIT (10 ativacoes de 10) + 250 USDC
+// (compras na pool). Cooldown curto — e uma rede local.
+const DRIP_ETH = 1n * 10n ** 18n;
+const DRIP_CREDIT = 100n * 10n ** 18n;
+const DRIP_USDC = 250n * 10n ** 6n;
+const DRIP_COOLDOWN = 300n; // 5 min
 
 async function mine(blocks: bigint) {
   await hre.network.provider.send("hardhat_mine", [`0x${blocks.toString(16)}`]);
@@ -138,7 +162,7 @@ async function main() {
   // em rede publica (la o guard de chainId abaixo nem deixaria chegar aqui).
   const balance = await ethers.provider.getBalance(devMember.address);
   if (balance < ethers.parseEther("100")) {
-    console.log(`\n[0/12] saldo ETH baixo (${ethers.formatEther(balance)}) — hardhat_setBalance 10k ETH…`);
+    console.log(`\n[0/15] saldo ETH baixo (${ethers.formatEther(balance)}) — hardhat_setBalance 10k ETH…`);
     await hre.network.provider.send("hardhat_setBalance", [
       devMember.address,
       `0x${ethers.parseEther("10000").toString(16)}`,
@@ -146,7 +170,7 @@ async function main() {
   }
 
   // ---------- 1) Deploy via Ignition com parametros de PRODUCAO ----------
-  console.log("\n[1/12] deploy via Ignition com ignition/parameters/production.json…");
+  console.log("\n[1/15] deploy via Ignition com ignition/parameters/production.json…");
 
   const chainId = Number((await ethers.provider.getNetwork()).chainId);
   const journalDir = resolve(__dirname, "..", "ignition", "deployments", `chain-${chainId}`);
@@ -236,7 +260,7 @@ async function main() {
   );
 
   // ---------- 2) Distribuicao inicial 30/25/20/15/10 (100M GOV) ----------
-  console.log("\n[2/12] distribuicao inicial 30/25/20/15/10 (100M GOV, cap integral)…");
+  console.log("\n[2/15] distribuicao inicial 30/25/20/15/10 (100M GOV, cap integral)…");
   const owner = await gov.owner();
   if (owner.toLowerCase() !== devMember.address.toLowerCase()) {
     throw new Error(
@@ -259,7 +283,7 @@ async function main() {
   console.log(`  totalSupply = ${ethers.formatEther(totalSupply)} GOV (cap 100M atingido)`);
 
   // ---------- 3) Dev member delega voto pra si (quorum) ----------
-  console.log("\n[3/12] dev member delega voto pra si mesmo…");
+  console.log("\n[3/15] dev member delega voto pra si mesmo…");
   await (await gov.connect(devMember).delegate(devMember.address)).wait();
   await mine(1n); // snapshot de votos exige >= 1 bloco apos delegate
   const votes: bigint = await gov.getVotes(devMember.address);
@@ -307,7 +331,7 @@ async function main() {
   }
 
   // ---------- 4) Proposta #1: acceptOwnership do GOV pelo Timelock ----------
-  console.log("\n[4/12] proposta #1 (obrigatoria): GovernanceToken.acceptOwnership()…");
+  console.log("\n[4/15] proposta #1 (obrigatoria): GovernanceToken.acceptOwnership()…");
   const acceptCalldata = gov.interface.encodeFunctionData("acceptOwnership");
   await passProposal(
     [addrs.gov],
@@ -322,7 +346,7 @@ async function main() {
   console.log(`  GOV.owner() = Timelock OK — mints futuros so via governanca`);
 
   // ---------- 5) Approve do colateral pro Registry ----------
-  console.log("\n[5/12] approve Registry pra puxar colateral GOV do dev member…");
+  console.log("\n[5/15] approve Registry pra puxar colateral GOV do dev member…");
   // registerProject puxa o colateral do owner via transferFrom no EXECUTE da
   // proposta — sem allowance previa o execute reverte com InsufficientAllowance.
   const approveAmount = minCollateral * 10n;
@@ -330,7 +354,7 @@ async function main() {
   console.log(`  allowance = ${ethers.formatEther(approveAmount)} GOV (10x minCollateral)`);
 
   // ---------- 6) Proposta #2: registrar o projeto do dev member ----------
-  console.log("\n[6/12] proposta #2 (exemplo real): registry.registerProject(devMember, …)…");
+  console.log("\n[6/15] proposta #2 (exemplo real): registry.registerProject(devMember, …)…");
   const registerCalldata = registry.interface.encodeFunctionData("registerProject", [
     devMember.address,
     PROJECT_URI,
@@ -363,7 +387,7 @@ async function main() {
   // ---------- 7) Proposta #3: ativar o projeto cloud-terminal ----------
   // Sem status Active o FeeRouter.pay reverte com ProjectNotActive — a
   // ativacao e o que permite o cloud-terminal cobrar ativacoes de conta.
-  console.log("\n[7/12] proposta #3: registry.activateProject(cloud-terminal)…");
+  console.log("\n[7/15] proposta #3: registry.activateProject(cloud-terminal)…");
   const activateCalldata = registry.interface.encodeFunctionData("activateProject", [projectId]);
   await passProposal(
     [addrs.registry],
@@ -382,7 +406,7 @@ async function main() {
   // ---------- 8) Proposta #4: CREDIT de teste pro dev member ----------
   // Treasury detem o genesis de 10M CREDIT. O dev member (usuario de teste
   // do cloud-terminal) recebe TEST_CREDIT pra exercitar o fluxo de ativacao.
-  console.log("\n[8/12] proposta #4: treasury.transfer(CREDIT, devMember, 10k)…");
+  console.log("\n[8/15] proposta #4: treasury.transfer(CREDIT, devMember, 10k)…");
   const treasury = await ethers.getContractAt("Treasury", addrs.treasury);
   const credit = await ethers.getContractAt("CreditToken", addrs.credit);
   const transferCalldata = treasury.interface.encodeFunctionData("transfer", [
@@ -410,7 +434,7 @@ async function main() {
   //   5. Treasury.grantRole(GAUGE_FALLBACK_DEPOSITOR_ROLE, V2) — gauge paused
   //   6. Gauge.addPool(MOCK_POOL)               — poolId 1 == gaugePoolId default do V2
   //   7. Treasury.setLiquidityGauge(gauge, 1)   — habilita flushPendingGaugeRewards
-  console.log("\n[9/12] proposta #5: wiring V2 (roles + pool gauge + cutoff V1)…");
+  console.log("\n[9/15] proposta #5: wiring V2 (roles + pool gauge + cutoff V1)…");
   const gauge = await ethers.getContractAt("LiquidityGauge", addrs.gauge);
   const distributorV2 = await ethers.getContractAt("RewardDistributorV2", addrs.distributorV2);
   const MINTER_ROLE = ethers.id("MINTER_ROLE");
@@ -443,7 +467,7 @@ async function main() {
   // ---------- 10) Stake do dev member no projeto #1 ----------
   // Acao de usuario (permissionless) — staking direcionado de GOV no
   // cloud-terminal com lock maximo (365d = multiplier 4x).
-  console.log("\n[10/12] stake: 1M GOV no projeto #1 (lock 365d, 4x)…");
+  console.log("\n[10/15] stake: 1M GOV no projeto #1 (lock 365d, 4x)…");
   const staking = await ethers.getContractAt("Staking", addrs.staking);
   await (await gov.connect(devMember).approve(addrs.staking, STAKE_AMOUNT)).wait();
   await (await staking.connect(devMember).stake(projectId, STAKE_AMOUNT, STAKE_LOCK)).wait();
@@ -453,7 +477,7 @@ async function main() {
   );
 
   // ---------- 11) Seed de burn: pagamento no FeeRouter (round 0) ----------
-  console.log("\n[11/12] seed de burn: FeeRouter.pay de 100 CREDIT no projeto #1…");
+  console.log("\n[11/15] seed de burn: FeeRouter.pay de 100 CREDIT no projeto #1…");
   const feeRouter = await ethers.getContractAt("FeeRouter", addrs.feeRouter);
   const burnTracker = await ethers.getContractAt("BurnTracker", addrs.burnTracker);
   await (await credit.connect(devMember).approve(addrs.feeRouter, SEED_PAYMENT)).wait();
@@ -466,7 +490,7 @@ async function main() {
   //          bucket apps cai no bonders (bootstrap documentado no contrato).
   // Round 1: emissao usa o burn da rodada 0 vs floorSchedule[1]; bucket apps
   //          minta pro ownerRecipient do projeto (= dev member).
-  console.log("\n[12/12] ciclo V2: closeRound -> finalizeRound -> claim (rounds 0 e 1)…");
+  console.log("\n[12/15] ciclo V2: closeRound -> finalizeRound -> claim (rounds 0 e 1)…");
   for (const round of [0n, 1n]) {
     await passProposal(
       [addrs.burnTracker],
@@ -502,6 +526,124 @@ async function main() {
   const finalCreditBalance: bigint = await credit.balanceOf(devMember.address);
   console.log(`  saldo CREDIT final do dev member = ${ethers.formatEther(finalCreditBalance)}`);
 
+  // ---------- 13) Infra dev de mercado: USDC mock + pool + oracle + faucet ----------
+  // Contratos de contracts/dev/ — EXCLUSIVOS da rede local. Deployados fora
+  // do Ignition (mesmo racional dos mocks Uniswap do gauge: o modulo
+  // permanece identico ao de mainnet).
+  console.log("\n[13/15] infra dev: USDC mock + DevSwapPool + CreditPriceOracle + DevFaucet…");
+  const USDCMock = await ethers.getContractFactory("ERC20DecimalsMock");
+  const usdcMock = await USDCMock.deploy("USD Coin (Dev)", "USDC", 6);
+  await usdcMock.waitForDeployment();
+  const usdcAddr = await usdcMock.getAddress();
+
+  const DevPool = await ethers.getContractFactory("DevSwapPool");
+  const devPool = await DevPool.deploy(addrs.credit, usdcAddr);
+  await devPool.waitForDeployment();
+  const devPoolAddr = await devPool.getAddress();
+
+  // Feed Chainlink = address(0) => fallback deliberado 1 USDC = 1 USD do
+  // CreditPriceOracle (nao ha feed USDC/USD em chain local).
+  const Oracle = await ethers.getContractFactory("CreditPriceOracle");
+  const oracle = await Oracle.deploy(devPoolAddr, addrs.credit, usdcAddr, ethers.ZeroAddress);
+  await oracle.waitForDeployment();
+  const oracleAddr = await oracle.getAddress();
+
+  const Faucet = await ethers.getContractFactory("DevFaucet");
+  const faucet = await Faucet.deploy(
+    addrs.credit,
+    usdcAddr,
+    devMember.address,
+    DRIP_ETH,
+    DRIP_CREDIT,
+    DRIP_USDC,
+    DRIP_COOLDOWN,
+  );
+  await faucet.waitForDeployment();
+  const faucetAddr = await faucet.getAddress();
+  console.log(`  USDC (mock)       = ${usdcAddr}`);
+  console.log(`  DevSwapPool       = ${devPoolAddr}`);
+  console.log(`  CreditPriceOracle = ${oracleAddr}`);
+  console.log(`  DevFaucet         = ${faucetAddr}`);
+
+  // ---------- 14) Proposta #8: funding dev + wiring do oracle/router ----------
+  // Treasury e quem custodia o CREDIT (genesis) — funding do faucet e do
+  // seed da pool sai de la via governanca, como qualquer gasto da DAO.
+  // No mesmo batch, o Treasury passa a enxergar o par dev como fonte de
+  // preco (setPriceOracle) e venue de buyback (setSwapRouter).
+  console.log("\n[14/15] proposta #8: Treasury funda faucet+seed e aponta oracle/router dev…");
+  await passProposal(
+    [addrs.treasury, addrs.treasury, addrs.treasury, addrs.treasury],
+    [0n, 0n, 0n, 0n],
+    [
+      treasury.interface.encodeFunctionData("transfer", [addrs.credit, faucetAddr, FAUCET_CREDIT]),
+      treasury.interface.encodeFunctionData("transfer", [addrs.credit, devMember.address, POOL_SEED_CREDIT]),
+      treasury.interface.encodeFunctionData("setPriceOracle", [oracleAddr]),
+      treasury.interface.encodeFunctionData("setSwapRouter", [devPoolAddr]),
+    ],
+    "# Proposta #8 — Infra dev de mercado (rede local)\n\nFunda o DevFaucet com CREDIT, libera CREDIT pro seed da DevSwapPool (CREDIT/USDC), e aponta o Treasury pro CreditPriceOracle e pro router dev — habilitando TWAP e buyback na simulacao local.",
+  );
+  console.log(`  faucet fundado com ${ethers.formatEther(FAUCET_CREDIT)} CREDIT via Treasury`);
+
+  // ---------- 15) Seed da pool + funding restante + smoke tests ----------
+  console.log("\n[15/15] seed da DevSwapPool + funding do faucet + smoke tests…");
+  // USDC mock: mint aberto (dev) — deployer cunha pro seed e pro faucet.
+  await (await usdcMock.mint(devMember.address, POOL_SEED_USDC)).wait();
+  await (await usdcMock.mint(faucetAddr, FAUCET_USDC)).wait();
+
+  await (await credit.connect(devMember).approve(devPoolAddr, POOL_SEED_CREDIT)).wait();
+  await (await usdcMock.connect(devMember).approve(devPoolAddr, POOL_SEED_USDC)).wait();
+  const creditIsToken0 = (await devPool.TOKEN0()).toLowerCase() === addrs.credit.toLowerCase();
+  const [seed0, seed1] = creditIsToken0
+    ? [POOL_SEED_CREDIT, POOL_SEED_USDC]
+    : [POOL_SEED_USDC, POOL_SEED_CREDIT];
+  await (await devPool.connect(devMember).seed(seed0, seed1)).wait();
+  console.log(
+    `  pool semeada: ${ethers.formatEther(POOL_SEED_CREDIT)} CREDIT / ${ethers.formatUnits(POOL_SEED_USDC, 6)} USDC (~$0.10/CREDIT)`,
+  );
+
+  await (await devMember.sendTransaction({ to: faucetAddr, value: FAUCET_ETH })).wait();
+
+  // Smoke test 1: TWAP do oracle (janela de 30min do Treasury) ~ $0.10.
+  const twap: bigint = await oracle.peekTwapPrice.staticCall(1800);
+  console.log(`  TWAP CreditPriceOracle(1800s) = $${ethers.formatEther(twap)} / CREDIT`);
+  if (twap === 0n) throw new Error("oracle retornou preco zero");
+
+  // Smoke test 2: quote de compra na pool (100 USDC -> CREDIT).
+  const quoteOut: bigint = await devPool.quoteExactInput(usdcAddr, 100n * 10n ** 6n);
+  console.log(`  quote: 100 USDC -> ${ethers.formatEther(quoteOut)} CREDIT`);
+
+  // Smoke test 3: claim do faucet numa carteira nova (padrao do hub: uma
+  // conta unlocked do node aciona claimFor pra quem ainda nao tem gas).
+  const freshWallet = ethers.Wallet.createRandom();
+  await (await faucet.connect(signers[19]).claimFor(freshWallet.address)).wait();
+  const fEth = await ethers.provider.getBalance(freshWallet.address);
+  const fCredit: bigint = await credit.balanceOf(freshWallet.address);
+  const fUsdc: bigint = await usdcMock.balanceOf(freshWallet.address);
+  console.log(
+    `  faucet.claimFor(fresh): ${ethers.formatEther(fEth)} ETH + ${ethers.formatEther(fCredit)} CREDIT + ${ethers.formatUnits(fUsdc, 6)} USDC`,
+  );
+  if (fEth !== DRIP_ETH || fCredit !== DRIP_CREDIT || fUsdc !== DRIP_USDC) {
+    throw new Error("drip do faucet divergente do configurado");
+  }
+
+  // Persiste os enderecos dev pro export-runtime-config/sync-contracts
+  // mesclarem no config do hub e do backend.
+  const devAddrsFile = resolve(journalDir, "dev_addresses.json");
+  writeFileSync(
+    devAddrsFile,
+    JSON.stringify(
+      {
+        USDC: usdcAddr,
+        DevSwapPool: devPoolAddr,
+        CreditPriceOracle: oracleAddr,
+        DevFaucet: faucetAddr,
+      },
+      null,
+      2,
+    ),
+  );
+  console.log(`  enderecos dev persistidos em ${devAddrsFile}`);
+
   // ---------- Resumo ----------
   console.log("\npronto — bootstrap de producao simulado em dev:");
   console.log(`  - parametros: production.json (timelock 2d, voto 1d+7d, quorum 4%)`);
@@ -519,6 +661,11 @@ async function main() {
   console.log(`  - stake: ${ethers.formatEther(STAKE_AMOUNT)} GOV do dev no projeto #${projectId} (lock 365d, weight 4x)`);
   console.log(`  - rounds 0 e 1 fechados e finalizados no V2 (emissao floor + burn-driven); claims pagos`);
   console.log(`  - saldo CREDIT final do dev member: ${ethers.formatEther(finalCreditBalance)}`);
+  console.log(`  - infra dev de mercado (proposta #8 + seed):`);
+  console.log(`      USDC mock ${usdcAddr}`);
+  console.log(`      DevSwapPool ${devPoolAddr} (500k CREDIT / 50k USDC, ~$0.10)`);
+  console.log(`      CreditPriceOracle ${oracleAddr} (TWAP da pool, USDC=USD 1:1) — Treasury.setPriceOracle OK`);
+  console.log(`      DevFaucet ${faucetAddr} (drip ${ethers.formatEther(DRIP_ETH)} ETH + ${ethers.formatEther(DRIP_CREDIT)} CREDIT + ${ethers.formatUnits(DRIP_USDC, 6)} USDC, cooldown ${DRIP_COOLDOWN}s)`);
   console.log("\nintegracao cloud-terminal (prod-sim):");
   console.log("  1. exporte o runtime config pro backend do cloud-terminal:");
   console.log("       CHAIN_ID=31337 PUBLIC_RPC_URL=http://127.0.0.1:8545 \\");

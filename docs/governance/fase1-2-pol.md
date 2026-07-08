@@ -75,9 +75,17 @@ Em ordem:
      [docs.uniswap.org/contracts/v3/reference/deployments](https://docs.uniswap.org/contracts/v3/reference/deployments).
 
 3. **Treasury com saldo de CREDIT e USDC suficientes**:
-   - **CREDIT**: para o seed inicial, o Treasury precisa ter sido
-     destinatário de um `mint` adicional (genesis foi inteiramente para
-     o `RewardDistributor`). Esta é uma proposta DAO **separada**:
+   - **CREDIT**: o **genesis do CREDIT vai inteiramente para o
+     `Treasury`** — não para o `RewardDistributor` (ver
+     `ignition/modules/Dao.ts`: `mintGenesis(treasury, genesisAmount)`, e
+     o comentário "Genesis CREDIT vai 100% para o Treasury"). Logo, no
+     deploy fresh o Treasury **já nasce com `genesisAmount` de CREDIT**
+     (10M em produção) — parte pode lastrear o seed do POL diretamente,
+     sem mint adicional. O caminho abaixo (mint adicional via proposta
+     DAO) só é necessário se o saldo de genesis já tiver sido consumido
+     (rounds do distributor drenam do balance livre do Treasury) e o seed
+     precisar de mais CREDIT do que o disponível. Nesse caso é uma
+     proposta DAO **separada**:
      - Calldata 1: `CreditToken.grantRole(MINTER_ROLE, treasury)`
      - Calldata 2: `Treasury.<custom-mint-helper>` — **pendência**: o
        Treasury não tem hoje um helper que minta CREDIT em si mesmo.
@@ -189,18 +197,32 @@ do NPM ao Treasury. Sem auto-compound (Decisão 4 do parecer §4).
 Implementada **fora** do `Treasury` (este contrato apenas exige
 `GOVERNANCE_ROLE`):
 
-- Adições (`addPOL`): proposta normal (50% quorum 4%).
-- Remoções até 25% do POL (`removePOL` com liquidez ≤ 25%): proposta
-  normal.
-- Remoções **acima de 25%**: exigir **75% dos votos a favor** —
-  threshold implementado via proposal type no `CommunityGovernor`
-  (não no `Treasury`; **pendência de implementação** na Fase 2 ou via
-  norma cultural até lá).
+- Adições (`addPOL`): proposta normal (quorum 4%, maioria simples).
+- Remoções de POL (`removePOL`): exigem **75% dos votos decisivos a
+  favor** — `forVotes >= 3 * againstVotes` (Abstain fora da razão) —
+  agora **enforced on-chain** no `CommunityGovernor` (não no `Treasury`).
 
-**Pendência operacional**: até o `CommunityGovernor` ter proposal types
-diferenciados, o gate de supermaioria 75% é norma cultural — o
-proponente declara explicitamente "remoção > 25%" na descrição da
-proposta e holders rejeitam se quorum/supermaioria insuficientes.
+**Supermaioria 75% agora é código, não norma cultural.** O
+`CommunityGovernor` classifica cada proposta em `propose()`: qualquer
+proposta cujo batch contenha uma call com `target == TREASURY` e selector
+`Treasury.removePOL` (`0x6a71d4b3`) é marcada como
+`ProposalType.Supermajority`, e `_voteSucceeded` passa a exigir
+`forVotes >= 3 * againstVotes` **E** `forVotes > 0` (ver
+`contracts/CommunityGovernor.sol`).
+
+> **Design conservador — TODA proposta com `removePOL` exige 75%,
+> independente da fração removida.** A fração exata (% do POL) só é
+> conhecida on-chain no momento do `decreaseLiquidity`, **não é
+> mensurável no `propose()`**. Em vez de tentar inferir a fração no
+> propose (frágil e contornável), o Governor aplica o gate mais rígido a
+> qualquer remoção. Consequências: (i) o limiar antigo "> 25%" deixa de
+> ser a fronteira — mesmo uma remoção pequena passa por 75%; (ii) o scan
+> também marca como Supermajority calls de **gestão de roles**
+> (`grantRole`/`revokeRole`/`renounceRole`) com target no `TREASURY` **ou
+> no próprio Timelock**, fechando o bypass de re-autorizar quem pode
+> chamar `removePOL` direto; (iii) batch misto (removePOL + call
+> qualquer) é contaminado pelo tipo Supermajority. Um evento
+> `ProposalTypeSet` é emitido no propose.
 
 ## 6. Soft cap de 50% (Decisão 7 do parecer §7)
 
@@ -227,9 +249,12 @@ Dashboard externo (subgraph) deve expor `% POL` para auditoria pública.
 - [ ] **[dao-economist]** Parecer separado sobre **two-sided risk POL/FFP**
       formalizando "POL decay rate" sob diferentes cenários de buyback
       (parecer §8).
-- [ ] **[dao-dev]** Verificar se `CommunityGovernor` precisa de
+- [x] **[dao-dev]** ~~Verificar se `CommunityGovernor` precisa de
       `castVoteWithReasonAndParams` ou proposal type diferenciado para
-      gate de 75% (Decisão 5).
+      gate de 75% (Decisão 5).~~ **Feito**: gate de 75% implementado via
+      `ProposalType.Supermajority` no `CommunityGovernor` (scan de
+      `removePOL` + role-management no propose; `forVotes >= 3×againstVotes`
+      em `_voteSucceeded`). Ver §5.
 - [ ] **[dao-dev]** Adicionar cenário POL ao `economicSim.ts` para
       simular crash 30% e medir % de POL consumida.
 - [ ] **[dao-docs]** Documentar política de governance norm para soft cap

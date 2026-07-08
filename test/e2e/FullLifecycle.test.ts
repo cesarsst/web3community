@@ -31,8 +31,10 @@ import CommunityDAOModule from "../../ignition/modules/Dao";
  * Fluxo E2E testado:
  *   - Alice stake em Chat App com lock 30d.
  *   - Bob stake em Game App com lock 90d.
- *   - Charlie paga 1000 CREDIT em Chat App (95/0/5 — 950 burn, 50 rebate).
- *   - David paga 500 CREDIT em Game App (95/0/5 — 475 burn, 25 rebate).
+ *   - Charlie paga 1000 CREDIT em Chat App (70/20/10 — 700 burn, 200
+ *     treasury, 100 rebate; split default da Fase 0 do pivot CLP).
+ *   - David paga 500 CREDIT em Game App (70/20/10 — 350 burn, 100 treasury,
+ *     50 rebate).
  *   - Avanca tempo > roundDuration.
  *   - Timelock fecha rodada 0 via BurnTracker.closeRound().
  *   - Qualquer um finaliza rodada 0 via RewardDistributor.finalizeRound(0).
@@ -43,9 +45,9 @@ import CommunityDAOModule from "../../ignition/modules/Dao";
  *     nenhum contrato vazou valor, etc.
  *
  * Asserções chave:
- *   - CREDIT.totalSupply() diminuiu em exatamente (950 + 475) = 1425 pelos
+ *   - CREDIT.totalSupply() diminuiu em exatamente (700 + 350) = 1050 pelos
  *     burns, e subiu em (aliceReward + bobReward) pelos mints do finalize.
- *   - BurnTracker.totalBurnByRound[0] == 1425.
+ *   - BurnTracker.totalBurnByRound[0] == 1050.
  *   - Alice claim > 0 e Bob claim > 0, ambos <= totalEmission da rodada.
  *   - Lock de Alice bloqueou unstake cedo e liberou apos 30d.
  */
@@ -235,15 +237,15 @@ describe("E2E: FullLifecycle — ciclo economico completo passando por todos os 
       .pay(chatAppId, charlie.address, CHARLIE_PAYMENT);
     await chatPayTx.wait();
 
-    // Split 95/0/5 — 950 burned, 0 treasury, 50 rebate.
+    // Split 70/20/10 — 700 burned, 200 treasury, 100 rebate.
     const chatAppOwnerCreditAfter = await credit.balanceOf(chatAppOwner.address);
-    expect(chatAppOwnerCreditAfter - chatAppOwnerCreditBefore).to.equal(50n * 10n ** 18n);
+    expect(chatAppOwnerCreditAfter - chatAppOwnerCreditBefore).to.equal(100n * 10n ** 18n);
     const supplyAfterCharlie = await credit.totalSupply();
-    expect(supplyBeforeCharlie - supplyAfterCharlie).to.equal(950n * 10n ** 18n);
+    expect(supplyBeforeCharlie - supplyAfterCharlie).to.equal(700n * 10n ** 18n);
 
     // BurnTracker deve ter registrado o burn.
     const burnChatRound0 = await burnTracker.getBurnForProjectInRound(0, chatAppId);
-    expect(burnChatRound0).to.equal(950n * 10n ** 18n);
+    expect(burnChatRound0).to.equal(700n * 10n ** 18n);
 
     // ---------------- Passo 4: David paga no Game App ------------------
     await credit.connect(david).approve(feeRouterAddr, DAVID_PAYMENT);
@@ -253,18 +255,18 @@ describe("E2E: FullLifecycle — ciclo economico completo passando por todos os 
     await feeRouter.connect(david).pay(gameAppId, david.address, DAVID_PAYMENT);
 
     const gameAppOwnerCreditAfter = await credit.balanceOf(gameAppOwner.address);
-    expect(gameAppOwnerCreditAfter - gameAppOwnerCreditBefore).to.equal(25n * 10n ** 18n);
+    expect(gameAppOwnerCreditAfter - gameAppOwnerCreditBefore).to.equal(50n * 10n ** 18n);
     const supplyAfterDavid = await credit.totalSupply();
-    expect(supplyBeforeDavid - supplyAfterDavid).to.equal(475n * 10n ** 18n);
+    expect(supplyBeforeDavid - supplyAfterDavid).to.equal(350n * 10n ** 18n);
 
-    // Total burnado na rodada 0 = 1425 CREDIT.
+    // Total burnado na rodada 0 = 1050 CREDIT.
     const totalBurnRound0 = await burnTracker.getTotalBurnForRound(0);
-    expect(totalBurnRound0).to.equal(1_425n * 10n ** 18n);
+    expect(totalBurnRound0).to.equal(1_050n * 10n ** 18n);
     const burnGameRound0 = await burnTracker.getBurnForProjectInRound(0, gameAppId);
-    expect(burnGameRound0).to.equal(475n * 10n ** 18n);
+    expect(burnGameRound0).to.equal(350n * 10n ** 18n);
 
-    // Supply diminuiu em 1425 CREDIT total desde o inicio.
-    expect(supplyAtStart - (await credit.totalSupply())).to.equal(1_425n * 10n ** 18n);
+    // Supply diminuiu em 1050 CREDIT total desde o inicio.
+    expect(supplyAtStart - (await credit.totalSupply())).to.equal(1_050n * 10n ** 18n);
 
     // ---------------- Passo 5: Avanca tempo > roundDuration ------------
     await time.increase(DEV_ROUND_DURATION + 1n);
@@ -291,7 +293,7 @@ describe("E2E: FullLifecycle — ciclo economico completo passando por todos os 
     expect(round0Data.totalBurnAtFinalize).to.equal(0n);
 
     // ---------------- Passo 8: Fecha rodada 1 + finalize 1 --------------
-    // Rodada 1 e a que efetivamente acopla com o burn de 1425 CREDIT da rodada 0.
+    // Rodada 1 e a que efetivamente acopla com o burn de 1050 CREDIT da rodada 0.
     // Precisamos avancar tempo, fechar rodada 1, e finalizar. Sem isso, claim
     // nao reflete o burn que os apps registraram.
     await time.increase(DEV_ROUND_DURATION + 1n);
@@ -301,12 +303,12 @@ describe("E2E: FullLifecycle — ciclo economico completo passando por todos os 
     await distributor.connect(alice).finalizeRound(1);
     const round1Data = await distributor.roundData(1);
     expect(round1Data.finalized).to.be.true;
-    // emissao = min(max(alpha * 1425e18, floor[1]), capMax)
-    //         = max(0.95 * 1425e18, ~383_333e18) = floor[1] (muito maior).
+    // emissao = min(max(alpha * 1050e18, floor[1]), capMax)
+    //         = max(0.95 * 1050e18, ~383_333e18) = floor[1] (muito maior).
     // floor[1] = 400_000e18 - 400_000e18/24 = ~383_333e18.
     const expectedFloor1 = 400_000n * 10n ** 18n - (400_000n * 10n ** 18n) / 24n;
     expect(round1Data.totalEmission).to.equal(expectedFloor1);
-    expect(round1Data.totalBurnAtFinalize).to.equal(1_425n * 10n ** 18n);
+    expect(round1Data.totalBurnAtFinalize).to.equal(1_050n * 10n ** 18n);
 
     // ---------------- Passo 9: Alice e Bob claim rodada 1 ---------------
     // Round 1 usa burn do round 0 (Chat + Game tiveram burn). Probation inicial
@@ -340,9 +342,9 @@ describe("E2E: FullLifecycle — ciclo economico completo passando por todos os 
     // Soma dos rewards <= totalEmission da rodada.
     expect(aliceReward + bobReward).to.be.lte(round1Data.totalEmission);
 
-    // Share Chat App = emissao * 950 / 1425 = ~66.66% de 383_333e18 ≈ 255_555e18.
+    // Share Chat App = emissao * 700 / 1050 = ~66.66% de 383_333e18 ≈ 255_555e18.
     // Como Alice e a unica staker no Chat, recebe 100% do share do projeto.
-    // Vamos validar proporcionalidade: shareChatApp / shareGameApp ≈ 950/475 = 2.
+    // Vamos validar proporcionalidade: shareChatApp / shareGameApp ≈ 700/350 = 2.
     // Pequena diferença por divisoes inteiras é esperada.
     // aliceReward / bobReward ≈ 2 (ambas 100% do share do proprio projeto).
     expect(aliceReward * 1_000n).to.be.gte(bobReward * 1_990n);
@@ -380,7 +382,7 @@ describe("E2E: FullLifecycle — ciclo economico completo passando por todos os 
     // Conservacao de CREDIT:
     // supplyFinal = supplyAtStart - totalBurned + totalMinted(rewards).
     const supplyFinal = await credit.totalSupply();
-    const totalBurned = 1_425n * 10n ** 18n;
+    const totalBurned = 1_050n * 10n ** 18n;
     const totalMinted = aliceReward + bobReward;
     expect(supplyFinal).to.equal(supplyAtStart - totalBurned + totalMinted);
 
@@ -393,9 +395,13 @@ describe("E2E: FullLifecycle — ciclo economico completo passando por todos os 
     // apos cada pay — sem custodia).
     expect(await credit.balanceOf(feeRouterAddr)).to.equal(0n);
 
-    // Treasury continua com o saldo apos as transferencias iniciais:
-    // genesisAmount - CHARLIE_CREDIT - DAVID_CREDIT.
-    const expectedTreasuryCredit = 10_000_000n * 10n ** 18n - CHARLIE_CREDIT - DAVID_CREDIT;
+    // Treasury: saldo apos as transferencias iniciais MAIS a fatia de 20%
+    // (treasuryBps do split 70/20/10) dos pagamentos de Charlie (200) e
+    // David (100):
+    // genesisAmount - CHARLIE_CREDIT - DAVID_CREDIT + 20% * (pagamentos).
+    const treasuryFeeShare = ((CHARLIE_PAYMENT + DAVID_PAYMENT) * 2_000n) / 10_000n;
+    const expectedTreasuryCredit =
+      10_000_000n * 10n ** 18n - CHARLIE_CREDIT - DAVID_CREDIT + treasuryFeeShare;
     expect(await credit.balanceOf(treasuryAddr)).to.equal(expectedTreasuryCredit);
 
     // Conservacao de GOV: soma das posicoes de todos os atores + contratos
@@ -433,7 +439,7 @@ describe("E2E: FullLifecycle — ciclo economico completo passando por todos os 
 
     // Precisa de um saldo grande de CREDIT para tentar burn > sanityCap.
     // sanityCap DEV = 1M CREDIT. Vamos tentar queimar 2M (acima do cap,
-    // dentro da limitacao de 95/0/5 — burn nominal ~ 1.9M).
+    // dentro da limitacao de 70/20/10 — burn nominal ~ 1.4M).
     //
     // Primeiro o Treasury manda 2M pro charlie (via impersonate do Timelock).
     const [, , , charlie] = await ethers.getSigners();

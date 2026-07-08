@@ -43,9 +43,9 @@
       "16666666666666666666682"
     ],
 
-    "burnBps": 9500,
-    "treasuryBps": 0,
-    "rebateBps": 500,
+    "burnBps": 7000,
+    "treasuryBps": 2000,
+    "rebateBps": 1000,
 
     "votingDelay": "1",
     "votingPeriod": "50",
