@@ -24,6 +24,7 @@
     "format:check": "prettier --check '**/*.{ts,js,json,md,sol}'",
     "typecheck": "tsc --noEmit",
     "deploy:prod-sim": "hardhat run scripts/deploy-prod-sim.ts --network localhost",
+    "deploy:remodel": "hardhat run scripts/deploy-remodel.ts --network localhost",
     "sync:frontend": "bash scripts/sync-frontend.sh",
     "deploy:prod-sim:sync": "npm run deploy:prod-sim && npm run sync:frontend"
   },

@@ -1,5 +1,7 @@
 # Deep dives
 
+> ⚠️ **Nota de legado (remodel 2026-07-08)**: partes desta página analisam decisões do trilho econômico antigo (burn atômico, rodadas, emissão α·burn, buckets) **como se fossem vigentes**. Trate essas seções como registro histórico de design — o trilho vigente é PSM + FeeRouterV2 + ProjectFunding (ver [Fluxo de valor](../03-protocol-overview/03-economic-flows.md)). As decisões transversais (anti-flashloan, checkpoints, roles) continuam valendo.
+
 **Para quem é:** auditores e devs que precisam entender decisões arquiteturais específicas em profundidade.
 **Pré-requisitos:** leitura das seções 01–08.
 

@@ -1,6 +1,10 @@
 # Burn-to-mint
 
-**Para quem é:** quem quer entender como o protocolo sustenta emissão sem virar Ponzi.
+> ⚠️ **LEGADO — página inteira.** O ciclo burn-to-mint descrito aqui foi **substituído no remodel 2026-07-08** e não é mais o mecanismo vigente. Os contratos (`BurnTracker`, `RewardDistributor` V1/V2, `FeeRouter` V1) seguem deployados para claims históricos, mas o trilho de burn está desativado de fato: o [FeeRouterV2](../08-contracts-reference/08b-FeeRouterV2.md) não queima nada.
+>
+> **Por que foi substituído**: a análise econômica `audit/economist/2026-07-08-feerouter-bypass.md` mostrou que a taxa efetiva de ~80-90% sobre cada pagamento tornava o **bypass do FeeRouter a estratégia dominante** para os apps — e a emissão compensatória (α·burn) pagava investidores com inflação, não com valor real. No modelo vigente, CREDIT é estável 1:1 USDC via [CreditPSM](../08-contracts-reference/15-CreditPSM.md), o pagamento paga fee de só 2,5% no FeeRouterV2 (40% treasury / 40% buyback GOV / 20% grants) e a renda do investidor vem de **rev-share de receita real** via [ProjectFunding](../08-contracts-reference/16-ProjectFunding.md). Comece pelo [Fluxo de valor](../03-protocol-overview/03-economic-flows.md).
+
+**Para quem é:** quem quer entender como o modelo antigo sustentava emissão sem virar Ponzi.
 **Pré-requisitos:** [Dual-token](01-dual-token-economy.md).
 
 ## A fórmula

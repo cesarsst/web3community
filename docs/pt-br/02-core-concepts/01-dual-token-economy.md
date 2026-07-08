@@ -3,15 +3,17 @@
 **Para quem é:** qualquer pessoa que queira entender a base econômica antes de qualquer outro detalhe.
 **Pré-requisitos:** [Modelo mental](../01-getting-started/02-mental-model.md).
 
+> **Remodel 2026-07-08**: esta página descreve o modelo vigente — CREDIT estável 1:1 com USDC via [CreditPSM](../08-contracts-reference/15-CreditPSM.md); o desenho deflacionário (burn-to-mint) virou legado.
+
 O protocolo tem dois tokens porque tenta resolver dois problemas que um token só não resolve bem.
 
 ## Os dois problemas
 
-1. **Quem decide os rumos do protocolo?** Precisa de um instrumento escasso, não manipulável no curto prazo, com peso proporcional ao investimento que alguém tem no projeto. Responde: **GOV**.
+1. **Quem decide os rumos do protocolo — e quem captura o crescimento dele?** Precisa de um instrumento escasso, não manipulável no curto prazo, com peso proporcional ao investimento que alguém tem no projeto. Responde: **GOV**.
 
-2. **Qual é a moeda usada dentro dos apps?** Precisa de um instrumento que queime quando usado (para criar pressão deflacionária que recompense retenção) e que possa ser cunhado como reward quando o uso gera valor. Responde: **CREDIT**.
+2. **Qual é a moeda usada dentro dos apps?** Precisa de um instrumento **estável e previsível** — ninguém precifica serviço em moeda volátil. Responde: **CREDIT**, estável 1:1 com USDC via [CreditPSM](../08-contracts-reference/15-CreditPSM.md) (compra e resgate sem taxa, lastro 100% retido no contrato).
 
-Usar o mesmo token para os dois cria dissonância: ou você queima token de votação (rui governança) ou você dá direito de voto a quem acabou de gastar (rui separação de poderes).
+Usar o mesmo token para os dois cria dissonância: ou a moeda de pagamento flutua com especulação de governança (rui a precificação dos apps) ou você dá direito de voto a quem acabou de gastar (rui separação de poderes). A separação vigente é limpa: **CREDIT é trilho de pagamento estável; GOV é quem captura o crescimento** — 40% da fee de cada pagamento (1% do GMV) financia buyback contínuo de GOV via [FeeRouterV2](../08-contracts-reference/08b-FeeRouterV2.md).
 
 ## GOV — governança e peso de longo prazo
 
@@ -46,18 +48,15 @@ Ver [GovernanceToken](../08-contracts-reference/01-GovernanceToken.md) para refe
 | Supply cap hardcoded | **Não existe** | `CreditToken` não aplica cap |
 | Padrão | ERC-20 + ERC20Burnable + AccessControl | herança em `CreditToken` |
 | Genesis | 10.000.000 CREDIT para `Treasury`, one-shot — o valor é **parâmetro de deploy** (`genesisAmount` em `ignition/parameters/production.json`), não hardcoded no contrato | `mintGenesis`, flag `genesisMinted` |
-| Mint subsequente | apenas `MINTER_ROLE` | concedida ao `RewardDistributor` (V1) no deploy; o `RewardDistributorV2` é o **minter alvo** — durante a migração de 4 rounds coexistem dois minters, até governança revogar a role do V1 |
-| Burn | via `burn`, `burnFrom` (ERC20Burnable) **ou** `burnByRole` | `burnByRole` sem allowance, exige `BURNER_ROLE` |
+| Mint vigente | `MINTER_ROLE` no **CreditPSM** — minta 1:1 contra USDC depositado (`buy`) | [CreditPSM](../08-contracts-reference/15-CreditPSM.md) |
+| Burn vigente | `BURNER_ROLE` no **CreditPSM** — queima no resgate (`sell`, devolve USDC 1:1) | idem |
+| Mint/burn legados | `RewardDistributor` V1/V2 (claims históricos) e `BurnTracker` (trilho de burn desativado de fato — o FeeRouterV2 não queima) | contratos seguem deployados |
 
 **Por que não tem supply cap hardcoded?**
 
-Porque o cap efetivo é **econômico**, não sintático. Quem tem `MINTER_ROLE` é o `RewardDistributor`, e a função `mint` dele é gated pela fórmula:
+Porque o supply de CREDIT é **elástico por design, mas sempre lastreado**. Cada CREDIT mintado pelo PSM tem 1 USDC retido no contrato (invariante I-PSM1: `backing >= mintedOutstanding`, sem função de saque do lastro — nem para governança). O supply cresce quando há demanda de pagamento nos apps e encolhe quando usuários resgatam. Um cap hardcoded seria arbitrário: o limite real é o USDC que entra.
 
-```
-emissao_R = min( max( alpha * burn_{R-1}, floor(R) ), capMax )
-```
-
-com `alpha <= 0.99` (teto reduzido de `1.1` para garantir IE1 por construção — ver `audit/economist/2026-04-22-consistency-audit.md` C2), `capMax <= 100M CREDIT` por rodada e `floor` decrescente que zera após a rodada 23. Logo: a emissão é **limitada pelo consumo passado** e por um teto duro ajustável via governança, e **estritamente deflacionária em regime estável** porque `alpha < 1` é invariante permanente por código. Um cap hardcoded no token seria redundante, e inflexível para ajustes econômicos futuros.
+> **Legado**: no modelo pré-remodel, o cap era "econômico" via fórmula de emissão `min(max(alpha × burn, floor), capMax)` do `RewardDistributor`, com CREDIT deflacionário. Esse trilho está desativado como mecanismo vigente — ver [Burn-to-mint (legado)](03-burn-to-mint.md).
 
 Ver [CreditToken](../08-contracts-reference/02-CreditToken.md).
 
@@ -65,13 +64,13 @@ Ver [CreditToken](../08-contracts-reference/02-CreditToken.md).
 
 | Dimensão | GOV | CREDIT |
 |---|---|---|
-| Oferta | Fixa (cap imutável) | Elástica (governança ajusta fórmula) |
+| Oferta | Fixa (cap imutável 100M) | Elástica, 100% lastreada em USDC (PSM) |
 | Função política | Vota, delega, cumula peso | Não vota |
-| Queimável no uso? | Não | Sim, via `FeeRouter.pay` |
-| Reward de stake em | — (GOV não é emitido como reward) | Sim (mint pelo `RewardDistributor`) |
-| Direção do valor | Tende a apreciar com crescimento agregado | Tende a desinflacionar com uso constante |
+| Preço | Flutua — captura crescimento do ecossistema | Estável: 1 CREDIT = 1 USDC, sempre (compra/resgate no PSM sem taxa) |
+| Como captura valor | **Buyback contínuo**: 40% da fee do FeeRouterV2 (= 1% do GMV) financia recompra de GOV | Não captura — é trilho de pagamento |
+| Papel do stake | Governança + curadoria + **gate de investimento** no [ProjectFunding](../08-contracts-reference/16-ProjectFunding.md) | Investível em rodadas de funding (rev-share de receita real) |
 
-Estas diferenças não são decoração — elas modelam a separação entre "quem decide" e "quem usa". A DAO (via GOV) delibera parâmetros que afetam CREDIT, mas não vice-versa.
+Estas diferenças não são decoração — elas modelam a separação entre "quem decide e captura valor" e "o que se usa para pagar". A DAO (via GOV) delibera parâmetros que afetam CREDIT, mas não vice-versa.
 
 ## Contratos-chave
 
@@ -79,9 +78,10 @@ Estas diferenças não são decoração — elas modelam a separação entre "qu
 |---|---|
 | [GovernanceToken](../08-contracts-reference/01-GovernanceToken.md) | GOV ERC20Votes |
 | [CreditToken](../08-contracts-reference/02-CreditToken.md) | CREDIT ERC20Burnable com roles |
-| [RewardDistributor](../08-contracts-reference/07-RewardDistributor.md) / [RewardDistributorV2](../08-contracts-reference/07b-RewardDistributorV2.md) | `MINTER_ROLE` em CREDIT — V1 recebe no deploy; V2 é o minter alvo (dois minters durante a migração de 4 rounds, V1 vira claim-only e perde a role após o cutoff) |
-| [BurnTracker](../08-contracts-reference/06-BurnTracker.md) | `BURNER_ROLE` em CREDIT para o burn de uso (via `FeeRouter`); o [Treasury](../08-contracts-reference/04-Treasury.md) também recebe `BURNER_ROLE` (via proposta) para queimar o CREDIT comprado no buyback FFP |
-| [FeeRouter](../08-contracts-reference/08-FeeRouter.md) | Entrypoint de pagamento que aciona o burn |
+| [CreditPSM](../08-contracts-reference/15-CreditPSM.md) | Entrada/saída de CREDIT: USDC ↔ CREDIT 1:1, sem taxa, lastro integral |
+| [FeeRouterV2](../08-contracts-reference/08b-FeeRouterV2.md) | Trilho de pagamento: fee 2,5% (40% treasury / 40% buyback GOV / 20% grants) + rev-share |
+| [ProjectFunding](../08-contracts-reference/16-ProjectFunding.md) | Rodadas de captação com rev-share 1–30% — renda do investidor vem de receita real |
+| [RewardDistributor](../08-contracts-reference/07-RewardDistributor.md) / [V2](../08-contracts-reference/07b-RewardDistributorV2.md), [BurnTracker](../08-contracts-reference/06-BurnTracker.md), [FeeRouter V1](../08-contracts-reference/08-FeeRouter.md) | **Legado** — trilho burn-to-mint pré-remodel, contratos seguem deployados |
 
 ---
 

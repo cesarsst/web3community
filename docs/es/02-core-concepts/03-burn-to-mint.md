@@ -1,6 +1,8 @@
 # Burn-to-mint
 
-**Audiencia:** quien quiera entender cómo el protocolo sostiene emisión sin convertirse en un Ponzi.
+> ⚠️ **LEGADO — sustituido por el remodel 2026-07-08.** El protocolo ya no quema CREDIT en pagos ni emite rewards: CREDIT es estable 1:1 con USDC ([CreditPSM](../08-contracts-reference/15-CreditPSM.md)) y el retorno del inversor viene de rev-share sobre receita real ([ProjectFunding](../08-contracts-reference/16-ProjectFunding.md)). Motivo del cambio: la tasa efectiva de ~80% sobre la app hacía del bypass la estrategia dominante (`audit/economist/2026-07-08-feerouter-bypass.md`). Esta página se mantiene como referencia histórica.
+
+**Audiencia:** quien quiera entender cómo el protocolo sostenía emisión en el modelo anterior.
 **Requisitos previos:** [Dual-token](01-dual-token-economy.md).
 
 ## La fórmula

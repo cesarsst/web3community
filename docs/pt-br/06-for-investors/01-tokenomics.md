@@ -5,6 +5,8 @@
 
 Esta página descreve a arquitetura econômica dos tokens. **Não é recomendação nem promessa de valorização.** Todos os parâmetros ajustáveis via governança podem mudar; faixas de parâmetro ajustável são codificadas on-chain.
 
+> **Remodel 2026-07-08**: CREDIT deixou de ser deflacionário/especulativo e virou **estável 1:1 com USDC** via [CreditPSM](../08-contracts-reference/15-CreditPSM.md). A renda do investidor vem de **rev-share de receita real** ([ProjectFunding](../08-contracts-reference/16-ProjectFunding.md)), não de emissão. A mecânica burn-to-mint abaixo está marcada como legado.
+
 ## GOV — supply fixo
 
 | Aspecto | Valor | Fonte |
@@ -58,22 +60,30 @@ Revogação: `owner` (Timelock, via proposta) pode revogar em qualquer ponto. Co
 
 Ter GOV parado na wallet **não** paga reward. GOV só participa da economia via:
 
-- Staking em projetos (gera peso + reward em CREDIT).
+- Staking em projetos (gera peso — que desde o remodel é o **gate de investimento** no `ProjectFunding`).
 - Colateral de listagem de projeto (trava GOV sem gerar reward).
 - Voto em propostas (gratuito).
 
-## CREDIT — supply elástico
+A captura de valor do GOV é indireta e contínua: **40% da fee de todo pagamento (= 1% do GMV) financia buyback de GOV** via `buybackRecipient` do FeeRouterV2. Quanto mais uso real, mais pressão de compra.
+
+## CREDIT — estável 1:1 USDC (remodel 2026-07-08)
 
 | Aspecto | Valor | Fonte |
 |---|---|---|
-| Supply cap hardcoded | **Não existe** | `CreditToken` não tem cap |
-| Genesis | 10.000.000 CREDIT (one-shot; o valor é **parâmetro de deploy** `genesisAmount`, não hardcoded no contrato) | `mintGenesis` com flag `genesisMinted`; `genesisAmount` em `ignition/parameters/production.json` |
-| Destinatário do genesis | `Treasury` | `ignition/modules/Dao.ts` |
-| Mint subsequente | Apenas pelo `MINTER_ROLE` | `CreditToken.mint` |
-| Minter em produção | `RewardDistributor` | grant do deploy |
-| Burn | `burn`, `burnFrom` (ERC20Burnable), `burnByRole` (role-gated) | `CreditToken` herda `ERC20Burnable` |
+| Peg | 1 CREDIT = 1 USDC, sem taxa, nos dois sentidos | `CreditPSM.buy` / `sell` |
+| Lastro | 100% em USDC, retido no PSM, **sem função de saque** (nem governança) | invariante I-PSM1 |
+| Supply cap hardcoded | **Não existe** — supply segue a demanda (mint no `buy`, burn no `sell`) | `CreditToken` não tem cap |
+| Mint em produção | `CreditPSM` (`MINTER_ROLE`) | grant do deploy do remodel |
+| Burn em produção | `CreditPSM` (`BURNER_ROLE`, só sobre saldo próprio) | `sell` |
+| Papel | Meio de pagamento (trilho), **não** reserva de valor especulativa | [FeeRouterV2](../08-contracts-reference/08b-FeeRouterV2.md) |
+| Genesis (legado) | 10.000.000 CREDIT one-shot pro Treasury (`genesisAmount` em `production.json`) | `mintGenesis` com flag `genesisMinted` |
+| Minters legados | `RewardDistributor` V1/V2 (claims históricos) | grants pré-remodel |
 
-### Fórmula de emissão
+**Consequência pra quem avalia exposição**: CREDIT não é ativo de investimento — não valoriza, não desvaloriza, não dilui. O investimento no protocolo é (a) GOV (governança + buyback) e (b) posições de rev-share em projetos via `ProjectFunding` (renda de receita real). Ver [Value accrual](02-value-accrual.md).
+
+### Fórmula de emissão (legado)
+
+> ⚠️ **LEGADO** — a emissão por fórmula pertence ao modelo burn-to-mint pré-remodel. Não há novas rodadas de emissão; os contratos ficam deployados para claims históricos.
 
 Em `RewardDistributor.finalizeRound`:
 
@@ -100,7 +110,9 @@ Decaimento linear de 400k a ~16.666 em 24 rodadas. Em produção (`roundDuration
 
 ### Dinâmica esperada de supply
 
-Se o uso é constante (burn = constante), `alpha < 1` implica emissão < burn, e o supply cai gradualmente.
+**Vigente**: supply de CREDIT = demanda por trilho. Cresce quando usuários compram no PSM para pagar apps, encolhe quando resgatam. Sempre coberto pelo lastro (`backingNormalized() >= mintedOutstanding`). Não há dinâmica deflacionária nem inflacionária a modelar.
+
+**Legado (burn-to-mint)**: se o uso era constante (burn = constante), `alpha < 1` implicava emissão < burn, e o supply caía gradualmente.
 
 > **Nota sobre a simulação.** O repositório tem em `scripts/simulation/` uma simulação de 52 rodadas em 3 cenários. No cenário base, o supply cai **~3.8%** e o APR nominal do staker estabiliza em ~34% em CREDIT. Esses valores são **ilustrativos do comportamento qualitativo** (deflação sustentada com uso constante) em um cenário hipotético com supply inflado (70.4M CREDIT inicial, via `Charlie_seed = 60M` mintado por atalho de teste em `scripts/simulation/economicSim.ts:72`) e 1M burn/round. Em mainnet, o supply operacional **começa em 10M** (genesis real), e o burn orgânico precisa ser construído a partir de uso real dos apps — números absolutos não prometem comportamento de mainnet, apenas a dinâmica qualitativa.
 
@@ -121,19 +133,35 @@ Parâmetros por campanha (propostos pela DAO):
 
 A DAO funda o contrato transferindo `maxClaims × amountPerUser` de CREDIT do Treasury antes de criar a campanha. Sobras após `closeCampaign` voltam ao `returnTo` (tipicamente Treasury).
 
-## Floor decay — por que 24 rodadas
+## Funding por rev-share — ProjectFunding (remodel)
+
+A camada de investimento do modelo vigente:
+
+| Parâmetro | Valor | Fonte |
+|---|---|---|
+| Rodadas por projeto | 1 (MVP) | `RoundAlreadyExists` |
+| Rev-share | 1% a 30% (100-3000 bps), escolhido pelo dono | `MIN_REV_SHARE_BPS` / `MAX_REV_SHARE_BPS` |
+| Prazo | 1 a 90 dias | `MIN_ROUND_DURATION` / `MAX_ROUND_DURATION` |
+| Alvo mínimo | 100 CREDIT (default; ajustável por governança) | `minTarget` |
+| Regra | All-or-nothing: bateu o alvo → dono recebe; venceu sem bater → refund 100% | `invest` / `refund` |
+| Gate | `invest` e `claim` exigem GOV stakeado no projeto | `NoGovStaked` |
+| Distribuição | Pro-rata às shares (= CREDIT investido), acumulador MasterChef, claims nunca expiram | `accRevenuePerShare` |
+
+O rev-share é descontado da receita bruta em cada `FeeRouterV2.pay` — depois da fee de 2,5% (250 bps; split 40/40/20 entre treasury/buyback/grants; teto duro de 500 bps), o projeto com rodada Funded repassa seu `revShareBps` aos investidores e fica com o resto (~89,5% com rev-share de 8%; 97,5% sem rodada).
+
+## Floor decay — por que 24 rodadas (legado)
 
 O floor existe para o **bootstrap** — garantir emissão positiva enquanto os apps ainda não geram burn orgânico. 24 rodadas × 7 dias = **~168 dias ≈ 5.5 meses**. Depois disso, o protocolo precisa andar com as próprias pernas.
 
 Decaimento linear: `floor[R] = 400_000e18 - R * (400_000 / 24 * 1e18)`, arredondado. O total somado dá exatamente **5M CREDIT** (soma analítica: `24 * 400_000 - (400_000/24) * 276 = 9.6M - 4.6M = 5M`, conforme o comentário "Soma analitica" em `ignition/modules/Dao.ts`; o array efetivo em `ignition/parameters/production.json` soma `5_000_000e18 + 184 wei` de dust do arredondamento inteiro do STEP) — bem abaixo do genesis (10M). Projetado para ser safety net, não orçamento fechado.
 
-## Cap por rodada (capMax)
+## Cap por rodada (capMax) (legado)
 
 Teto duro da emissão total em qualquer rodada. Em produção, 5M CREDIT. Ajustável dentro de `[MIN_CAPMAX=1, MAX_CAPMAX=100M] CREDIT`.
 
 Razão: mesmo se burn for absurdamente alto (ataque ou evento pontual), a emissão fica clampada. Isso preserva a previsibilidade do supply máximo.
 
-## Sanity cap por (rodada, projeto)
+## Sanity cap por (rodada, projeto) (legado)
 
 Limite paralelo, mais local, imposto pelo `BurnTracker`:
 
@@ -143,13 +171,24 @@ Limite paralelo, mais local, imposto pelo `BurnTracker`:
 
 Razão: impedir que um projeto malicioso queime volume absurdo para capturar share desproporcional.
 
-## Probation penalty (25%)
+## Probation penalty (25%) (legado — só afeta o trilho de emissão)
 
 Projetos em probation inicial (por tempo) recebem `projectShare / 4` na emissão. Os outros 75% **nunca são mintados** — não são redistribuídos, `CREDIT.mint` não é chamado para esse valor e `CreditToken.totalSupply()` não é afetado (não é `_burn`, é simplesmente divisão de share antes do mint). Preserva a intenção deflacionária por subtração de emissão, não por incineração.
 
 Em produção, probation inicial dura 30 dias. Durante esse período, stakers em projetos novos capturam 25% do que seria cheio.
 
 ## Resumo de parâmetros ajustáveis via governança
+
+Trilho vigente (remodel 2026-07-08):
+
+| Parâmetro | Contrato | Faixa permitida | Valor em produção |
+|---|---|---|---|
+| `feeBps` | FeeRouterV2 | `[0, 500]` (teto duro 5%) | `250` (2,5%) |
+| `feeSplit` | FeeRouterV2 | soma = 10.000 bps | `(4000, 4000, 2000)` — 40% treasury / 40% buyback / 20% grants |
+| recipients da fee | FeeRouterV2 | ≠ address(0) | Treasury (MVP: os três) |
+| `minTarget` | ProjectFunding | `>= 0` | `100e18` (100 CREDIT) |
+
+Trilho legado (burn-to-mint):
 
 | Parâmetro | Contrato | Faixa permitida | Valor em produção |
 |---|---|---|---|
@@ -171,6 +210,9 @@ Parâmetros do buyback FFP do Treasury (floor, caps, TWAP, slippage) e do split 
 Parâmetros **não ajustáveis**:
 
 - Cap do GOV (`CAP_SUPPLY = 100M`, imutável).
+- Peg 1:1 e ausência de saque do lastro no `CreditPSM` (sem owner, sem roles, sem setters).
+- `FEE_BPS_CAP = 500` (5%) no FeeRouterV2 — teto duro que nem governança ultrapassa.
+- `MIN_REV_SHARE_BPS = 100`, `MAX_REV_SHARE_BPS = 3000`, `MIN_ROUND_DURATION = 1 day`, `MAX_ROUND_DURATION = 90 days` no ProjectFunding.
 - `MIN_LOCK = 14 days`, `MAX_LOCK = 365 days`, `MAX_MULTIPLIER = 4x` no Staking.
 - `MIN_ROUND_DURATION`, `MAX_ROUND_DURATION` no BurnTracker (bounds).
 - `MIN_ALPHA`, `MAX_ALPHA`, `MIN_CAPMAX`, `MAX_CAPMAX`, `FLOOR_SCHEDULE_LENGTH`, `PROBATION_PENALTY_DENOM` no RewardDistributor.

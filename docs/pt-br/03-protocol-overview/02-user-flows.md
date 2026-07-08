@@ -5,69 +5,139 @@
 
 Cada diagrama abaixo é um fluxo end-to-end. Seta simples = chamada de função. `|=>` = transição de estado implícita.
 
-## Fluxo 1 — Usuário paga em um app
+> **Remodel 2026-07-08**: os fluxos 1, 1b e 1c descrevem o trilho vigente (PSM → pay → fee/rev-share/app → claim). Os fluxos marcados como **legado** descrevem o ciclo burn-to-mint pré-remodel, mantido deployado por compatibilidade histórica.
 
-Ator: **Charlie** (usuário final). Ele tem 1000 CREDIT e quer usar o ChatApp, cujo `projectId = 42`.
+## Fluxo 1 — Usuário compra CREDIT e paga em um app
+
+Ator: **Charlie** (usuário final). Ele tem 1000 USDC e quer usar o ChatApp, cujo `projectId = 42`. O ChatApp captou uma rodada com rev-share de 8%.
 
 ```
-Charlie.wallet
+Charlie.wallet (1000 USDC)
      |
-     | 1. approve(feeRouter, 1000 CREDIT)
-     v
-CreditToken  |=> allowance[charlie][feeRouter] = 1000
+     | 1. approve(psm, 1000 USDC)
+     | 2. CreditPSM.buy(1000e6)
+     |       |
+     |       | USDC.safeTransferFrom(charlie, psm, 1000e6)
+     |       | mintedOutstanding += 1000e18
+     |       | CREDIT.mint(charlie, 1000e18, "psm:buy")
+     |       v
+     |       +-- Bought event  |=> Charlie tem 1000 CREDIT (1:1)
      |
-     | 2. app UI constroi tx:
-     |    feeRouter.pay(42, charlie, 1000)
-     |    (tx pode ser assinada pelo Charlie ou por um relayer
-     |     que paga o gas; usuario economico e sempre `charlie`)
+     | 3. approve(feeRouterV2, 1000 CREDIT)
+     | 4. FeeRouterV2.pay(projectId=42, amount=1000)
      v
-FeeRouter.pay(projectId=42, user=charlie, amount=1000)
+FeeRouterV2.pay(42, 1000)
      |
      | Check: registry.isActive(42)
-     | Check: user != 0, amount > 0
+     | Check: amount > 0
      |
-     | 3. puxa CREDIT
+     | 5. puxa CREDIT
      | CREDIT.safeTransferFrom(charlie, router, 1000)
      |
-     | 4. calcula split default = (7000, 2000, 1000)
-     |    burned = 700, toTreasury = 200, toApp = 100
+     | 6. fee do protocolo: 1000 * 250 / 10000 = 25 CREDIT (2,5%)
+     |    split da fee (4000/4000/2000):
+     |      toTreasury = 10   (40% da fee = 1,0% do pagamento)
+     |      toBuyback  = 10   (40% da fee = 1,0% do pagamento)
+     |      toGrants   =  5   (residuo -> grants; 0,5% do pagamento)
      |
-     | 5. resolve recipient = registry.getProject(42).owner
-     |    (ou appRecipient[42] se setado)
-     |
-     | 6. paga rebate + fatia do treasury
-     | CREDIT.safeTransfer(recipient, 100)
-     | CREDIT.safeTransfer(treasury, 200)
-     |
-     | 7. aciona burn
-     | CREDIT.forceApprove(burnTracker, 700)
-     | BurnTracker.burnAndRecord(42, router, 700)
+     | 7. rev-share: 1000 * FUNDING.revShareBpsOf(42)=800 / 10000 = 80
+     |    CREDIT.safeTransfer(funding, 80)
+     |    FUNDING.notifyRevenue(42, 80)
      |        |
-     |        | check: registry.isActive(42)
-     |        | check: acumulado + 700 <= sanityCap
-     |        |
-     |        | 8. atualiza storage do tracker
-     |        | burnByRoundProject[R][42] += 700
-     |        | totalBurnByRound[R]       += 700
-     |        | projectsWithBurnCount[R]  += 1 (se 1a vez)
-     |        |
-     |        | 9. queima
-     |        | CREDIT.burnByRole(router, 700, "burnTracker")
-     |        |        |
-     |        |        | _burn(router, 700) => totalSupply -= 700
-     |        |        v
-     |        +-------- BurnedByRole event
+     |        | accRevenuePerShare[42] += 80e18 * 1e18 / raised
+     |        | totalRevenueDistributed[42] += 80
+     |        v
+     |        +-- RevenueNotified event
      |
-     |  Paid event emitted
+     | 8. resto pro app, NA HORA:
+     |    toApp = 1000 - 25 - 80 = 895 (89,5%)
+     |    recipient = appRecipientOf[42] (ou owner do Registry)
+     |    CREDIT.safeTransfer(recipient, 895)
+     |
+     | 9. grossVolumeOf[42] += 1000
+     v
+     +-------- PaymentRouted(42, charlie, 1000, 10, 10, 5, 80, 895)
 ```
 
 **Efeitos pós-tx:**
 
-- Supply de CREDIT caiu em 700.
-- `appOwner.balance += 100` em CREDIT.
-- `treasury.balance += 200` em CREDIT.
-- `burnByRoundProject[R][42] += 700` on-chain.
+- Nenhum CREDIT queimado — supply estável, lastro do PSM inalterado.
+- `appOwner.balance += 895` em CREDIT (sem rodada de funding seriam 975 = 97,5%).
+- Treasury +10, buyback de GOV +10, grants +5.
+- Investidores da rodada do ChatApp têm +80 acruados pro-rata (sacáveis via `claim`).
+- `grossVolumeOf[42] += 1000` — GMV on-chain do projeto.
 - Charlie `|=>` pode usar o serviço do ChatApp (lógica do app, fora do protocolo).
+
+## Fluxo 1b — Dono capta uma rodada de funding
+
+Ator: **ChatApp team** (dono do `projectId = 42`, Active) quer capital antecipado; **Alice** e **Bob** têm GOV stakeado no ChatApp.
+
+```
+ChatAppOwner.wallet
+     |
+     | 1. ProjectFunding.openRound(42, target=10_000 CREDIT,
+     |                             revShareBps=800 (8%), duration=30 dias)
+     |       |
+     |       | Check: registry.isActive(42) + owner
+     |       | Check: rounds[42].status == None (UMA rodada por projeto)
+     |       | Check: 100 <= 800 <= 3000 bps
+     |       | Check: target >= minTarget (100 CREDIT default)
+     |       | Check: 1 dia <= duration <= 90 dias
+     |       v
+     |       +-- RoundOpened(42, 10_000, 800, deadline)
+     |
+Alice (GOV stakeado no 42)
+     | 2. approve + ProjectFunding.invest(42, 6_000)
+     |       | Check: STAKING.getWeight(alice, 42) > 0   <- gate
+     |       | sharesOf[42][alice] = 6_000
+     |       +-- Invested(42, alice, 6_000, 6_000)
+     |
+Bob (GOV stakeado no 42)
+     | 3. approve + ProjectFunding.invest(42, 4_000)
+     |       | raised = 10_000 == target -> finaliza AUTOMATICAMENTE
+     |       | status = Funded
+     |       | CREDIT.safeTransfer(chatAppOwner, 10_000)
+     |       +-- Invested + RoundFunded(42, 10_000, chatAppOwner)
+     v
+|=> Dono recebeu 10_000 CREDIT de capital antecipado.
+|=> revShareBpsOf(42) = 800 -> todo pay() passa a descontar 8%.
+
+(Cenario alternativo: prazo vence com raised < target
+   -> qualquer um chama closeExpiredRound(42)  |=> Failed
+   -> cada investidor chama refund(42) e recebe 100% de volta.)
+```
+
+## Fluxo 1c — Investidor saca receita (claim)
+
+Ator: **Alice**, investiu 6.000 dos 10.000 CREDIT da rodada (60% das shares). O ChatApp já processou 50.000 CREDIT de GMV desde o funding.
+
+```
+Alice.wallet
+     |
+     | (opcional: preview)
+     | funding.pendingRevenue(42, alice) -> 2_400 CREDIT
+     |   (rev-share acumulado = 8% * 50_000 = 4_000; Alice = 60%)
+     |
+     | 1. ProjectFunding.claim(42)
+     v
+ProjectFunding.claim(42)
+     |
+     | Check: STAKING.getWeight(alice, 42) > 0
+     |   (skin in the game: precisa MANTER GOV stakeado;
+     |    sem stake o valor NAO expira - fica acruado ate re-stake)
+     |
+     | 2. amount = sharesOf * accRevenuePerShare - rewardDebt = 2_400
+     | 3. atualiza rewardDebt (checkpoint MasterChef)
+     | 4. CREDIT.safeTransfer(alice, 2_400)
+     v
+     +-------- RevenueClaimed(42, alice, 2_400)
+
+|=> Alice pode segurar o CREDIT (estavel) ou resgatar USDC no PSM (sell 1:1).
+```
+
+## Fluxo 1-legado — Usuário paga em um app (burn-to-mint, pré-remodel)
+
+> ⚠️ **LEGADO** — fluxo do FeeRouter V1 com split 70/20/10 e burn via BurnTracker. Detalhes na página [FeeRouter (V1)](../08-contracts-reference/08-FeeRouter.md). Resumo: `pay` puxava 1000 CREDIT, queimava 700 (`BurnTracker.burnAndRecord` → `burnByRole`), mandava 200 ao Treasury e 100 de rebate ao app. O burn alimentava a emissão da rodada seguinte no RewardDistributor.
 
 ## Fluxo 2 — Staker abre posição em um projeto
 
@@ -117,8 +187,11 @@ Staking.stake(projectId=42, amount=50_000 GOV, lockDuration=31_536_000)
 - Peso total do `projectId=42` subiu em 200k.
 - Peso global subiu em 200k.
 - Alice não pode `unstake` até `now + 365 dias` (exceto se projeto virar `Removed`).
+- **Com peso > 0 no projeto, Alice pode `invest` na rodada de funding do 42 e `claim` rev-share** (Fluxos 1b e 1c) — o stake é o gate de investimento do remodel.
 
-## Fluxo 3 — Staker reivindica reward
+## Fluxo 3 — Staker reivindica reward de emissão (legado)
+
+> ⚠️ **LEGADO** — claims de rodadas antigas do `RewardDistributorV2` continuam funcionando (direito nunca expira), mas não há novas rodadas de emissão desde o remodel 2026-07-08. A renda vigente do investidor é o rev-share do Fluxo 1c.
 
 Ator: **Alice**, já stakou e rodada `R=5` foi finalizada.
 
@@ -210,10 +283,11 @@ Ator: **ChatApp team** quer listar `ChatApp` como `projectId` novo.
 8. Apos aprovacao + delay:
    |=> projectId=42 fica Active
    |=> probationEndsAt = now + 30 dias
-   |=> feeRouter.pay(42, ...) passa a funcionar
+   |=> feeRouterV2.pay(42, ...) passa a funcionar
+   |=> o dono ja pode abrir rodada no ProjectFunding (Fluxo 1b)
 ```
 
-A partir daí o ChatApp pode aceitar pagamentos. Durante os próximos 30 dias, seu share de rewards é dividido por 4 (probation inicial).
+A partir daí o ChatApp pode aceitar pagamentos pelo FeeRouterV2 e abrir sua rodada de captação. (Legado: o passo de `RECORDER_ROLE` no BurnTracker e a penalidade de probation sobre share de rewards — dividido por 4 nos primeiros 30 dias — só afetam o trilho burn-to-mint antigo.)
 
 ## Fluxo 5 — Unstake após lock
 
@@ -253,7 +327,9 @@ Staking.unstake(projectId=42, amount=50_000)
      +-------- Unstaked event (sem EarlyUnstakeAllowed pq lock expirou)
 ```
 
-## Fluxo 6 — Rodada fecha e é finalizada
+## Fluxo 6 — Rodada de burn fecha e é finalizada (legado)
+
+> ⚠️ **LEGADO** — o ciclo `closeRound`/`finalizeRound` pertence ao trilho burn-to-mint pré-remodel. Sem burn novo (o FeeRouterV2 não queima), não há emissão nova a finalizar.
 
 Ator: **governança** (via proposta) e depois **qualquer um**.
 

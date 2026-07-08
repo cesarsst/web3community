@@ -3,6 +3,32 @@
 **Audiencia:** dev construyendo UI, indexer o contrato que lee estado de web3community.
 **Requisitos previos:** [Direcciones de los contratos](02-contract-addresses.md).
 
+> **⚠️ Actualización — remodel 2026-07-08.** Views nuevas del núcleo vigente (las secciones de `FeeRouter`/`RewardDistributor`/`BurnTracker` de abajo son del modelo legado):
+>
+> ```solidity
+> // CreditPSM
+> psm.backing();                      // USDC retenido (6 dec)
+> psm.backingNormalized();            // idem en 18 dec
+> psm.mintedOutstanding();            // CREDIT minteado por el PSM en circulacion
+>
+> // FeeRouterV2
+> feeRouterV2.feeBps();               // 250 = 2,5% (cap duro 500)
+> feeRouterV2.feeSplit();             // (4000, 4000, 2000)
+> feeRouterV2.grossVolumeOf(id);      // GMV acumulado del proyecto
+> feeRouterV2.appRecipientOf(id);     // 0 = fallback al owner del Registry
+> feeRouterV2.previewPay(id, amount); // (fee, revShare, toApp)
+>
+> // ProjectFunding
+> funding.rounds(id);                  // { target, raised, deadline, revShareBps, status }
+> funding.revShareBpsOf(id);           // 0 si no Funded
+> funding.sharesOf(id, investor);
+> funding.pendingRevenue(id, investor);
+> funding.totalRevenueDistributed(id);
+> funding.minTarget();
+> ```
+>
+> Eventos clave para indexar: `Bought`/`Sold` (PSM), `PaymentRouted` (router, 5 parcelas), `RoundOpened`/`Invested`/`RoundFunded`/`RoundFailed`/`Refunded`/`RevenueNotified`/`RevenueClaimed` (funding).
+
 ## Estado útil por contrato
 
 ### GovernanceToken

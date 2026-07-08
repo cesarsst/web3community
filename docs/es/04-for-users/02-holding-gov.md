@@ -8,7 +8,7 @@
 Tener GOV en la wallet te da tres capacidades:
 
 1. **Votar en propuestas** (si delegas voting power a ti mismo).
-2. **Stakear en proyectos** (bloquea GOV y genera peso de rewards en CREDIT).
+2. **Stakear en proyectos** (bloquea GOV — es el requisito para invertir en la ronda del proyecto y reclamar rev-share vía `ProjectFunding`).
 3. **Registrar un proyecto** como owner (si tienes `minCollateral` disponible y consigues aprobación de la gobernanza).
 
 Sin GOV, aún puedes ser usuario (gastar CREDIT en apps), pero no participas en las decisiones ni en el staking.
@@ -91,9 +91,9 @@ Verificar el supply actual: `GovernanceToken.totalSupply()` / `GovernanceToken.c
 
 ## Sobre yield (no) garantizado
 
-Tener GOV **no paga yield por sí solo**. Ganas reward en CREDIT **solo si stakeas en un proyecto que genera burn**. Mantener GOV parado en la wallet te da solo derecho a voto — no distribuye CREDIT.
+Tener GOV **no paga yield por sí solo**. Recibes CREDIT **solo si stakeas GOV en un proyecto, inviertes en su ronda de captación y la app factura de verdad** (rev-share sobre receita real — ver [ProjectFunding](../08-contracts-reference/16-ProjectFunding.md)). Mantener GOV parado en la wallet te da solo derecho a voto — no distribuye CREDIT.
 
-Si quieres participar en el incentivo económico, necesitas ir a [Staking en proyectos](03-staking-in-projects.md).
+Si quieres participar en el incentivo económico, empieza por [Staking en proyectos](03-staking-in-projects.md) y después invierte en una ronda.
 
 ---
 

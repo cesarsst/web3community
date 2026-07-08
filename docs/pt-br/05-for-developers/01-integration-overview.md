@@ -3,13 +3,15 @@
 **Para quem é:** dev que quer listar um app no ecossistema e aceitar CREDIT como pagamento.
 **Pré-requisitos:** [Arquitetura](../03-protocol-overview/01-architecture.md), [Treasury e fees](../02-core-concepts/07-treasury-and-fees.md).
 
+> **Remodel 2026-07-08**: a integração de pagamento vigente é via [`FeeRouterV2`](../08-contracts-reference/08b-FeeRouterV2.md) — assinatura **nova**: `pay(projectId, amount)` (o pagador é `msg.sender`; não existe mais o parâmetro `user`). Validação de pagamento é por evento `PaymentRouted`. O `FeeRouter` V1 é legado.
+
 ## O contrato que você precisa conhecer
 
 Para aceitar pagamentos em CREDIT, você vai interagir com **um** contrato principal:
 
-- [`FeeRouter`](../08-contracts-reference/08-FeeRouter.md) — função `pay(projectId, user, amount)`.
+- [`FeeRouterV2`](../08-contracts-reference/08b-FeeRouterV2.md) — função `pay(projectId, amount)`.
 
-Tudo o mais (burn, treasury, rebate, status do projeto) é tratado automaticamente dentro dele.
+Tudo o mais (fee, rev-share, status do projeto, métricas de volume) é tratado automaticamente dentro dele.
 
 ## O ciclo completo de integração
 
@@ -20,100 +22,99 @@ Tudo o mais (burn, treasury, rebate, status do projeto) é tratado automaticamen
 2. Registre o projeto via proposta (requer 10.000 GOV como colateral)
    Resultado: projectId atribuido (ex: 42)
 
-3. Apos ativacao, seu app pode chamar FeeRouter.pay em nome do usuario
-   (com approve previo do usuario)
+3. Apos ativacao, o usuario paga chamando FeeRouterV2.pay(projectId, amount)
+   (com approve previo do proprio usuario — o pagador e msg.sender)
 
-4. (Opcional) Stake no proprio projectId para capturar emissao via (B)
+4. Seu backend valida o pagamento pelo evento PaymentRouted
 
-5. Monitore eventos e metricas
+5. (Opcional) Abra uma rodada de captacao no ProjectFunding
+   (capital antecipado em troca de rev-share 1-30% da receita bruta)
+
+6. Monitore eventos e metricas (grossVolumeOf = GMV on-chain)
 ```
 
 ## O que o app chama
 
-Do ponto de vista do backend/contrato do seu app, o fluxo é:
+Do ponto de vista do frontend do seu app, o fluxo é:
 
 ```solidity
 // Passo 1 (off-chain): UI do seu app mostra preco ao usuario
-// Passo 2: UI pede approve
-IERC20(creditToken).approve(feeRouter, amount);
+// Passo 2: UI pede approve (assinado pelo usuario)
+IERC20(creditToken).approve(feeRouterV2, amount);
 
-// Passo 3: UI/app chama pay (ou o usuario chama direto)
-(uint256 burned, uint256 toTreasury, uint256 toApp) =
-    feeRouter.pay(projectId, user, amount);
+// Passo 3: o usuario chama pay — o pagador e msg.sender
+feeRouterV2.pay(projectId, amount);
 
-// Passo 4: app verifica sucesso (via evento Paid ou return values)
+// Passo 4: backend valida via evento PaymentRouted (ver abaixo)
 // Passo 5: app entrega o servico ao usuario
 ```
 
-`pay` é **pública** — qualquer um pode chamar, desde que `user` tenha `allowance`. Isso permite:
+**Diferença importante do V1**: a assinatura é `pay(projectId, amount)` — o pagador é sempre `msg.sender`. Não há mais o parâmetro `user`, então **quem assina a tx é quem paga**. Fluxos de gas sponsorship/meta-tx exigem que a smart wallet do usuário seja o `msg.sender` (ex.: ERC-4337), não um relayer arbitrário com allowance alheia.
 
-- **O próprio usuário** chamando `pay` (paga o gas ele mesmo).
-- **O app** chamando `pay` em nome do usuário (gas sponsorship — app paga gas, usuário só aprovou antes).
-- **Um relayer / smart wallet** chamando `pay` em nome do usuário (meta-tx-like).
+Para preview do detalhamento na UI (sem side effects):
 
-O "payer econômico" é sempre `user` (pago via `transferFrom`).
+```solidity
+(uint256 fee, uint256 revShare, uint256 toApp) =
+    feeRouterV2.previewPay(projectId, amount);
+```
+
+## Validando o pagamento — evento `PaymentRouted`
+
+O jeito canônico de o backend confirmar um pagamento é observar o evento:
+
+```solidity
+event PaymentRouted(
+    uint256 indexed projectId,
+    address indexed payer,
+    uint256 amount,
+    uint256 feeToTreasury,
+    uint256 feeToBuyback,
+    uint256 feeToGrants,
+    uint256 revShare,
+    uint256 toApp
+);
+```
+
+Padrão recomendado: o backend recebe o `txHash` do frontend, busca o receipt, decodifica o `PaymentRouted` e confere `projectId`, `payer` (a wallet vinculada ao usuário) e `amount` (≥ preço do serviço). O SDK `@cesarsst/web3community-sdk` implementa esse fluxo (`payActivation`/`verifyActivationPayment`).
 
 ## Quanto o app recebe
 
-Dado o split default em produção (70% burn, 20% treasury, 10% rebate — `burnBps/treasuryBps/rebateBps = 7000/2000/1000` em `ignition/parameters/production.json`):
+Com fee default de **2,5%** (250 bps; teto duro 500):
 
-- Imediato: **10%** vai para o `appRecipient` (default é o `owner` do projeto no Registry).
-- Indiretamente, via `RewardDistributor` da próxima rodada: **share de emissão proporcional ao burn do projeto**, que o app pode capturar se stakar.
+- **Sem rodada de funding**: **97,5%** de cada pagamento, na carteira do `appRecipient`, no mesmo bloco.
+- **Com rodada financiada** (ex.: rev-share de 8%): **~89,5%** — a fee e o rev-share são descontados atomicamente no `pay`.
 
-Detalhamento das 3 fontes de receita (rebate + stake + apreciação do CREDIT retido) em [Fluxo de valor](../03-protocol-overview/03-economic-flows.md).
-
-## Aviso para UIs de claim — sempre checar `previewClaim` antes
-
-`RewardDistributor.claim` com `amount == 0` é **no-op silencioso no contrato** (não marca `claimed[round][projectId][user]`), mas **gasta gas do caller** e não emite `Claimed`. Pior: `claimMany` aceita arrays grandes com todas as entries zeradas, desperdiçando gas sem efeito.
-
-Se você integra uma UI de claim (dashboard de staker, app de consumo que também mostra rewards, etc.), **sempre chame `previewClaim(user, round, projectId)` antes** e só permita a tx se o retorno for `> 0`. Isso evita:
-
-- Usuários pagando gas em transações que não fazem nada.
-- Loops de retry inúteis quando o usuário não entende por que nada muda.
-- Vetor de DoS leve onde alguém submete `claimMany` com 1000 entries todas com `amount = 0` — contrato aceita, gasta gas do caller, não marca nada.
-
-```solidity
-// Padrão recomendado pela UI:
-uint256 preview = distributor.previewClaim(user, round, projectId);
-if (preview == 0) return; // não habilitar botão
-// senão, habilitar claim
-```
-
-Para `claimMany`, filtre pares `(round, projectId)` com `previewClaim > 0` antes de montar os arrays.
+Não há burn, não há espera de rodada: a receita é imediata. Capital antecipado adicional pode vir de uma rodada no [ProjectFunding](../08-contracts-reference/16-ProjectFunding.md) (alvo ≥ `minTarget`, rev-share 1-30%, prazo 1-90 dias, all-or-nothing). Detalhamento em [Fluxo de valor](../03-protocol-overview/03-economic-flows.md).
 
 ## Eventos que você quer monitorar
 
-Do `FeeRouter`:
+Do `FeeRouterV2`:
 
-- `Paid(projectId, user, payer, amount, burned, toTreasury, toApp, recipient)` — a cada pagamento do seu projeto.
+- `PaymentRouted(projectId, payer, amount, feeToTreasury, feeToBuyback, feeToGrants, revShare, toApp)` — a cada pagamento do seu projeto (validação + analytics).
+- `AppRecipientUpdated(projectId, recipient)` — rotação do recipient.
 
-Do `BurnTracker`:
+Do `ProjectFunding` (se você abriu rodada):
 
-- `BurnRecorded(round, projectId, from, amount, newTotalForProject)` — burn do seu projeto em cada rodada.
-- `RoundClosed(round, totalBurn, projectsCount, closedAt, earlyClose)` — para saber quando uma rodada fecha.
+- `RoundOpened` / `Invested` / `RoundFunded` / `RoundFailed` — ciclo da captação.
+- `RevenueNotified(projectId, amount)` — rev-share contabilizado a cada pagamento.
 
-Do `RewardDistributor`:
+> **Legado**: eventos `Paid` (FeeRouter V1), `BurnRecorded`/`RoundClosed` (BurnTracker) e `RoundFinalized`/`Claimed` (RewardDistributor) pertencem ao trilho antigo — só interessam para históricos.
 
-- `RoundFinalized(round, totalEmission, totalBurnAtFinalize, snapshotBlock)` — quando você pode começar a reivindicar.
-- `Claimed(user, round, projectId, amount)` — cada claim feito por stakers do seu projeto.
+## Configurando destino do pagamento
 
-## Configurando destino do rebate
-
-Por default, o rebate vai para `ProjectRegistry.getProject(projectId).owner`. Se você quer direcionar para outro endereço (por exemplo, um contrato de distribuição interna do app, um multisig operacional, etc.):
+Por default, o `toApp` vai para `ProjectRegistry.getProject(projectId).owner`. Se você quer direcionar para outro endereço (por exemplo, um contrato de distribuição interna do app, um multisig operacional, etc.):
 
 ```solidity
 // Chamável pelo owner atual do projeto
-feeRouter.setAppRecipient(projectId, newRecipient);
+feeRouterV2.setAppRecipient(projectId, newRecipient);
 ```
-
-Passar `address(0)` reseta para lookup dinâmico (volta a seguir o owner do Registry).
 
 Esta função é **owner-gated**, não governance-gated — rotação operacional não exige proposta.
 
 ## Cota e limites
 
-- **Sanity cap por rodada**: em produção 10M CREDIT de burn por projeto por rodada. Se seu app explodir em volume em uma rodada, tx que ultrapasse o cap reverte com `SanityCapExceeded`. Use batch scheduling off-chain se esperar volume absurdo (split em múltiplas rodadas).
 - **Projeto precisa estar `Active`**. Se virar `Probation` (punitiva) ou `Removed`, `pay` reverte com `ProjectNotActive`.
+- **Sem sanity cap de volume** no V2 — `grossVolumeOf` apenas acumula. (O cap de burn por rodada era do trilho legado.)
 
 ## Testando
 
@@ -123,21 +124,21 @@ Para testnet Sepolia, a equipe do protocolo fornece endereços após deploy. Sua
 
 ## O que o app **não** precisa fazer
 
-- **Não** chame `BurnTracker.burnAndRecord` diretamente do seu app. O `FeeRouter.pay` faz isso por você. Apenas o `FeeRouter` tem `RECORDER_ROLE` no bootstrap.
-- **Não** chame `CreditToken.burnByRole` diretamente. O caminho oficial de burn é via `FeeRouter`.
-- **Não** precisa se preocupar com o splitting. Ele é feito pelo `FeeRouter` automaticamente.
+- **Não** chame `ProjectFunding.notifyRevenue` — só o FeeRouterV2 tem `REVENUE_NOTIFIER_ROLE`; o rev-share é roteado automaticamente em cada `pay`.
+- **Não** precisa se preocupar com o splitting (fee/rev-share/app). Ele é feito pelo `FeeRouterV2` automaticamente e é auditável no evento.
+- **Não** precisa integrar DEX para o usuário obter CREDIT — aponte para o PSM (`CreditPSM.buy`, 1:1 com USDC, sem taxa).
 
 ## Segurança
 
 Seu app deve:
 
-- Verificar que o `user` na chamada `pay` é quem você espera (não passe `user = msg.sender` cegamente se o fluxo é meta-tx).
-- Confiar no retorno de `pay` — se a tx não reverteu, o pagamento foi processado com sucesso.
-- Tratar `ProjectNotActive` e `SanityCapExceeded` como sinais de erro irrecuperáveis naquela tx.
+- Validar o pagamento pelo evento `PaymentRouted` (conferindo `projectId`, `payer` e `amount`) antes de liberar o serviço — não confie só em callback do frontend.
+- Tratar `ProjectNotActive` como sinal de erro irrecuperável naquela tx.
+- Lembrar que o pagador é `msg.sender` — desenhe o fluxo de wallet do usuário de acordo.
 
 Seu app **não precisa**:
 
-- Guardar CREDIT intermediário — `pay` é atômico.
+- Guardar CREDIT intermediário — `pay` é atômico e o router termina cada tx com saldo 0.
 - Gerenciar allowance infinita — a UX mais limpa é approve por quantia, não infinita, mas depende do seu UX.
 
 ---

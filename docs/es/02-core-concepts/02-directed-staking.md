@@ -1,7 +1,9 @@
 # Directed staking
 
-**Audiencia:** dev o staker que quiere entender cómo se calcula el peso de rewards.
+**Audiencia:** dev o staker que quiere entender cómo se calcula el peso y para qué sirve.
 **Requisitos previos:** [Dual-token](01-dual-token-economy.md).
+
+> **⚠️ Actualización — remodel 2026-07-08.** La mecánica de stake (lock, multiplier, peso, checkpoints) sigue exactamente como se describe abajo. Lo que cambió es el **propósito**: el peso ya no captura emisión de rewards (legado) — hoy el stake es la **llave de inversión**: [`ProjectFunding`](../08-contracts-reference/16-ProjectFunding.md) exige `getWeight(investor, projectId) > 0` para invertir en la ronda del proyecto y para reclamar el rev-share.
 
 ## Qué significa "dirigido"
 

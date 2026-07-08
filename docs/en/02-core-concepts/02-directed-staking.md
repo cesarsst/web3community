@@ -1,7 +1,9 @@
 # Directed staking
 
-**Audience:** dev or staker wanting to understand how reward weight is computed.
+**Audience:** dev or staker wanting to understand what staking GOV does and how weight is computed.
 **Prerequisites:** [Dual-token](01-dual-token-economy.md).
+
+> **Remodel 2026-07-08**: staking GOV **no longer yields CREDIT emission**. In the current model it serves three roles: (1) **curation** — publicly signals which projects you have conviction in; (2) **investment gate** — `invest` and `claim` in [ProjectFunding](../08-contracts-reference/16-ProjectFunding.md) require GOV staked in the project; (3) **governance** (long-term weight). Investor income comes from **rev-share of real revenue**, not emission.
 
 ## What "directed" means
 
@@ -62,7 +64,7 @@ Queries:
 - `getTotalWeightAt(projectId, blockNumber)` — historical.
 - `getGlobalWeight()`, `getGlobalWeightAt(blockNumber)` — global weight.
 
-`RewardDistributor` **always** queries `...At(block)` at the round's `snapshotBlock`, never the current value. That is the anti-flashloan protection analogous to `ERC20Votes`.
+The current consumer of weight is **[ProjectFunding](../08-contracts-reference/16-ProjectFunding.md)**: `invest` and `claim` require `getWeight(investor, projectId) > 0` (skin in the game). The (legacy) `RewardDistributor` queried `...At(block)` at the round's `snapshotBlock`, never the current value — an anti-flashloan protection analogous to `ERC20Votes`, which the checkpoints still provide.
 
 ## Unstake
 
@@ -76,28 +78,34 @@ Initial time-based probation does **not** bypass lock. Punitive probation does *
 
 ## Why directed and not generic
 
-A generic staking ("earn general reward") creates a passive incentive: you stake, wait, collect. The DAO needs someone to **actively select** which projects deserve support — that someone is the staker. It is almost decentralized curation:
+A generic staking ("earn general reward") creates a passive incentive: you stake, wait, collect. The DAO needs someone to **actively select** which projects deserve support — that someone is the staker. It is decentralized curation with skin in the game:
 
 ```
-   Staker picks projects they believe
-   will generate burn (= usage)
+   Staker picks projects they believe in
+   and locks GOV in them (14-365 day lock)
                 |
                 v
-   Weight is tied to that project's success
+   The stake opens the funding door: only those
+   with GOV staked IN the project can invest
+   CREDIT in its round and claim rev-share
+   (ProjectFunding)
                 |
                 v
-   If project generates burn, staker earns reward
-   If not, reward = zero for them
+   If the app sells, the investor receives a %
+   of REAL revenue on every payment
+   If it does not sell, rev-share = zero
 
-   => staker only wins if they picked well
+   => whoever funds is whoever already signaled conviction
 ```
 
-The model punishes bad allocation. Supporting everyone "equally" requires staking in each one individually, which costs gas and immobilizes capital in proportion.
+The model punishes bad allocation: capital (locked GOV + invested CREDIT) is tied to the project's success. Supporting everyone "equally" requires staking in each one individually, which costs gas and immobilizes capital in proportion.
 
-## How weight becomes reward
+## How weight becomes income
 
-See [Rewards distribution](04-rewards-distribution.md). In short: inside a `projectId`, the project's emission slice is divided proportionally to each staker's weight at the round's `snapshotBlock`.
+In the current model, weight **does not generate emission** — it is the **gate**: with `getWeight(you, projectId) > 0` you can invest CREDIT in the project's round and claim rev-share of gross revenue (1–30%, set in the round). Distribution is pro-rata to investment shares (CREDIT invested, 1:1), not to stake weight. See [ProjectFunding](../08-contracts-reference/16-ProjectFunding.md). Important: **unstaking does not forfeit accrued rev-share** — the `claim` is merely held until you stake again (it never expires).
+
+> **Legacy**: in the pre-remodel model, the project's emission slice was divided proportionally to each staker's weight at the round's `snapshotBlock` — see [Rewards distribution (legacy)](04-rewards-distribution.md).
 
 ---
 
-**Next →** [Burn-to-mint](03-burn-to-mint.md)
+**Next →** [Burn-to-mint (legacy)](03-burn-to-mint.md)

@@ -1,5 +1,7 @@
 # RewardDistributor (V1)
 
+> ⚠️ **LEGACY** — superseded by the 2026-07-08 remodel (see [CreditPSM](15-CreditPSM.md), [FeeRouterV2](08b-FeeRouterV2.md) and [ProjectFunding](16-ProjectFunding.md)). Kept deployed for historical compatibility.
+
 **Audience:** stakers checking unclaimed V1 reward previews, auditors, devs integrating reward UIs.
 **Prerequisites:** [Burn-to-mint](../02-core-concepts/03-burn-to-mint.md), [Rewards distribution](../02-core-concepts/04-rewards-distribution.md), [RewardDistributorV2](07b-RewardDistributorV2.md).
 

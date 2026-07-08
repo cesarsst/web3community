@@ -1,5 +1,7 @@
 # LiquidityGauge
 
+> ⚠️ **LEGADO — sustituido por el remodel 2026-07-08.** El bucket LPs (25% de la emisión) que este gauge distribuía dejó de existir — no hay más emisión. La conversión CREDIT ↔ USDC vigente pasa por el [CreditPSM](15-CreditPSM.md) (1:1, sin pool). El contrato sigue on-chain para `unstake`/`harvest` de posiciones y vestings remanentes. Esta página se mantiene como referencia.
+
 **Para quién es:** LPs del par CREDIT/USDC, devs integrando UI de stake LP, auditores.
 **Prerrequisitos:** [Treasury y fees](../02-core-concepts/07-treasury-and-fees.md), [Distribución de rewards](../02-core-concepts/04-rewards-distribution.md).
 

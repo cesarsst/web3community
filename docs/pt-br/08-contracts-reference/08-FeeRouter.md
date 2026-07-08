@@ -1,5 +1,7 @@
 # FeeRouter
 
+> ⚠️ **LEGADO** — substituído pelo remodel 2026-07-08 (ver [FeeRouterV2](08b-FeeRouterV2.md), [CreditPSM](15-CreditPSM.md) e [ProjectFunding](16-ProjectFunding.md)). Mantido deployado por compatibilidade histórica.
+
 **Para quem é:** devs de apps integrando pagamentos, auditores.
 **Pré-requisitos:** [Treasury e fees](../02-core-concepts/07-treasury-and-fees.md).
 

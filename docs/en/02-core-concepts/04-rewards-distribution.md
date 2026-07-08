@@ -1,11 +1,15 @@
 # Rewards distribution
 
-**Audience:** stakers, LPs, app owners and devs who want to understand exactly how a round's pool turns into claims/incentives.
+> ⚠️ **LEGACY — entire page.** Emission-based distribution (the 55/25/15/5 buckets of `RewardDistributorV2`) was **replaced in the 2026-07-08 remodel**. The contracts remain deployed for historical claims, but there is no new emission: with no burn on the payment rail ([FeeRouterV2](../08-contracts-reference/08b-FeeRouterV2.md) burns nothing), the α·burn formula produces no emission.
+>
+> **The bridge to the current model**: investor income is no longer minted CREDIT (inflation) but **rev-share of real revenue** — anyone with GOV staked in a project can invest CREDIT in its round in [ProjectFunding](../08-contracts-reference/16-ProjectFunding.md) (rev-share 1–30% of gross revenue, 1–90 day duration, all-or-nothing) and receives pro-rata on every payment routed through FeeRouterV2. Claims never expire. Start with [Value flow](../03-protocol-overview/03-economic-flows.md) and [Claiming rev-share](../04-for-users/05-claiming-rewards.md).
+
+**Audience:** stakers, LPs, app owners and devs who want to understand exactly how a round's pool turned into claims/incentives in the old model.
 **Prerequisites:** [Directed staking](02-directed-staking.md), [Burn-to-mint](03-burn-to-mint.md).
 
-## Where we are: V1 (legacy) -> V2 (bucket-aware split)
+## Where we were: V1 -> V2 (bucket-aware split)
 
-This page describes the **V2** model (CLP Phase 1.4), in production from April/2026 onwards. The V1 model (pre-pivot) remains operational in claim-only mode during a 4-round migration window — for details see [RewardDistributor (V1)](../08-contracts-reference/07-RewardDistributor.md).
+This page describes the **V2** model (CLP Phase 1.4), in production from April/2026 until the 2026-07-08 remodel. The V1 model (pre-pivot) remains operational in claim-only mode during a 4-round migration window — for details see [RewardDistributor (V1)](../08-contracts-reference/07-RewardDistributor.md).
 
 V2 rewrites round finalisation to **split emission across 4 simultaneous buckets**:
 

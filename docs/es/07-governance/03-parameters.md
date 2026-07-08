@@ -5,6 +5,25 @@
 
 Esta página lista **todos** los parámetros ajustables vía gobernanza, el valor en producción, el bound on-chain y qué función se usa para alterarlo.
 
+> **⚠️ Actualización — remodel 2026-07-08.** Los parámetros de los contratos legados (`RewardDistributor` V1/V2, `FeeRouter` V1, `BurnTracker`, `LiquidityGauge`) listados abajo ya no gobiernan ningún flujo económico nuevo. Los parámetros del núcleo vigente son estos:
+
+### FeeRouterV2 (vigente)
+
+| Función | Ajusta | Bound on-chain | Producción |
+|---|---|---|---|
+| `setFeeBps(newFeeBps)` | Fee del protocolo | `<= FEE_BPS_CAP = 500` (5%, constante — ni la gobernanza lo supera) | `250` (2,5%) |
+| `setFeeSplit({treasuryBps, buybackBps, grantsBps})` | Repartición de la fee | suma `== 10.000` | `(4000, 4000, 2000)` — 40/40/20 |
+| `setRecipients(treasury, buyback, grants)` | Destinos de la fee | ≠ 0 | Treasury (MVP dev: los tres) |
+| `setAppRecipient(projectId, recipient)` | Destino del pago de la app | ≠ 0; **solo el owner del proyecto** (no es gobernanza) | fallback: owner del Registry |
+
+### ProjectFunding (vigente)
+
+| Función | Ajusta | Bound on-chain | Producción |
+|---|---|---|---|
+| `setMinTarget(newMin)` | Alvo mínimo de ronda (anti-spam) | sin bound | `100e18` (100 CREDIT) |
+
+Constantes no ajustables del vigente: `MIN/MAX_REV_SHARE_BPS = 100/3000` (1%–30%), `MIN/MAX_ROUND_DURATION = 1/90 días`, `ACC_PRECISION = 1e18`. El `CreditPSM` **no tiene parámetro alguno** (sin owner, sin setters, sin fee).
+
 ## Contratos y funciones de ajuste
 
 ### GovernanceToken

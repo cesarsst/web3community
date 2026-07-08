@@ -1,6 +1,8 @@
 # Documentación de web3community
 
-Bienvenido a la documentación pública de la DAO **web3community** — una plataforma multi-aplicación con economía de doble token (GOV + CREDIT), staking dirigido por proyecto y un ciclo económico sostenido por el consumo real dentro de las apps del ecosistema.
+Bienvenido a la documentación pública de la DAO **web3community** — una plataforma multi-aplicación con economía de doble token (GOV + CREDIT estable 1:1 USDC), staking dirigido por proyecto y un ciclo económico sostenido por el consumo real dentro de las apps del ecosistema.
+
+> **Remodel 2026-07-08.** El protocolo migró de "burn-to-mint deflacionario" a **riel de pagos + financiamiento por rev-share**: [`CreditPSM`](08-contracts-reference/15-CreditPSM.md) (CREDIT 1:1 USDC), [`FeeRouterV2`](08-contracts-reference/08b-FeeRouterV2.md) (fee 2,5%, split 40/40/20) y [`ProjectFunding`](08-contracts-reference/16-ProjectFunding.md) (rondas all-or-nothing, rev-share 1%–30%). Las páginas del modelo anterior están marcadas con "⚠️ LEGADO".
 
 Esta doc es **código-primero**: todo lo que lees aquí es verificable en los contratos dentro de `contracts/`. Si la doc y el código divergen, gana el código — las divergencias son bugs de la doc, no features.
 
@@ -48,7 +50,7 @@ Ve directo a [`08-contracts-reference/`](08-contracts-reference/). Un archivo po
 | Sección | Contenido |
 |---|---|
 | [01-getting-started](01-getting-started/) | Introducción, modelo mental, glosario |
-| [02-core-concepts](02-core-concepts/) | Doble token, staking dirigido, burn-to-mint, rewards, gobernanza, proyectos, tesorería |
+| [02-core-concepts](02-core-concepts/) | Doble token, staking dirigido, gobernanza, proyectos, tesorería (+ burn-to-mint y rewards, legado) |
 | [03-protocol-overview](03-protocol-overview/) | Arquitectura, flujos de usuario, flujo de valor |
 | [04-for-users](04-for-users/) | Guías paso a paso para usuarios finales |
 | [05-for-developers](05-for-developers/) | Integración, direcciones, entorno local |
@@ -67,7 +69,8 @@ Ve directo a [`08-contracts-reference/`](08-contracts-reference/). Un archivo po
 
 ## Estado del protocolo
 
-- 12 contratos en producción (ver [08-contracts-reference](08-contracts-reference/)).
+- **Remodel 2026-07-08 activo**: `CreditPSM`, `FeeRouterV2` y `ProjectFunding` son el núcleo económico vigente; `FeeRouter` V1, `BurnTracker`, `RewardDistributor` V1/V2 y `LiquidityGauge` quedan como legado (claims históricos).
+- 18 contratos deployables (ver [08-contracts-reference](08-contracts-reference/)).
 - Solidity 0.8.24 con `viaIR` activado.
 - OpenZeppelin Contracts 5.0.2 pinado.
 - Listo para deploy en Sepolia post-auditoría externa.

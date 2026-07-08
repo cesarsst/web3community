@@ -1,5 +1,7 @@
 # LiquidityGauge
 
+> ⚠️ **LEGACY** — superseded by the 2026-07-08 remodel (see [CreditPSM](15-CreditPSM.md), [FeeRouterV2](08b-FeeRouterV2.md) and [ProjectFunding](16-ProjectFunding.md)). Kept deployed for historical compatibility.
+
 **Audience:** LPs of the CREDIT/USDC pair, devs integrating LP-stake UI, auditors.
 **Prerequisites:** [Treasury and fees](../02-core-concepts/07-treasury-and-fees.md), [Rewards distribution](../02-core-concepts/04-rewards-distribution.md).
 

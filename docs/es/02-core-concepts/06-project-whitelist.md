@@ -5,9 +5,9 @@
 
 ## Por qué whitelist
 
-El protocolo comparte un motor económico: uso en las apps listadas genera burn, que genera emisión, que va a los stakers. Si **cualquiera** pudiera incluirse como proyecto y accionar `burnAndRecord`, el modelo colapsaría — un atacante quema volumen de CREDIT que él mismo acuñó en otra app y captura rewards.
+El protocolo comparte un motor económico: las apps listadas procesan pagos por el `FeeRouterV2`, captan capital de inversores vía `ProjectFunding` y exhiben su facturación on-chain (`grossVolumeOf`). Si **cualquiera** pudiera incluirse como proyecto, el modelo colapsaría — apps fantasma abrirían rondas de captación sin producto real detrás, y el listado dejaría de ser señal.
 
-La whitelist coloca una barrera económica (colateral en GOV) y política (pasar por propuesta) antes de que una nueva app reciba `RECORDER_ROLE`. Es la primera línea de defensa contra sybil de apps.
+La whitelist coloca una barrera económica (colateral en GOV) y política (pasar por propuesta) antes de que una nueva app pueda recibir pagos y abrir rondas. Es la primera línea de defensa contra sybil de apps. *(En el modelo legado, la barrera protegía además el `RECORDER_ROLE` del burn — ver páginas legadas.)*
 
 ## Los 4 estados de un proyecto
 

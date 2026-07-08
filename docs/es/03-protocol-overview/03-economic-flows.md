@@ -1,167 +1,105 @@
 # Flujo de valor
 
 **Para quién es:** lector que quiere entender por dónde el valor real entra, transita y sale del protocolo.
-**Prerrequisitos:** [Burn-to-mint](../02-core-concepts/03-burn-to-mint.md), [Treasury y fees](../02-core-concepts/07-treasury-and-fees.md).
+**Prerrequisitos:** [Arquitectura](01-architecture.md), [Flujos de usuario](02-user-flows.md).
+
+> **Remodel 2026-07-08.** Esta página describe el modelo vigente: riel de pagos + financiamiento por rev-share. El flujo del modelo anterior (burn 70/20/10 + emisión) está al final, como legado.
 
 ## De dónde viene el valor real
 
-La única fuente de **valor externo** en el sistema es el usuario final que paga por CREDIT. Paga porque necesita usar las apps. Si nadie quiere usar las apps, nadie compra CREDIT, y el sistema muere — esa es la invariante dura.
+La única fuente de **valor externo** en el sistema es el usuario final que deposita USDC en el `CreditPSM` para obtener CREDIT y pagar por servicios de las apps. Si nadie quiere usar las apps, nadie compra CREDIT, y el sistema muere — esa es la invariante dura, igual que antes del remodel.
 
-La liquidez del par CREDIT/USDC se construye por dos vías complementarias en el Credit Liquidity Protocol (CLP):
-
-1. **POL** — Protocol-Owned Liquidity. El propio Treasury custodia una posición NFT en el pool. Construida por (a) seed inicial del genesis CREDIT + USDC del Treasury, (b) refill vía bucket bonders (CREDIT) casado con USDC de bootstrap externo o de fees de la posición POL (`collectPOLFees`) — la porción `treasuryBps` está denominada en **CREDIT**, no USDC.
-2. **LPs externos** — usuarios que provisionan liquidez en el pool y stakean el NFT en el `LiquidityGauge`. Reciben incentives en CREDIT (bucket LPs del V2, default 25% de la emisión).
-
-El camino típico de un pago:
+Lo que cambió es el **riel**: no hay pool, no hay precio flotante, no hay burn. CREDIT es saldo prepago estable:
 
 ```
    [ Usuario Charlie ]
         |
-        |  1. Compra 1000 CREDIT en la DEX (POL + LPs externos proveen liquidez)
-        |
+        |  1. psm.buy(1000 USDC)  ->  1000 CREDIT (1:1, sin fee)
+        |     (el USDC queda RETENIDO en el PSM como respaldo integral)
         v
-   [ Wallet de Charlie tiene 1000 CREDIT ]
+   [ Wallet de Charlie: 1000 CREDIT ]
         |
-        |  2. Usa el Chat App. La app cobra 1000 CREDIT por el servicio.
-        |     Charlie firma approve(feeRouter, 1000) + feeRouter.pay(...)
-        |
+        |  2. Usa el ChatApp (projectId 42, ronda financiada al 8%).
+        |     approve + feeRouterV2.pay(42, 1000)
         v
-   [ FeeRouter ]
+   [ FeeRouterV2 ]
         |
-        | split por defecto 70/20/10 (Fase 0, horneado en los parametros de deploy)
+        |  fee del protocolo: 2,5% = 25 CREDIT
         |
-        +-------> burnBps (70%) quemados (via BurnTracker)
-        |         - CREDIT.totalSupply disminuye
-        |         - burn registrado en el BurnTracker para el Chat App
+        +---> 10,0 CREDIT -> treasuryRecipient   (40% de la fee = 1,0% del pago)
+        +---> 10,0 CREDIT -> buybackRecipient    (40% de la fee — recompra de GOV)
+        +--->  5,0 CREDIT -> grantsRecipient     (20% de la fee — fomento de apps)
         |
-        +-------> treasuryBps (20%) -> Treasury (en CREDIT; engrosa el saldo libre)
+        |  rev-share del proyecto: 8% = 80 CREDIT
+        +---> 80 CREDIT -> ProjectFunding (notifyRevenue: pro-rata a inversores)
         |
-        +-------> rebateBps (10%) -> app owner (rebate directo)
+        |  resto: 895 CREDIT (~89,5%)
+        +---> directo al appRecipient, EN LA MISMA TX
+              (sin ronda financiada seria 975 = 97,5%)
 ```
 
-**El valor real entró en el protocolo en la etapa 1.** Todas las etapas siguientes redistribuyen ese valor.
+**El valor real entró en el protocolo en la etapa 1.** Todas las etapas siguientes redistribuyen ese valor — nada se acuña, nada se quema, el supply de CREDIT no cambia con los pagos.
 
 ## Los 5 agentes y por qué cada uno está en el juego
 
-Con el pivote CLP, el **LP** entra como agente formal — antes era sólo externo, ahora recibe bucket dedicado.
-
 ```
-   +----------+    +-------------+    +----------+    +----------+    +------------+
-   | Usuario  |    |    App      |    |  Staker  |    |    LP    |    |   Holder   |
-   | final    |    | (ChatApp)   |    |  (Alice) |    |   (Bob)  |    |  sin stake |
-   +----+-----+    +------+------+    +----+-----+    +----+-----+    +-----+------+
-        |                 |                |               |                |
-   paga en CREDIT    recibe rebate    lockea GOV en   LP en el pool    poder de voto
-   usa la app        + bucket apps    projectId       CREDIT/USDC      en el Governor
-                     (push directo    gana bucket     + stakea NFT
-                      retrospectivo   stakers         en LiquidityGauge
-                      por burn)       (claim)         gana bucket LPs
-                                                      (vesting 14d)
-        |                 |                |               |                |
-   extrae valor      captura caja     gana CREDIT     gana CREDIT      mantiene derecho
-   de un servicio    operacional +    recien-emitido  recien-emitido   sobre cambios
-   (fuera del        emision push     en claim        en harvest       de parametros
-   protocolo)        (apps bucket)    (stakers)       (LPs bucket)
+   +----------+   +-------------+   +-----------+   +-----------+   +------------+
+   | Usuario  |   |    App      |   | Inversor  |   |  Holder   |   |  Treasury  |
+   | final    |   | (ChatApp)   |   | (Alice)   |   |  de GOV   |   |  (DAO)     |
+   +----+-----+   +------+------+   +-----+-----+   +-----+-----+   +-----+------+
+        |                |                |               |               |
+   compra CREDIT    recibe ~97,5%    stakea GOV en    vota en el     recibe 40% de
+   1:1 en el PSM    de cada pago     el proyecto +    Governor       la fee (= 1%
+   paga en apps     (~89,5% con      invierte CREDIT                 del GMV) para
+                    rev-share 8%)    en la ronda      expuesto al    opex
+        |           + capital        (all-or-nothing) buyback             |
+        |           anticipado si         |           continuo (40%      |
+        |           abre ronda            |           de la fee)         |
+        |                |                |               |               |
+   extrae valor     caja inmediata   recibe % de la   captura valor  financia grants
+   de un servicio   + financiacion   receita REAL     del volumen    y operacion via
+   (fuera del       sin deuda        en cada pago     de pagos       propuestas
+   protocolo)       bancaria         (claim s/expira)
 ```
 
-Notá: **no hay yield "del aire"**. El CREDIT minteado para Alice (staker), Bob (LP) y ChatApp (apps bucket) existe porque Charlie quemó CREDIT. Ningún actor recibe valor que no provino de algún actor aguas arriba.
+Nota: **no hay yield "del aire"**. Cada CREDIT que un inversor reclama salió de un pago real de un usuario. Ningún actor recibe valor que no provino de algún actor aguas arriba.
 
-## Las 4 fuentes de ingreso de una app
+## La economía de una app
 
-El split por defecto de 10% directo parece poco. Pero la cuenta cierra — especialmente si la app también stakea en su propio proyecto — por vectores simultáneos:
+Con fee de 2,5% y sin ronda financiada, la app retiene **97,5%** de cada pago — comparable a un procesador de pagos (Stripe cobra ~3,8%) y muy lejos de las app stores (15–30%). Si la app abrió ronda con rev-share de 8%, retiene **89,5%** y a cambio recibió capital anticipado.
 
-### (A) Rebate directo
+### El costo del capital, en números
 
-10% de cada pago (`rebateBps = 1000`). Instantáneo, en CREDIT. Es el flujo de caja operacional.
+Ejemplo ilustrativo (los valores dependen del GMV real):
 
-### (B) Push del bucket apps
+- ChatApp abre ronda: alvo **10.000 CREDIT**, rev-share **8%**, plazo 30 días. La ronda se completa → ChatApp recibe 10.000 CREDIT íntegros.
+- ChatApp factura **2.000 CREDIT/mes** de GMV. El rev-share descuenta 2.000 × 8% = **160 CREDIT/mes** para los inversores.
+- Costo anualizado del capital: 160 × 12 / 10.000 ≈ **19% a.a.** — comparable a revenue-based financing tradicional, sin deuda, sin garantía personal, sin diluir equity.
+- Para los inversores, esos mismos números son el rendimiento bruto: ~19% a.a. **mientras el GMV se sostenga** — si la facturación cae, el retorno cae con ella; si crece, crece junto.
 
-15% de la emisión de cada ronda (`bucketBps[apps] = 1500` en el `RewardDistributorV2`) es minteado **directamente** al `ownerRecipient` de cada proyecto en el `finalizeRound`, proporcional al burn que el proyecto generó en la ronda anterior. No exige stake ni claim — es push retrospectivo por burn.
+El rev-share no tiene fecha de fin en el MVP: es una fatia perpetua de la receita bruta (la V2 del contrato podrá introducir caps/vencimientos — decisión de gobernanza futura).
 
-### (C) Emisión vía stake en el propio `projectId`
+## De dónde viene el valor del GOV
 
-Si la app adquirió GOV (por ejemplo, comprando en DEX o recibiendo vía propuesta de distribución) y stakeó en `projectId = propio`, captura parte de la share de rewards de ese proyecto en la ronda siguiente.
+GOV es el único activo del sistema con tesis de apreciación, por tres mecanismos:
 
-¿Cómo?
-
-1. Cuando Charlie paga, 70% se quema y va a `burnByRoundProject[R][projectId=app]`.
-2. En la ronda R+1, la emisión es proporcional a ese burn — y el **bucket stakers (55% de la emisión)** se reparte entre proyectos por el burn.
-3. Si la app tiene peso de staking dentro del propio `projectId`, recibe parte de esa share.
-
-**Ejemplo numérico** (ronda hipotética):
-
-- ChatApp mueve 600.000 CREDIT en pagos en la ronda R-1.
-- (A) Rebate directo: 10% × 600k = **60.000 CREDIT** instantáneo.
-- Burn de ChatApp: 70% × 600k = 420.000 CREDIT en `burnByRoundProject[R-1][42]`. Supongamos burn total de la ronda = 950.000 (otras apps suman el resto) → emisión de la ronda R = 0,95 × 950k = 902.500 CREDIT.
-- (B) Bucket apps: 15% × 902.500 = 135.375; push de ChatApp = `135.375 × 420k/950k` = **59.850 CREDIT** (directo en el `finalizeRound`, sin stake).
-- (C) Bucket stakers: 55% × 902.500 = 496.375; `projectShare_ChatApp = 496.375 × 420k/950k = 219.450 CREDIT`. Si ChatApp stakeó 50k GOV con lock de 365d (multiplier 4x, peso 200k), y el peso total en el proyecto es 400k, captura 50% × 219.450 = **109.725 CREDIT**.
-- Suma (A) + (B) + (C) = **229.575 CREDIT** de un volumen bruto de 600k = **~38,3%** efectivo.
-
-El split **nominal** cuenta una historia engañosa. El split **económico efectivo** para una app que también stake depende de cuánto stake y de la competencia de otros stakers en el mismo `projectId`.
-
-### (D) Apreciación del CREDIT retenido
-
-Como `alpha < 1`, el supply de CREDIT cae si el uso se mantiene constante. El CREDIT que la app recibió (rebate + rewards) y aún no vendió tiende a apreciarse en términos reales — siempre que la demanda por CREDIT (generada por el uso de las apps) se sostenga.
-
-**Trampa**: si la app vende todo el CREDIT inmediatamente, renuncia a (C). Si retiene, queda expuesta a volatilidad. Es decisión de la app.
-
-## Cuándo (C) no cierra la cuenta
-
-Apps sin capital para adquirir GOV no capturan (C) — les quedan (A) y (B). Para esos casos:
-
-- Si el rebate de 10% + push del bucket apps aún no cierran la cuenta, la DAO puede aprobar `setProjectSplit(projectId, custom)` vía propuesta. Por ejemplo: `8000/0/2000` (20% rebate) para apps estratégicas que no logran stakear.
-- Alternativamente, se puede financiar adquisición inicial de GOV vía `Treasury` (propuesta de transferencia directa).
-
-La arquitectura permite ajuste por proyecto exactamente para ese tipo de acomodación.
-
-## Flujo por ciclo de ronda
-
-```
-   Ronda R-1 (la pasada)                                     Ronda R (ahora)
-   +------------------------------------+                   +------------------------------------+
-   | Charlie + 10k otros usuarios        |                  | Alice puede claim rewards de R-1   |
-   | pagaron en CREDIT en las apps       |                  | en funcion de:                     |
-   |                                     |                  |   - burn total de R-1              |
-   | BurnTracker registro:               |  closeRound()    |   - burn de su proyecto en R-1     |
-   |   totalBurnByRound[R-1] = 950_000   |  --------->      |   - peso del stake de ella         |
-   |   burnByRoundProject[R-1][42] = 600_000                |                                    |
-   +------------------------------------+                   +------------------------------------+
-                                                                     |
-                                                               finalizeRound(R-1)
-                                                                     |
-                                                                     v
-                                                            emision = min(
-                                                                max(0.95 * 950_000, floor(R-1)),
-                                                                capMax
-                                                            ) = 902_500 CREDIT (en el ejemplo)
-
-                                                            roundData[R-1].totalEmission = 902_500
-                                                            roundData[R-1].snapshotBlock = block.number
-                                                            bucketEmissionByRound[R-1][stakers] = 55% * 902_500 = 496_375
-
-                                                            Stakers pueden claim (base = bucket stakers, NO emision total):
-                                                              project_share(42) = 496_375 * 600k/950k = 313_500
-                                                              alice_claim = 313_500 * aliceW/projectW
-```
+1. **Buyback continuo**: 40% de la fee de cada pago (= 1% del GMV) va al `buybackRecipient` para recompra de GOV. Volumen de pagos ↑ → presión de compra estructural ↑.
+2. **Gate de inversión**: para invertir en cualquier ronda (y para reclamar el rev-share) es obligatorio tener GOV stakeado en el proyecto. Más rondas atractivas → más demanda de GOV para stakear.
+3. **Gobernanza**: GOV vota los parámetros (fee dentro del techo de 5%, split, minTarget, whitelist).
 
 ## Rotación de CREDIT
 
-CREDIT entra al supply por **dos** vías solamente:
+CREDIT entra al supply por **una** vía operacional:
 
-1. `CreditToken.mintGenesis` — one-shot, 10M al Treasury, en el deploy.
-2. `CreditToken.mint` — por los distribuidores con `MINTER_ROLE`: V1 en los claims (ventana de migración) y `RewardDistributorV2` en los claims lazy del bucket stakers + en los pushes del `finalizeRound` (apps, LPs/gauge, bonders/Treasury).
+1. `CreditPSM.buy` — mint 1:1 contra USDC depositado (respaldo retenido; `mintedOutstanding` lo contabiliza).
+
+*(Vías legadas: el genesis one-shot de 10M al Treasury y los mints de los RewardDistributor pre-remodel. Ese CREDIT circula pero no tiene respaldo en el PSM — las redenciones están limitadas al USDC efectivamente depositado.)*
 
 Y sale por **una** vía:
 
-- `CreditToken.burn` / `burnFrom` / `burnByRole` — el camino principal es vía `FeeRouter.pay` -> `BurnTracker.burnAndRecord` -> `CreditToken.burnByRole`.
+- `CreditPSM.sell` — quema el CREDIT devuelto y libera USDC 1:1.
 
-Ese flujo cerrado permite análisis simple:
-
-```
-   totalSupply_R = totalSupply_{R-1} + (nuevas emisiones en R) - (burns en R)
-```
-
-Si `nuevas emisiones <= burns`, el supply cae. Con `alpha = 0.95` y uso estable, esa es la dinámica esperada.
+El supply de CREDIT ya no es una curva a analizar: **sigue la demanda de saldos de pago**. Crece cuando entra dinero para gastar, cae cuando los usuarios redimen. El precio no flota: 1 CREDIT = 1 USDC por construcción, con `backing()`/`backingNormalized()` verificables on-chain contra `mintedOutstanding`.
 
 ## Rotación de GOV
 
@@ -169,59 +107,46 @@ GOV entra al supply de forma permanente hasta alcanzar el cap:
 
 1. Genesis: 0 en el deploy.
 2. `mint`: sólo por el owner (Timelock en producción) hasta alcanzar `CAP_SUPPLY = 100M`.
-3. Tras alcanzar el cap, `mint` reverte con `CapExceeded`.
+3. Tras alcanzar el cap, `mint` revierte con `CapExceeded`.
 
 No hay burn de GOV en el código.
 
 Circulación:
 
 - **Holder libre** -> compra/venta en DEX.
-- **Holder -> Staking**: `stake` lockea GOV en el contrato; `unstake` libera.
+- **Holder -> Staking**: `stake` lockea GOV en el contrato (habilita invertir en la ronda del proyecto); `unstake` libera.
 - **Holder -> Registry**: `registerProject` lockea GOV como colateral; `removeProject` libera (al owner o al treasury).
 - **Holder -> TeamVesting (via Timelock)**: contratos de vesting que liberan gradualmente.
 - **Holder -> Governor**: `delegate` no mueve GOV, sólo confiere poder de voto.
+- **Mercado -> buybackRecipient**: la recompra financiada por el 40% de la fee retira GOV del mercado de forma continua.
 
-## El rol del Treasury en este flujo (post-CLP)
+## El rol del Treasury en este flujo
 
-El Treasury es el **amortiguador** del sistema. Él:
+El Treasury es el **presupuesto operacional** de la DAO:
 
-- Recibe el genesis de CREDIT (10M).
-- Puede recibir `treasuryBps` de los pagos (recomendación CLP: subir de 0% a 20%).
-- Recibe colateral de proyectos removidos con slash.
-- **Recibe el bucket bonders** del `RewardDistributorV2` (5% de la emisión por ronda — ledger `polRefillBucket`).
-- **Puede recibir el bucket LPs** cuando gauge paused (ledger `pendingGaugeRewards`).
+- Recibe el 40% de la fee del protocolo — con fee de 2,5%, equivale a **1% del GMV** — para opex.
+- Recibe colateral de proyectos removidos con slash y donaciones/activos diversos.
+- Distribuye vía propuestas: grants (coordinado con el 20% de la fee), subsidios (`UserSubsidy`), vesting (`TeamVesting`), operación off-chain.
 
-Y distribuye, vía propuestas:
+**Separación crítica**: el respaldo USDC del PSM **no es del Treasury**. Está segregado en el `CreditPSM`, sin función de retiro — ni siquiera una propuesta de gobernanza puede gastarlo. Si la DAO quiere gastar, gasta de la fee. Nunca del respaldo.
 
-- **Ejecuta FFP buyback** — swap USDC -> CREDIT + quema inmediata, defendiendo el floor.
-- **Provisiona POL** — `addPOL` / `addPOLFromRefill`.
-- Subsidios para usuarios nuevos (`UserSubsidy`).
-- Vesting para el equipo (`TeamVesting`).
-- Pago de rebates batch para apps.
-- Financiamiento de operaciones off-chain.
+## Invariantes económicas de salud
 
-El Treasury **no** se distribuye automáticamente — todo sale por propuesta. Pero a partir del CLP, el Treasury ejecuta tres loops económicos (en lugar de sólo custodiar):
+Tres señales simples, todas on-chain:
 
-1. **Loop FFP**: `recordDailyPrice` (keeper) -> MA90 crece -> spot < floor por 24h -> gobernanza propone `executeBuyback` -> swap USDC->CREDIT -> quema -> `totalSupply` cae -> precio presionado para arriba.
-2. **Loop POL refill**: `treasuryBps` trae USDC -> bucket bonders trae CREDIT -> gobernanza propone `addPOLFromRefill` -> liquidez en el pool aumenta -> menor slippage para holders.
-3. **Loop fallback gauge**: `RewardDistributorV2` detecta gauge paused -> mint al Treasury -> gobernanza despausa gauge -> `flushPendingGaugeRewards` envía CREDIT acumulado de vuelta como incentive.
-
-## Invariante económica de salud
-
-Una señal simple de salud del protocolo: **el burn acumulado debe crecer más rápido que la emisión acumulada**, a lo largo de las rondas. Como `alpha < 1` garantiza `emisión_R ≈ 0.95 × burn_{R-1}`, esa desigualdad se satisface automáticamente mientras:
-
-```
-burn_R >= burn_{R-1}
-```
-
-Es decir: el protocolo está saludable mientras el uso real se mantiene o crece. Si burn cae, emisión cae junto, pero la razón `emisión/burn` permanece constante en `alpha`. El síntoma terminal es burn absoluto yendo a cero por muchas rondas consecutivas.
-
-Post-CLP, dos señales adicionales:
-
-- **MA90 del CREDIT creciente** — indica precio saludable; el floor relativo (`0.5 × MA90`) acompaña. Si spot cae debajo del floor por 24h, se propone FFP buyback.
-- **POL TVL creciente** — Treasury acumula liquidez propia. Mayor POL = menor slippage para holders y menor dependencia de LPs externos para salir.
+1. **GMV creciente** — `feeRouterV2.grossVolumeOf[projectId]` agregado entre proyectos. Es el proxy directo de uso real (sustituye al "burn por ronda" del modelo legado). GMV plano o cayendo por semanas = alerta.
+2. **Respaldo íntegro del PSM** — `psm.backingNormalized() >= psm.mintedOutstanding()`. Garantizado por construcción; cualquier divergencia sería evidencia de bug crítico.
+3. **Receita distribuida a inversores creciente** — `funding.totalRevenueDistributed[projectId]`. Mide si el rev-share está pagando de verdad; es el "yield real" agregado del ecosistema.
 
 Métricas completas en [Métricas que importan](../06-for-investors/04-metrics-that-matter.md).
+
+## El modelo anterior (legado) — y por qué cambió
+
+Hasta 2026-07-08, el camino de un pago era: `FeeRouter.pay` → **70% quemado** (vía `BurnTracker`), 20% al Treasury, 10% a la app. La emisión de la ronda siguiente era `min(max(0.95 × burn, floor), capMax)`, repartida en buckets 55/25/15/5 (stakers/LPs/apps/bonders) por el `RewardDistributorV2`. El staker vivía de emisión; la app, del rebate + stake en el propio proyecto.
+
+**El problema**: para la app, la tasa efectiva era ~80% del pago (incluso contando el bucket apps y el stake, la cuenta solo cerraba con supuestos agresivos). Contra Stripe (~3,8%) o cualquier PSP, no había caso de negocio: **la estrategia dominante era hacer bypass del router** — cobrar fuera y usar el protocolo solo como vitrina. El parecer `audit/economist/2026-07-08-feerouter-bypass.md` formalizó el análisis y motivó el remodel.
+
+El modelo vigente invierte la lógica: fee competitiva de procesador de pagos (2,5%), la app retiene casi todo, y el retorno del inversor sale de receita real — no de emisión que dependía de un burn que las apps tenían incentivo de evitar.
 
 ---
 

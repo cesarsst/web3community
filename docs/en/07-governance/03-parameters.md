@@ -3,7 +3,9 @@
 **Audience:** anyone who wants to know exactly what the DAO can change and which ranges are allowed.
 **Prerequisites:** [Proposal lifecycle](01-proposal-lifecycle.md).
 
-This page lists **all** parameters adjustable via governance across the 15 production contracts, the production value, the on-chain bound, and which function is used to change.
+This page lists **all** parameters adjustable via governance across the production contracts, the production value, the on-chain bound, and which function is used to change.
+
+> **Remodel 2026-07-08**: the current economic-rail parameters are those of **FeeRouterV2** (`feeBps`, `feeSplit`, recipients) and **ProjectFunding** (`minTarget`). Old-rail parameters (BurnTracker, RewardDistributor V1/V2, FeeRouter V1, Treasury FFP/POL) remain adjustable on-chain but are marked **legacy**.
 
 ## Contracts and adjustment functions
 
@@ -30,6 +32,30 @@ Admin in production = `CommunityTimelock`. Proposals:
 
 `mintGenesis` is not callable after first execution (flag `genesisMinted`).
 
+### CreditPSM
+
+**No adjustable parameters** — the PSM is immutable by design: no owner, no roles of its own, no setters. 1:1 conversion, no fee, backing with no withdrawal function. To change anything, you deploy another PSM and governance migrates the mint/burn roles on the CreditToken.
+
+### FeeRouterV2
+
+Current payment rail. Economic setters require `GOVERNANCE_ROLE` (= Timelock):
+
+| Function | What it does | On-chain bound | Default value |
+|---|---|---|---|
+| `setFeeBps(newFeeBps)` | Adjusts the protocol fee | `<= FEE_BPS_CAP = 500` (5%), else `FeeAboveCap` | `250` (2.5%) |
+| `setFeeSplit(newSplit)` | Splits the fee across the 3 destinations | sum `== 10,000` bps, else `SplitDoesNotSumTo10000` | `(4000, 4000, 2000)` — 40% treasury / 40% GOV buyback / 20% grants |
+| `setRecipients(treasury_, buyback_, grants_)` | Fee destinations | `!= address(0)`, else `ZeroAddress` | dev MVP: all three = Treasury |
+
+`setAppRecipient(id, recipient)` is owner-gated (not governance) — operational rotation of the app recipient.
+
+### ProjectFunding
+
+| Function | What it does | On-chain bound | Default value |
+|---|---|---|---|
+| `setMinTarget(newMin)` | Minimum round target (anti-spam) | — | `100e18` (100 CREDIT) |
+
+The remaining round parameters are **immutable constants**: rev-share `[100, 3000]` bps (1–30%), duration `[1, 90]` days — see the immutables table below.
+
 ### ProjectRegistry
 
 | Function | What it does | On-chain bound | Production value |
@@ -44,7 +70,7 @@ Admin in production = `CommunityTimelock`. Proposals:
 
 ### Treasury
 
-Fund movement (all `GOVERNANCE_ROLE` = Timelock):
+Fund movement (all `GOVERNANCE_ROLE` = Timelock). The FFP and POL blocks below are **legacy** (pre-remodel CLP pivot):
 
 | Function | What it does | On-chain bound |
 |---|---|---|
@@ -85,7 +111,7 @@ POL and reserved balances (Phases 1.2/1.3):
 
 No adjustable parameters. `MIN_LOCK`, `MAX_LOCK`, `MULTIPLIER_PRECISION`, `MAX_MULTIPLIER` are `constant`.
 
-### BurnTracker
+### BurnTracker (legacy)
 
 | Function | What it does | On-chain bound | Production value |
 |---|---|---|---|
@@ -95,7 +121,7 @@ No adjustable parameters. `MIN_LOCK`, `MAX_LOCK`, `MULTIPLIER_PRECISION`, `MAX_M
 | `grantRole(RECORDER_ROLE, app)` | Authorizes app to call `burnAndRecord` | — | — |
 | `revokeRole(RECORDER_ROLE, app)` | Deauthorizes | — | — |
 
-### RewardDistributor
+### RewardDistributor (legacy)
 
 | Function | What it does | On-chain bound | Production value |
 |---|---|---|---|
@@ -106,7 +132,7 @@ No adjustable parameters. `MIN_LOCK`, `MAX_LOCK`, `MULTIPLIER_PRECISION`, `MAX_M
 
 `floorSchedule` is **immutable** after deploy.
 
-### RewardDistributorV2 (optional deploy — Phase F / CLP pivot)
+### RewardDistributorV2 (legacy — optional deploy, Phase F / CLP pivot)
 
 Inherits `setAlpha`/`setCapMax`/`finalizeRound` with the same bounds as V1, and adds the 4-bucket emission split:
 
@@ -128,7 +154,7 @@ Inherits `setAlpha`/`setCapMax`/`finalizeRound` with the same bounds as V1, and 
 
 **No adjustable parameters** — immutable adapter by design (no owner, no setters, no mutable storage): pool, tokens, Chainlink feed, staleness (6h) and sanity band (`[9900, 10100]` bps) are fixed in the constructor. To change anything, you deploy another adapter and governance points at it via `Treasury.setPriceOracle(oracle)`.
 
-### FeeRouter
+### FeeRouter V1 (legacy)
 
 | Function | What it does | On-chain bound | Production value |
 |---|---|---|---|
@@ -201,6 +227,10 @@ The DAO **cannot** change:
 | `PROBATION_PENALTY_DENOM` | `RewardDistributor` | 4 (25%) |
 | `floorSchedule` (values) | `RewardDistributor` | written at deploy |
 | `_BPS_DENOMINATOR` | `FeeRouter` | 10,000 |
+| `FEE_BPS_CAP` | `FeeRouterV2` | 500 (5%) — hard fee cap; not even the DAO can exceed it |
+| `MIN_REV_SHARE_BPS`, `MAX_REV_SHARE_BPS` | `ProjectFunding` | 100 (1%), 3000 (30%) |
+| `MIN_ROUND_DURATION`, `MAX_ROUND_DURATION` | `ProjectFunding` | 1 day, 90 days |
+| 1:1 conversion, no fee; backing with no withdrawal | `CreditPSM` | immutable — no owner, no setters |
 | 75% supermajority rule (`removePOL` / role management on Treasury/Timelock) | `CommunityGovernor` | `forVotes >= 3 × againstVotes`; `TREASURY` is `immutable` |
 | V2 bucket bounds | `RewardDistributorV2` | `MIN_BUCKET_STAKERS_BPS=3000`, `MIN_BUCKET_LPS_BPS=500`, `MAX_BUCKET_APPS_BPS=2500`, `MAX_BUCKET_BONDERS_BPS=2000` |
 | Entire oracle configuration | `CreditPriceOracle` | pool/tokens/feed/staleness 6h/band `[9900, 10100]` — all in the constructor |
@@ -237,7 +267,9 @@ Parameter changes take effect **at the execution block** and affect only future 
 - `setCapMax` ditto.
 - `setRoundDuration` affects future rounds (already-open rounds are not truncated).
 - `setMaxBurnPerRoundPerProject` affects gates on new `burnAndRecord` — past accumulations remain.
-- `setDefaultSplit` / `setProjectSplit` affect future `pay`s.
+- `setFeeBps` / `setFeeSplit` / `setRecipients` (FeeRouterV2) affect future `pay`s; already-routed payments are immutable.
+- `setMinTarget` (ProjectFunding) affects only **new** rounds; open rounds keep their original target.
+- `setDefaultSplit` / `setProjectSplit` (FeeRouter V1, legacy) affect future `pay`s.
 - `setMinCollateral` / `setProbationDuration` affect **new** registrations; existing ones are not grandfather-altered.
 
 ## Observability
@@ -253,7 +285,15 @@ event CapMaxUpdated(uint256 oldCap, uint256 newCap);
 event RoundDurationUpdated(uint64 oldDuration, uint64 newDuration);
 event MaxBurnPerRoundPerProjectUpdated(uint256 oldMax, uint256 newMax);
 
-# FeeRouter
+# FeeRouterV2
+event FeeUpdated(uint16 previousBps, uint16 currentBps);
+event FeeSplitUpdated(uint16 treasuryBps, uint16 buybackBps, uint16 grantsBps);
+event RecipientsUpdated(address treasury, address buyback, address grants);
+
+# ProjectFunding
+event MinTargetUpdated(uint256 previous, uint256 current);
+
+# FeeRouter V1 (legacy)
 event DefaultSplitUpdated(Split oldSplit, Split newSplit);
 event ProjectSplitUpdated(uint256 indexed projectId, Split newSplit);
 event ProjectSplitCleared(uint256 indexed projectId);

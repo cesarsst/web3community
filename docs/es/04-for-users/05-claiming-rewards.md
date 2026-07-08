@@ -1,6 +1,8 @@
 # Reclamar rewards
 
-**Audiencia:** staker esperando retirar el CREDIT que generó.
+> ⚠️ **LEGADO — sustituido por el remodel 2026-07-08.** Esta página aplica **solo a rewards de rondas pre-remodel** (RewardDistributor V1/V2), que siguen retirables sin plazo. En el modelo vigente no hay emisión de rewards: el retorno del inversor es el rev-share de [`ProjectFunding.claim`](../08-contracts-reference/16-ProjectFunding.md) — ver [Flujos de usuario](../03-protocol-overview/02-user-flows.md), Flujo 5.
+
+**Audiencia:** staker esperando retirar el CREDIT que generó en rondas pre-remodel.
 **Requisitos previos:** [Staking en proyectos](03-staking-in-projects.md), [Rewards distribution](../02-core-concepts/04-rewards-distribution.md).
 
 ## Lo que tiene que haber pasado antes

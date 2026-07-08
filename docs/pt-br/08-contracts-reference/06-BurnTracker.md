@@ -1,5 +1,7 @@
 # BurnTracker
 
+> ⚠️ **LEGADO** — substituído pelo remodel 2026-07-08 (ver [CreditPSM](15-CreditPSM.md), [FeeRouterV2](08b-FeeRouterV2.md) e [ProjectFunding](16-ProjectFunding.md)). Mantido deployado por compatibilidade histórica.
+
 **Para quem é:** devs de apps listados (ganham `RECORDER_ROLE`), auditores.
 **Pré-requisitos:** [Burn-to-mint](../02-core-concepts/03-burn-to-mint.md).
 

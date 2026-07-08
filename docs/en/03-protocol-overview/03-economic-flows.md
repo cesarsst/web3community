@@ -1,120 +1,105 @@
 # Value flow
 
 **Audience:** reader who wants to understand where real value enters, transits and exits the protocol.
-**Prerequisites:** [Burn-to-mint](../02-core-concepts/03-burn-to-mint.md), [Treasury and fees](../02-core-concepts/07-treasury-and-fees.md).
+**Prerequisites:** [CreditPSM](../08-contracts-reference/15-CreditPSM.md), [FeeRouterV2](../08-contracts-reference/08b-FeeRouterV2.md), [ProjectFunding](../08-contracts-reference/16-ProjectFunding.md).
+
+> **2026-07-08 remodel**: this page describes the current flow (payment rail + rev-share). The old burn-to-mint flow appears at the end, marked as legacy.
 
 ## Where real value comes from
 
-The only source of **external value** in the system is the end user paying for CREDIT. They pay because they need to use the apps. If nobody wants to use the apps, nobody buys CREDIT, and the system dies — that is the hard invariant.
+The only source of **external value** in the system is the end user paying for app services. They convert USDC into CREDIT because they need to use the apps. If nobody wants to use the apps, nobody buys CREDIT, and the system dies — that is the hard invariant, same as in the old model.
 
-Liquidity for the CREDIT/USDC pair is built by two complementary paths in the Credit Liquidity Protocol (CLP):
-
-1. **POL** — Protocol-Owned Liquidity. The Treasury itself custodies an NFT position in the pool. Built by (a) initial seed of genesis CREDIT + Treasury USDC, (b) refill via the bonders bucket + USDC from `treasuryBps`.
-2. **External LPs** — users who provide liquidity in the pool and stake the NFT in `LiquidityGauge`. Receive CREDIT incentives (V2 LPs bucket, default 25% of emission).
+The post-remodel difference: **there is no pool, slippage or price risk at the entrance anymore**. The `CreditPSM` converts USDC ↔ CREDIT at 1:1, no fee, in both directions, with the backing 100% held in the contract.
 
 A typical payment path:
 
 ```
    [ User Charlie ]
         |
-        |  1. Buys 1000 CREDIT on the DEX (POL + external LPs supply liquidity)
-        |
+        |  1. CreditPSM.buy(1000 USDC) -> 1000 CREDIT (1:1, no fee)
+        |     (backing stays held in the PSM; redeemable at any time)
         v
    [ Charlie's wallet has 1000 CREDIT ]
         |
         |  2. Uses Chat App. App charges 1000 CREDIT for the service.
-        |     Charlie signs approve(feeRouter, 1000) + feeRouter.pay(...)
+        |     Charlie signs approve(feeRouterV2, 1000) + pay(42, 1000)
         |
         v
-   [ FeeRouter ]
+   [ FeeRouterV2 ]
         |
-        | default split 95/0/5 (CLP recommendation: 70/20/10)
+        | 2.5% fee (250 bps; 5% hard cap) + project rev-share
         |
-        +-------> burnBps burned (via BurnTracker)
-        |         - CREDIT.totalSupply decreases
-        |         - burn recorded in BurnTracker for the Chat App
+        +-------> fee 25 CREDIT:
+        |            10 -> Treasury      (40% of the fee = 1.0% of GMV)
+        |            10 -> GOV buyback   (40% of the fee = 1.0% of GMV)
+        |             5 -> grants        (20% of the fee = 0.5% of GMV)
         |
-        +-------> treasuryBps -> Treasury (USDC funding for POL refill)
+        +-------> rev-share 80 CREDIT (if a Funded round at 8%)
+        |            -> ProjectFunding, pro-rata to investors
         |
-        +-------> rebateBps -> app owner (direct rebate)
+        +-------> toApp 895 CREDIT (~89.5%) -> app owner, INSTANTLY
+                     (97.5% if the project never raised a round)
 ```
 
-**Real value entered the protocol in step 1.** All subsequent steps redistribute that value.
+**Real value entered the protocol in step 1** (USDC into the PSM backing). All subsequent steps redistribute fully backed CREDIT — nothing is burned, nothing is minted out of thin air.
 
 ## The 5 agents and why each is in the game
 
-With the CLP pivot, the **LP** enters as a formal agent — previously only external, now receives a dedicated bucket.
+With the remodel, the **investor** (GOV staker + CREDIT funder) replaces the LP as the formal capital agent.
 
 ```
-   +----------+    +-------------+    +----------+    +----------+    +------------+
-   |   End    |    |    App      |    |  Staker  |    |    LP    |    |   Holder   |
-   |   User   |    | (ChatApp)   |    |  (Alice) |    |   (Bob)  |    | no staking |
-   +----+-----+    +------+------+    +----+-----+    +----+-----+    +-----+------+
-        |                 |                |               |                |
-   pays in CREDIT    receives rebate   locks GOV in    LP in the         voting power
-   uses the app      + apps bucket     projectId      CREDIT/USDC pool  in the Governor
-                     (retrospective    earns stakers   + stakes NFT
-                      direct push      bucket          in LiquidityGauge
-                      via burn)        (claim)         earns LPs bucket
-                                                       (14d vesting)
-        |                 |                |               |                |
-   extracts value    captures cash      earns freshly   earns freshly    keeps right
-   from a service    + push emission    minted CREDIT   minted CREDIT    over parameter
-   (outside the      (apps bucket)      on claim        on harvest       changes
-   protocol)                            (stakers)       (LPs bucket)
+   +----------+    +-------------+    +--------------+    +------------+    +-----------+
+   |   End    |    |    App      |    |  Investor    |    | GOV holder |    | Treasury/ |
+   |   User   |    | (ChatApp)   |    |  (Alice:     |    |            |    | DAO       |
+   |          |    |             |    |  GOV+CREDIT) |    |            |    |           |
+   +----+-----+    +------+------+    +------+-------+    +-----+------+    +-----+-----+
+        |                 |                  |                  |                 |
+   pays in CREDIT    receives ~89.5-     stakes GOV on      voting power     receives 40%
+   (stable 1:1;      97.5% of revenue    the project        in Governor;     of the fee
+   buys/redeems      INSTANTLY +         (gate) + invests   GOV captures     (1% of GMV)
+   at the PSM, no    upfront capital     CREDIT in the      value via        for opex;
+   slippage)         from the funding    round; earns %     continuous       PSM backing
+        |            round               of REAL revenue    buyback (40%     is SEGREGATED
+   extracts value         |              on every payment   of fee = 1%      (not the
+   from a service    grows with              |              of GMV)          treasury's)
+   (outside the      capital that does       |                  |                |
+   protocol)         not dilute equity       |                  |                |
 ```
 
-Note: **there is no yield "from thin air"**. The CREDIT minted for Alice (staker), Bob (LP) and ChatApp (apps bucket) exists because Charlie burned CREDIT. No actor receives value that did not come from some upstream actor.
+Note: **there is no yield "from thin air"**. The CREDIT Alice receives exists because Charlie paid for the service — it is a slice of real revenue, not emission. No actor receives value that did not come from some upstream actor.
 
-## The 4 revenue sources of an app
+## What the app earns (and what it costs)
 
-The 10% direct default split looks small. But the math closes — especially if the app also stakes on its own project — through simultaneous vectors:
+### Direct revenue, instantly
 
-### (A) Direct rebate
+- **Without a funding round**: 97.5% of every payment (2.5% fee).
+- **With a funded round** (e.g., 8% rev-share): ~89.5% of every payment, straight to the wallet, same block.
 
-10% of every payment (`rebateBps = 1000`). Instant, in CREDIT. The operational cash flow.
+Compare: Stripe charges ~3.8%, app stores 15-30%. The old (legacy) model handed the app only 10% nominal of each payment (~38% effective with staking) — the `audit/economist/2026-07-08-feerouter-bypass.md` analysis showed that under that design bypassing was the dominant strategy.
 
-### (B) Apps-bucket push
+### Upfront capital without diluting equity
 
-15% of each round's emission (`bucketBps[apps] = 1500` in `RewardDistributorV2`) is minted **directly** to each project's `ownerRecipient` in `finalizeRound`, proportional to the burn the project generated in the previous round. It requires neither stake nor claim — it is a retrospective push by burn.
+The owner opens a round in `ProjectFunding`: target in CREDIT, 1-30% rev-share, 1-90 day deadline, all-or-nothing. If the target is hit, they receive the raise immediately and start "paying" via rev-share on future revenue.
 
-### (C) Emission via stake on its own `projectId`
+**Illustrative cost of capital**: a 10,000 CREDIT round at an 8% rev-share, with 2,000 CREDIT/month GMV → 160 CREDIT/month to investors = 1,920/year ≈ **19% p.a.** on the raise. Comparable to revenue-based financing (Pipe, Clearco: 15-25%) — and the "interest" only exists if there is revenue: no GMV, no transfer (and no debt piling up).
 
-If the app acquired GOV (e.g., by buying on a DEX or receiving via a distribution proposal) and staked on `projectId = self`, it captures part of that project's reward share in the next round.
+### Hub and user base
 
-How?
+Listing in the Registry grants access to the hub's user base, discovery and ready payment infrastructure (PSM + FeeRouterV2) — no acquirer integration, no chargebacks.
 
-1. When Charlie pays, 70% is burned and goes to `burnByRoundProject[R][projectId=app]`.
-2. In round R+1, emission is proportional to that burn — and the **stakers bucket (55% of emission)** is split across projects by burn.
-3. If the app has staking weight inside its own `projectId`, it receives part of that share.
+## What the investor earns
 
-**Numerical example** (hypothetical round):
+1. **Stakes GOV on the project** (gate + curation; the lock multiplier still applies to weight).
+2. **Invests CREDIT in the round** (shares 1:1 with the invested amount).
+3. **Receives % of gross revenue on every payment** — accrued on-chain, `claim` at any time (requires keeping the GOV staked; never expires).
 
-- ChatApp moves 600,000 CREDIT in payments in round R-1.
-- (A) Direct rebate: 10% × 600k = **60,000 CREDIT** instant.
-- ChatApp's burn: 70% × 600k = 420,000 CREDIT in `burnByRoundProject[R-1][42]`. Suppose the round's total burn = 950,000 (other apps sum the rest) → emission of round R = 0.95 × 950k = 902,500 CREDIT.
-- (B) Apps bucket: 15% × 902,500 = 135,375; ChatApp's push = `135,375 × 420k/950k` = **59,850 CREDIT** (directly in `finalizeRound`, no stake).
-- (C) Stakers bucket: 55% × 902,500 = 496,375; `projectShare_ChatApp = 496,375 × 420k/950k = 219,450 CREDIT`. If ChatApp staked 50k GOV with a 365d lock (4x multiplier, 200k weight), and total weight in the project is 400k, it captures 50% × 219,450 = **109,725 CREDIT**.
-- Sum (A) + (B) + (C) = **229,575 CREDIT** out of a gross volume of 600k = **~38.3%** effective.
+**Illustrative yield** (not a promise): a 10,000 round at 8% with 2,000/month GMV → 19.2% p.a.; a 50,000 round at 12% with 5,000/month GMV → 600/month = 14.4% p.a. All verifiable on-chain: `grossVolumeOf` (GMV), `totalRevenueDistributed` (revenue already paid), `pendingRevenue` (claimable). The received CREDIT is stable — redeemable 1:1 at the PSM at any time.
 
-The **nominal** split tells a misleading story. The **economic effective** split for an app that also stakes depends on how much it stakes and on the competition from other stakers in the same `projectId`.
+**Risk**: if the round misses its target, full refund (all-or-nothing). Once Funded, the return depends 100% on the app's real revenue — a project that dies pays nothing. The invested principal is not returned — what you buy is the rev-share stream.
 
-### (D) Appreciation of retained CREDIT
+## Per-round flow (legacy)
 
-Since `alpha < 1`, CREDIT supply falls if usage stays constant. The CREDIT the app received (rebate + rewards) and has not yet sold tends to appreciate in real terms — provided demand for CREDIT (generated by app usage) is sustained.
-
-**Trap**: if the app sells all CREDIT immediately, it gives up (C). If it retains, it is exposed to volatility. App's choice.
-
-## When (C) does not close the math
-
-Apps without capital to acquire GOV cannot capture (C) — they are left with (A) and (B). For those cases:
-
-- If the 10% rebate + apps-bucket push still do not close the math, the DAO can approve `setProjectSplit(projectId, custom)` via proposal. For example: `8000/0/2000` (20% rebate) for strategic apps that cannot stake.
-- Alternatively, an initial GOV acquisition can be funded via `Treasury` (direct transfer proposal).
-
-The architecture allows per-project tuning precisely for this kind of accommodation.
-
-## Per-round flow
+> ⚠️ **LEGACY** — the burn/emission round cycle below belongs to the pre-remodel model.
 
 ```
    Round R-1 (the past one)                                  Round R (now)
@@ -146,22 +131,18 @@ The architecture allows per-project tuning precisely for this kind of accommodat
 
 ## CREDIT rotation
 
-CREDIT enters supply via **two** paths only:
+In the current model, CREDIT enters and exits supply through the **PSM**:
 
-1. `CreditToken.mintGenesis` — one-shot, 10M to Treasury, on deploy.
-2. `CreditToken.mint` — by `RewardDistributor`, on claims.
+1. **Enters**: `CreditPSM.buy` — mints 1:1 against deposited USDC (backing held).
+2. **Exits**: `CreditPSM.sell` — burns 1:1 and returns USDC.
 
-And exits via **one** path:
-
-- `CreditToken.burn` / `burnFrom` / `burnByRole` — main path is via `FeeRouter.pay` -> `BurnTracker.burnAndRecord` -> `CreditToken.burnByRole`.
-
-This closed flow allows simple analysis:
+CREDIT supply is therefore **elastic but always backed**: it grows when there is payment demand in the apps, shrinks when users redeem. There is no discretionary emission and no value burn.
 
 ```
-   totalSupply_R = totalSupply_{R-1} + (new emissions in R) - (burns in R)
+   totalSupply ~= mintedOutstanding <= PSM's USDC backing (normalized)
 ```
 
-If `new emissions <= burns`, supply falls. With `alpha = 0.95` and stable usage, that is the expected dynamic.
+Legacy paths (pre-remodel, still present in the code): `mintGenesis` (historical one-shot of 10M to the Treasury), `mint` by the RewardDistributors (historical claims) and `burnByRole` via BurnTracker (burn rail de facto inactive — FeeRouterV2 burns nothing).
 
 ## GOV rotation
 
@@ -180,46 +161,38 @@ Circulation:
 - **Holder -> Registry**: `registerProject` locks GOV as collateral; `removeProject` releases (to owner or treasury).
 - **Holder -> TeamVesting (via Timelock)**: vesting contracts releasing gradually.
 - **Holder -> Governor**: `delegate` does not move GOV, only confers voting power.
+- **Continuous buyback (remodel)**: 40% of every payment's fee (= 1% of GMV) goes to FeeRouterV2's `buybackRecipient`, funding GOV repurchase — buying pressure proportional to real usage.
 
-## The Treasury's role in this flow (post-CLP)
+## The Treasury's role in this flow (post-remodel)
 
-The Treasury is the **buffer** of the system. It:
+The Treasury is the DAO's **operating cash box**. It:
 
-- Receives the genesis CREDIT (10M).
-- May receive `treasuryBps` of payments (CLP recommendation: raise from 0% to 20%).
+- Receives **40% of the FeeRouterV2 fee** (= 1% of GMV) on every payment — recurring revenue, proportional to usage.
 - Receives slash collateral from removed projects.
-- **Receives the bonders bucket** from `RewardDistributorV2` (5% of per-round emission — `polRefillBucket` ledger).
-- **May receive the LPs bucket** when gauge paused (`pendingGaugeRewards` ledger).
+- Keeps the legacy (historical CREDIT genesis, CLP ledgers).
+
+**Important**: the PSM's USDC backing is **segregated** — it is not the Treasury's and there is no function to move it. The DAO spends from the fee, never from the backing.
 
 And distributes, via proposals:
 
-- **Executes FFP buyback** — USDC -> CREDIT swap + immediate burn, defending the floor.
-- **Provisions POL** — `addPOL` / `addPOLFromRefill`.
 - Subsidies for new users (`UserSubsidy`).
 - Vesting for the team (`TeamVesting`).
-- Batch rebate payments to apps.
-- Funding for off-chain operations.
+- Funding for off-chain operations (opex).
 
-The Treasury is **not** distributed automatically — everything leaves via proposal. But from CLP onwards, the Treasury runs three economic loops (in addition to mere custody):
+Besides the Treasury, the fee feeds two more configurable destinations in the router: `buybackRecipient` (40% — continuous GOV repurchase) and `grantsRecipient` (20% — ecosystem grants). In the dev MVP all three recipients point to the Treasury; the `PaymentRouted` events carry the per-slice breakdown regardless.
 
-1. **FFP loop**: `recordDailyPrice` (keeper) -> MA90 grows -> spot < floor for 24h -> governance proposes `executeBuyback` -> USDC->CREDIT swap -> burn -> `totalSupply` falls -> price pressed up.
-2. **POL refill loop**: `treasuryBps` brings USDC -> bonders bucket brings CREDIT -> governance proposes `addPOLFromRefill` -> liquidity in the pool grows -> lower slippage for holders.
-3. **Gauge fallback loop**: `RewardDistributorV2` detects gauge paused -> mint to Treasury -> governance unpauses gauge -> `flushPendingGaugeRewards` ships accumulated CREDIT back as incentive.
+> **Legacy (post-CLP, pre-remodel)**: the Treasury's three old loops — FFP CREDIT buyback, POL refill and gauge fallback — belong to the burn-to-mint rail and are described in the [Treasury](../08-contracts-reference/04-Treasury.md) and [LiquidityGauge](../08-contracts-reference/13-LiquidityGauge.md) pages. With CREDIT stable via the PSM, floor defense and pool liquidity are no longer needed.
 
 ## Health invariant
 
-A simple protocol-health signal: **cumulative burn must grow faster than cumulative emission** over rounds. Since `alpha < 1` guarantees `emission_R ≈ 0.95 × burn_{R-1}`, this inequality is automatically satisfied while:
+Protocol-health signals in the current model:
 
-```
-burn_R >= burn_{R-1}
-```
+1. **Rising GMV**: `grossVolumeOf` summed across projects (or indexing `PaymentRouted`) growing over calendar periods. It is the single source of everything: app revenue, investor income, protocol fee.
+2. **Rising distributed revenue**: `totalRevenueDistributed` per project — rev-share actually paid to investors.
+3. **PSM backing intact**: `backingNormalized() >= mintedOutstanding` — invariant I-PSM1, verifiable by anyone at any time.
+4. **Funding rounds closing successfully**: a high Funded/Failed ratio indicates investors trust the listed projects.
 
-That is: the protocol is healthy as long as real usage holds or grows. If burn drops, emission drops alongside, but the `emission/burn` ratio stays at `alpha`. The terminal symptom is absolute burn going to zero across many consecutive rounds.
-
-Post-CLP, two additional signals:
-
-- **Rising CREDIT MA90** — indicates healthy pricing; the relative floor (`0.5 × MA90`) follows. If spot drops below the floor for 24h, FFP buyback is proposed.
-- **Rising POL TVL** — Treasury accumulates own liquidity. Larger POL = lower slippage for holders and less dependence on external LPs to exit.
+The terminal symptom is the same as in the old model: **GMV at zero for a long time** — without real usage, there is no revenue for anyone.
 
 Full metrics in [Metrics that matter](../06-for-investors/04-metrics-that-matter.md).
 

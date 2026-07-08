@@ -1,7 +1,47 @@
-# Claiming rewards
+# Claiming rev-share (and legacy claims)
 
-**Audience:** staker waiting to withdraw the CREDIT they generated.
-**Prerequisites:** [Staking in projects](03-staking-in-projects.md), [Rewards distribution](../02-core-concepts/04-rewards-distribution.md).
+**Audience:** investor waiting to withdraw the revenue they accrued — and old stakers with pending emission claims.
+**Prerequisites:** [Staking in projects](03-staking-in-projects.md), [ProjectFunding](../08-contracts-reference/16-ProjectFunding.md).
+
+> **Remodel 2026-07-08**: the current income is the **rev-share** from [ProjectFunding](../08-contracts-reference/16-ProjectFunding.md), withdrawn in the hub's **Invest** tab. Emission claiming (`RewardDistributor` V1/V2) is **legacy** — historical claims remain withdrawable, but there is no new emission. Both journeys are on this page.
+
+## Claiming rev-share (current model)
+
+### What must have happened before
+
+1. You invested CREDIT in a round that hit its target (`Funded`) — with GOV staked in the project.
+2. The app received payments via `FeeRouterV2.pay` — each one accrues your slice automatically.
+3. You **keep** GOV staked in the project (the `claim` gate).
+
+### Finding what you can withdraw
+
+```solidity
+uint256 pending = funding.pendingRevenue(projectId, you);
+```
+
+No side effects — use freely in the UI (Invest tab).
+
+### Withdrawing
+
+```solidity
+uint256 amount = funding.claim(projectId);
+```
+
+- Reverts `NoGovStaked` if you no longer have GOV staked in the project — the value is **not lost**, it is held until you re-stake.
+- Reverts `NothingToClaim` if there is no pending revenue.
+- **Never expires.** No deadline, no window.
+
+What you receive is **stable** CREDIT (redeemable 1:1 for USDC in the PSM) that came from the app's real revenue — not from emission.
+
+### Failed round — refund
+
+If the round expired without hitting the target, the path is different: `funding.refund(projectId)` returns 100% of what you invested.
+
+---
+
+## Emission claims (LEGACY)
+
+> ⚠️ **LEGACY** — the rest of this page describes claiming on the pre-remodel emission rail (`RewardDistributor` V1/V2). Historical rights persist (no deadline), but new rounds generate no emission.
 
 ## What must have happened before
 

@@ -3,13 +3,15 @@
 **Audiencia:** cualquier persona que quiera entender la base económica antes de cualquier otro detalle.
 **Requisitos previos:** [Modelo mental](../01-getting-started/02-mental-model.md).
 
+> **⚠️ Actualización — remodel 2026-07-08.** El papel del CREDIT cambió: dejó de ser deflacionario (quemado en el uso) y pasó a ser **medio de pago estable 1:1 con USDC** vía [`CreditPSM`](../08-contracts-reference/15-CreditPSM.md). Las secciones de esta página que describen burn/emisión del CREDIT reflejan el modelo anterior — la separación de poderes entre los dos tokens sigue vigente. Modelo actualizado en [Modelo mental](../01-getting-started/02-mental-model.md) y [Flujo de valor](../03-protocol-overview/03-economic-flows.md).
+
 El protocolo tiene dos tokens porque intenta resolver dos problemas que un solo token no resuelve bien.
 
 ## Los dos problemas
 
 1. **¿Quién decide los rumbos del protocolo?** Hace falta un instrumento escaso, no manipulable en el corto plazo, con peso proporcional a la inversión que alguien tiene en el proyecto. Responde: **GOV**.
 
-2. **¿Cuál es la moneda usada dentro de las apps?** Hace falta un instrumento que se queme cuando se usa (para crear presión deflacionaria que recompense la retención) y que pueda acuñarse como reward cuando el uso genera valor. Responde: **CREDIT**.
+2. **¿Cuál es la moneda usada dentro de las apps?** Hace falta un instrumento estable, previsible, que el usuario compre para gastar sin exposición a volatilidad — y que sirva de moneda para las rondas de captación. Responde: **CREDIT** (1:1 con USDC vía PSM desde el remodel; antes, quemable/deflacionario).
 
 Usar el mismo token para los dos crea disonancia: o quemas el token de votación (malo para la gobernanza) o das derecho a voto a quien acaba de gastar (malo para la separación de poderes).
 

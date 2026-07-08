@@ -56,7 +56,13 @@ El archivo `dev.json` tiene defaults para desarrollo (delays cortos, quorum bajo
 - `minCollateral: 1000 GOV` (en vez de 10k en producción)
 - `probationDuration: 86400` (1 día en vez de 30d)
 
-Los parámetros económicos `alpha`, `floorSchedule` y el split del FeeRouter (`7000/2000/1000` = 70% burn / 20% treasury / 10% rebate) son iguales a producción. En cambio `capMax` (1M en dev vs 5M en producción) y `sanityCap` (1M vs 10M) están reducidos en dev.
+Los parámetros económicos legados `alpha`, `floorSchedule` y el split del FeeRouter V1 (`7000/2000/1000`) son iguales a producción. En cambio `capMax` (1M en dev vs 5M en producción) y `sanityCap` (1M vs 10M) están reducidos en dev.
+
+**Remodel 2026-07-08**: los contratos vigentes (`CreditPSM`, `FeeRouterV2`, `ProjectFunding`) se despliegan con un script separado, después del deploy base:
+
+```bash
+npx hardhat run scripts/deploy-remodel.ts --network localhost
+```
 
 Deploys opcionales de la Fase 1 del pivote CLP (apagados por default) vía env vars antes del comando de deploy:
 

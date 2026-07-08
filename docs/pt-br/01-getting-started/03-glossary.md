@@ -5,9 +5,11 @@
 
 Termos usados nas outras páginas. Definições baseadas no código, não em convenção externa.
 
+> **Nota do remodel 2026-07-08**: termos do ciclo burn-to-mint (burn, emissão, buckets, rodadas de burn, CLP, FFP) descrevem o modelo **legado** — contratos mantidos deployados, mas fora do fluxo vigente. O modelo atual gira em torno de [CreditPSM](../08-contracts-reference/15-CreditPSM.md), [FeeRouterV2](../08-contracts-reference/08b-FeeRouterV2.md) e [ProjectFunding](../08-contracts-reference/16-ProjectFunding.md).
+
 ## Alpha (α)
 
-Fator multiplicador da fórmula de emissão em [`RewardDistributor`](../08-contracts-reference/07-RewardDistributor.md) / [`RewardDistributorV2`](../08-contracts-reference/07b-RewardDistributorV2.md). Aplicado ao burn da rodada anterior. Em produção `950000000000000000` (= 0.95 em precisão 1e18). Ajustável via governança dentro dos bounds `[MIN_ALPHA=0.5e18, MAX_ALPHA=0.99e18]` — `MAX_ALPHA` foi reduzido de `1.1e18` para garantir IE1 (α < 1 permanente) por construção; ver `audit/economist/2026-04-22-consistency-audit.md` C2.
+**Legado (pré-remodel 2026-07-08).** Fator multiplicador da fórmula de emissão em [`RewardDistributor`](../08-contracts-reference/07-RewardDistributor.md) / [`RewardDistributorV2`](../08-contracts-reference/07b-RewardDistributorV2.md). Aplicado ao burn da rodada anterior. Em produção `950000000000000000` (= 0.95 em precisão 1e18). Ajustável via governança dentro dos bounds `[MIN_ALPHA=0.5e18, MAX_ALPHA=0.99e18]` — `MAX_ALPHA` foi reduzido de `1.1e18` para garantir IE1 (α < 1 permanente) por construção; ver `audit/economist/2026-04-22-consistency-audit.md` C2.
 
 ## Bonders
 
@@ -19,11 +21,11 @@ Uma das 4 fatias da emissão V2: stakers (default 55%), LPs (25%), apps (15%), b
 
 ## Burn (queima)
 
-Decremento permanente de `totalSupply` de CREDIT via `_burn` nativo do ERC-20. Acontece quando um usuário paga em um app e o `FeeRouter` encaminha a fatia de `burnBps` ao `BurnTracker.burnAndRecord`, que por sua vez chama `CreditToken.burnByRole`.
+Decremento permanente de `totalSupply` de CREDIT via `_burn` nativo do ERC-20. No modelo vigente, acontece apenas no resgate do PSM (`CreditPSM.sell` queima o CREDIT devolvido e libera o USDC 1:1). **Legado**: no modelo pré-remodel, acontecia quando um usuário pagava em um app e o `FeeRouter` V1 encaminhava a fatia de `burnBps` ao `BurnTracker.burnAndRecord`. O `FeeRouterV2` **não queima nada**.
 
 ## BurnTracker
 
-Oráculo interno on-chain que contabiliza burn por `(rodada, projectId)`. Consumido pelo `RewardDistributor` para calcular share de cada projeto. Ver [BurnTracker](../08-contracts-reference/06-BurnTracker.md).
+**Legado (pré-remodel 2026-07-08).** Oráculo interno on-chain que contabiliza burn por `(rodada, projectId)`. Consumido pelo `RewardDistributor` para calcular share de cada projeto. Ver [BurnTracker](../08-contracts-reference/06-BurnTracker.md).
 
 ## Cap (de supply)
 
@@ -35,7 +37,7 @@ Historiografia on-chain de pesos de staking por bloco. `Staking` escreve checkpo
 
 ## CLP (Credit Liquidity Protocol)
 
-Pivot econômico de abril/2026 (parecer `audit/economist/2026-04-24-clp-pivot.md`). Reorganiza o protocolo em quatro fases:
+**Legado (superado pelo remodel 2026-07-08).** Pivot econômico de abril/2026 (parecer `audit/economist/2026-04-24-clp-pivot.md`). Reorganizava o protocolo em quatro fases:
 
 - **1.1 — FFP buyback**: defesa de floor via swap real USDC→CREDIT + queima.
 - **1.2 — POL**: liquidez própria do protocolo no pool CREDIT/USDC.
@@ -45,7 +47,11 @@ Pivot econômico de abril/2026 (parecer `audit/economist/2026-04-24-clp-pivot.md
 
 ## CREDIT
 
-Token utilitário ERC-20 queimável do protocolo. Supply elástico. Usado para pagar dentro dos apps do ecossistema. Cunhado como reward para stakers (lazy, via claim) e como push direto para LPs/apps/bonders pelo `RewardDistributorV2`. Ver [CreditToken](../08-contracts-reference/02-CreditToken.md).
+Token de pagamento ERC-20 do protocolo, **estável 1:1 com USDC** desde o remodel 2026-07-08. Supply elástico, mas lastreado: mintado quando alguém compra no [`CreditPSM`](../08-contracts-reference/15-CreditPSM.md) (`buy`), queimado quando resgata (`sell`). Usado para pagar dentro dos apps (via `FeeRouterV2.pay`) e para financiar rodadas no `ProjectFunding`. Não é deflacionário nem especulativo: é meio de pagamento. **Legado**: antes do remodel era cunhado como reward de emissão e queimado a cada pagamento. Ver [CreditToken](../08-contracts-reference/02-CreditToken.md).
+
+## CreditPSM
+
+Peg Stability Module do remodel 2026-07-08. Converte USDC ↔ CREDIT a 1:1, sem taxa: `buy()` deposita USDC e minta CREDIT (6→18 decimais); `sell()` queima CREDIT e devolve USDC. Lastro 100% retido no contrato, **sem função de saque — nem para governança**. Ver [CreditPSM](../08-contracts-reference/15-CreditPSM.md).
 
 ## CreditPriceOracle
 
@@ -61,7 +67,11 @@ Modelo de defesa de preço do CREDIT (Fase 1.1 CLP). Spot é livre acima do floo
 
 ## FeeRouter
 
-Contrato que recebe pagamentos em CREDIT dos usuários, divide segundo `split` (default de produção 70% burn / 20% treasury / 10% rebate ao app) e distribui cada fatia para seu destino. Ver [FeeRouter](../08-contracts-reference/08-FeeRouter.md).
+**Legado (pré-remodel 2026-07-08).** Contrato V1 que recebia pagamentos em CREDIT, dividia segundo `split` (default de produção 70% burn / 20% treasury / 10% rebate ao app) e distribuía cada fatia. Substituído pelo [FeeRouterV2](../08-contracts-reference/08b-FeeRouterV2.md) — a taxa efetiva de ~80-90% pro app não competia com processadores de pagamento (parecer `audit/economist/2026-07-08-feerouter-bypass.md`). Ver [FeeRouter](../08-contracts-reference/08-FeeRouter.md).
+
+## FeeRouterV2
+
+Trilho de pagamento do remodel 2026-07-08. `pay(projectId, amount)` cobra fee do protocolo de **2,5%** (250 bps; teto duro de 5% que nem governança ultrapassa), reparte a fee em 40% treasury / 40% buyback de GOV / 20% grants, desconta o rev-share do projeto (se houver rodada financiada) e transfere o resto (~89,5-97,5%) pro dono do app na hora. Acumula `grossVolumeOf[projectId]` (GMV on-chain). Ver [FeeRouterV2](../08-contracts-reference/08b-FeeRouterV2.md).
 
 ## Finalize (de rodada)
 
@@ -107,6 +117,10 @@ Endereço canônico (com timelock 48h) que recebe o bucket apps do `RewardDistri
 
 Liquidez própria do protocolo no pool CREDIT/USDC 0.3%. NFT custodiado pelo Treasury (slot `polTokenId`), range full ticks (`-887220, 887220`). Provisionada via `Treasury.addPOL` (seed) ou `addPOLFromRefill` (drena bucket bonders + USDC do balance livre). Sem rebalance ativo. Ver [Treasury](../08-contracts-reference/04-Treasury.md).
 
+## ProjectFunding
+
+Contrato de captação + redistribuição de receita do remodel 2026-07-08. Dono de projeto Active abre **uma** rodada (alvo em CREDIT, rev-share de 1-30%, prazo 1-90 dias). Investidores com GOV stakeado no projeto depositam CREDIT; all-or-nothing (bateu o alvo → dono recebe e rev-share ativa; venceu sem bater → refund integral). Receita distribuída pro-rata às shares via acumulador tipo MasterChef; `claim` exige GOV stakeado e nunca expira. Ver [ProjectFunding](../08-contracts-reference/16-ProjectFunding.md).
+
 ## Probation
 
 Duas noções distintas no `ProjectRegistry`:
@@ -124,19 +138,31 @@ Ledger interno do Treasury que acumula o bucket bonders do `RewardDistributorV2`
 
 ## Rebate
 
-Fatia (default 10% em produção) de um pagamento em CREDIT que o FeeRouter transfere ao `appRecipient` do projeto. É como o app captura caixa operacional.
+**Legado (pré-remodel 2026-07-08).** Fatia (default 10% em produção) de um pagamento em CREDIT que o FeeRouter V1 transferia ao `appRecipient` do projeto. No modelo vigente o app recebe direto do `FeeRouterV2` a parcela `toApp` (~89,5-97,5% do pagamento) — não é mais "rebate", é a receita do app.
 
 ## Recorder (RECORDER_ROLE)
 
-Role no `BurnTracker` concedida a cada app listado (tipicamente ao `FeeRouter`). Autoriza chamada `burnAndRecord`. Concedida via proposta aprovada no Governor.
+**Legado (pré-remodel 2026-07-08).** Role no `BurnTracker` concedida a cada app listado (tipicamente ao `FeeRouter` V1). Autoriza chamada `burnAndRecord`. Concedida via proposta aprovada no Governor.
 
-## Round / Rodada
+## Remodel 2026-07-08
 
-Período de tempo contabilístico do protocolo. Iniciado em `BurnTracker` (`currentRound`). Aberto indefinidamente até governança chamar `closeRound()`, que incrementa `currentRound` e reseta `roundStartedAt`. Duração alvo em produção: 7 dias (`roundDuration = 604800`).
+Mudança de modelo econômico: de "burn-to-mint deflacionário" para "trilho de pagamento + funding por rev-share". Motivo: a taxa efetiva de ~80% pro app no modelo antigo não competia com Stripe/app stores — o bypass era estratégia dominante (equilíbrio de Nash no colapso; parecer `audit/economist/2026-07-08-feerouter-bypass.md`). Três contratos novos: [CreditPSM](../08-contracts-reference/15-CreditPSM.md), [FeeRouterV2](../08-contracts-reference/08b-FeeRouterV2.md) e [ProjectFunding](../08-contracts-reference/16-ProjectFunding.md). Os contratos do ciclo burn-to-mint continuam deployados por compatibilidade histórica.
+
+## Rev-share
+
+Fatia da **receita bruta** de um projeto (1% a 30%, em bps: 100-3000) prometida aos investidores da rodada de captação do `ProjectFunding`. Descontada automaticamente pelo `FeeRouterV2` a cada `pay` e distribuída pro-rata às shares. Só ativa após a rodada bater o alvo (`Funded`); `revShareBpsOf` retorna 0 caso contrário.
+
+## Rodada de captação (funding round)
+
+Rodada única por projeto no `ProjectFunding`: `openRound(alvo, revShareBps, prazo)` com alvo ≥ `minTarget`, rev-share 1-30% e prazo de 1 a 90 dias. All-or-nothing: `Funded` paga o dono e ativa o rev-share; prazo vencido sem alvo → `Failed` e refund integral. Não confundir com a rodada contabilística de burn (abaixo, legado).
+
+## Round / Rodada (de burn)
+
+**Legado (pré-remodel 2026-07-08).** Período de tempo contabilístico do ciclo burn-to-mint. Iniciado em `BurnTracker` (`currentRound`). Aberto indefinidamente até governança chamar `closeRound()`, que incrementa `currentRound` e reseta `roundStartedAt`. Duração alvo em produção: 7 dias (`roundDuration = 604800`).
 
 ## RewardDistributorV2
 
-Versão bucket-aware do distributor de emissão (Fase 1.4 CLP). Re-deploy paralelo ao V1 — V1 fica em modo claim-only durante migração de 4 rounds. V2 divide a emissão em 4 buckets simultâneos: stakers (lazy), LPs (push gauge), apps (push retrospectivo via burn), bonders (push refill POL). Ver [RewardDistributorV2](../08-contracts-reference/07b-RewardDistributorV2.md).
+**Legado (pré-remodel 2026-07-08).** Versão bucket-aware do distributor de emissão (Fase 1.4 CLP). Re-deploy paralelo ao V1 — V1 fica em modo claim-only durante migração de 4 rounds. V2 divide a emissão em 4 buckets simultâneos: stakers (lazy), LPs (push gauge), apps (push retrospectivo via burn), bonders (push refill POL). No modelo vigente não há emissão como renda — ver [ProjectFunding](../08-contracts-reference/16-ProjectFunding.md). Ver [RewardDistributorV2](../08-contracts-reference/07b-RewardDistributorV2.md).
 
 ## Sanity cap
 
@@ -148,11 +174,14 @@ Bloco de referência para calcular voting power de uma proposta. `Governor` usa 
 
 ## Split
 
-Configuração `(burnBps, treasuryBps, rebateBps)` no `FeeRouter` que soma exatamente 10_000 bps = 100%. Default global em produção: 7000/2000/1000 (`ignition/parameters/production.json`). Pode ser substituído por projeto via `setProjectSplit` (governança) ou por hora via `setAppRecipient` (owner do projeto apenas para o recipient do rebate).
+Duas acepções:
+
+- **Split da fee (vigente)**: repartição interna da fee de 2,5% no `FeeRouterV2` — `(treasuryBps, buybackBps, grantsBps)`, default 4000/4000/2000 (40% treasury / 40% buyback de GOV / 20% grants), soma exata 10_000 bps.
+- **Split de pagamento (legado)**: configuração `(burnBps, treasuryBps, rebateBps)` no `FeeRouter` V1, default de produção 7000/2000/1000.
 
 ## Staking (direcionado)
 
-Ato de lockar GOV em um `projectId` específico do Registry. Define peso = `amount * multiplier(lockDuration) / 1e18`. Peso alimenta share de rewards. Ver [Staking](../08-contracts-reference/05-Staking.md).
+Ato de lockar GOV em um `projectId` específico do Registry. Define peso = `amount * multiplier(lockDuration) / 1e18`. Desde o remodel 2026-07-08, o peso é o **gate de investimento**: `ProjectFunding.invest` e `claim` exigem `getWeight(investor, projectId) > 0`. (Legado: o peso também rateava a emissão de rewards.) Ver [Staking](../08-contracts-reference/05-Staking.md).
 
 ## Timelock
 

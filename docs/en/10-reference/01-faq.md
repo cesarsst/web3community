@@ -7,15 +7,30 @@
 
 ### What is web3community?
 
-A multi-app platform governed by a DAO. Apps accept CREDIT as payment; the deploy default split is 70% burned / 20% treasury / 10% app (CLP Phase 0, adjustable by proposal). GOV stakers in specific projects receive CREDIT emitted in the next round as a function of total burn. Detail in [What is](../01-getting-started/01-what-is-web3community.md).
+A multi-app platform governed by a DAO. Since the **2026-07-08 remodel**, it is a **payment rail + rev-share funding**: apps accept CREDIT (stable 1:1 USDC via the [CreditPSM](../08-contracts-reference/15-CreditPSM.md)) with a fee of only 2.5% on the [FeeRouterV2](../08-contracts-reference/08b-FeeRouterV2.md), and investors fund projects in exchange for a slice of real revenue via [ProjectFunding](../08-contracts-reference/16-ProjectFunding.md). (Legacy: the burn-to-mint model with the 70/20/10 split and per-round emission was replaced.) Detail in [What is](../01-getting-started/01-what-is-web3community.md).
 
 ### What is the difference between GOV and CREDIT?
 
-GOV is governance (fixed supply 100M, votes). CREDIT is utility (elastic supply, burned on use). Details in [Dual-token](../02-core-concepts/01-dual-token-economy.md).
+GOV is governance + investment gate (fixed supply 100M, votes, captures value via continuous buyback). CREDIT is a means of payment, **stable 1:1 with USDC** (mint/burn at the PSM, not speculative). Details in [Dual-token](../02-core-concepts/01-dual-token-economy.md) and [Mental model](../01-getting-started/02-mental-model.md).
 
 ### Where are the contracts?
 
-15 production contracts in `contracts/*.sol` (includes CLP pivot Phase 1: `LiquidityGauge`, `RewardDistributorV2` and `CreditPriceOracle`). Individual reference in [08-contracts-reference](../08-contracts-reference/). On-chain addresses in [Contract addresses](../05-for-developers/02-contract-addresses.md).
+18 contracts in `contracts/*.sol` — 3 from the 2026-07-08 remodel (`CreditPSM`, `FeeRouterV2`, `ProjectFunding`) + 15 earlier ones (some of them now legacy: V1 `FeeRouter`, `BurnTracker`, `RewardDistributor` V1/V2, `LiquidityGauge`). Individual reference in [08-contracts-reference](../08-contracts-reference/). On-chain addresses in [Contract addresses](../05-for-developers/02-contract-addresses.md).
+
+### Why would an app use the FeeRouter instead of charging off-protocol?
+
+Under the old model, it wouldn't — the ~80% effective take rate made bypassing the dominant strategy (Nash equilibrium at collapse; parecer `audit/economist/2026-07-08-feerouter-bypass.md`). That is exactly why the protocol changed. Under the current model:
+
+- **2.5% fee** — cheaper than Stripe (~3.8%) and far below app stores (15-30%). Hard cap of 5% not even governance can exceed.
+- **Upfront capital** — only projects that route revenue through FeeRouterV2 have a verifiable rev-share and can raise in `ProjectFunding` (cost of capital ~19% p.a. in the examples, comparable to revenue-based financing: Pipe/Clearco 15-25%).
+- **On-chain metrics for investors** — `grossVolumeOf` is the GMV history that gives the round credibility.
+- **Hub, user base and ready rail** (PSM + router, no acquirer/chargebacks).
+
+Charging off-protocol means giving up funding and distribution — to pay more at another processor.
+
+### Does CREDIT appreciate?
+
+**No — by design.** CREDIT is stable: 1 CREDIT = 1 USDC, always, with 1:1 purchase and redemption at the PSM (backing 100% held, no withdrawal function — not even governance). Ecosystem appreciation is captured by **GOV**: 40% of every payment's fee (= 1% of GMV) funds continuous GOV buyback. Whoever seeks income funds projects via `ProjectFunding` (rev-share of real revenue).
 
 ### Which network is running?
 
@@ -33,9 +48,10 @@ Network gas + necessary tokens (GOV to stake, CREDIT to pay apps). On testnet (S
 
 ### How do I receive CREDIT?
 
-- Buy on external DEX (Uniswap, etc.).
-- Receive as reward if you staked in a project that generated burn.
+- Buy at the `CreditPSM` with USDC, 1:1 and no fee (`buy`). Redeem the same way (`sell`).
+- Receive as rev-share if you invested in the round of a project with revenue (`ProjectFunding.claim`).
 - Receive via `UserSubsidy` if eligible in a campaign.
+- (Legacy: burn-based emission rewards — historical claims remain withdrawable.)
 
 ### How do I receive GOV?
 
@@ -56,11 +72,13 @@ Detail in [Voting on proposals](../04-for-users/04-voting.md).
 
 ### What if the protocol dies?
 
-If usage drops to near zero, emission collapses, APR goes to near zero, stakers leave. The DAO can intervene (adjust α, open subsidy via Treasury, onboard new apps). But tokenomics does not save a bad product.
+If usage drops to near zero, GMV dries up: rev-share goes to zero, the fee goes to zero (no buyback, no opex). Investors are left with positions that yield nothing — but CREDIT remains redeemable 1:1 at the PSM (the backing does not depend on activity). The DAO can intervene (grants, subsidy via Treasury, onboard new apps). But tokenomics does not save a bad product.
 
-### Is the CREDIT buyback real or "future"?
+### Is the GOV buyback real or "future"?
 
-**Real.** Since CLP Phase 1.1, `Treasury.executeBuyback` does the USDC → CREDIT swap via Uniswap V3 and immediately burns the bought CREDIT, defending the floor price (FFP model). The price comes from a real oracle (`CreditPriceOracle`, Uniswap V3 CREDIT/USDC TWAP + Chainlink USDC/USD sanity), set via `setPriceOracle`. Each buyback requires an approved DAO proposal (it is `GOVERNANCE_ROLE` = Timelock) and passes per-event (20%) and monthly (30%) caps over the USDC reserves. Detail in [Treasury](../08-contracts-reference/04-Treasury.md) and [CreditPriceOracle](../08-contracts-reference/14-CreditPriceOracle.md).
+**Real and continuous.** 40% of every `FeeRouterV2.pay` fee (= 1% of GMV) goes automatically to the `buybackRecipient` — no per-event proposal needed. The more payments in the apps, the more GOV buying pressure. Detail in [FeeRouterV2](../08-contracts-reference/08b-FeeRouterV2.md).
+
+(Legacy: the **CREDIT** buyback of the FFP model — `Treasury.executeBuyback`, USDC→CREDIT swap + burn with 20%/30% caps — belongs to the old rail; with CREDIT stable via the PSM, there is no floor to defend. Detail in [Treasury](../08-contracts-reference/04-Treasury.md).)
 
 ## Staking
 
@@ -88,30 +106,40 @@ Yes. Each `projectId` is an independent position.
 
 **No.** `extendLock` only changes `lockDuration`.
 
-## Rewards
+## Investor income (rev-share)
 
-### When can I claim?
+### How do I invest in a project?
 
-After the round closes (`closeRound` via governance) and is finalized (`finalizeRound` — permissionless). Detail in [Claiming rewards](../04-for-users/05-claiming-rewards.md).
+1. Stake GOV on the project (`Staking.stake`) — it is the gate.
+2. With the round open, `ProjectFunding.invest(projectId, amount)` in CREDIT.
+3. If the round hits the target (all-or-nothing), the rev-share activates; if it expires without hitting it, `refund` returns 100%.
 
-### Do I lose reward if I forget?
+### When can I withdraw my revenue?
 
-**No.** There is no deadline. Once finalized, your claim right persists indefinitely.
+At any time, via `ProjectFunding.claim(projectId)` — revenue accrues on every payment processed by FeeRouterV2. Requires **keeping GOV staked on the project** (skin in the game).
+
+### Do I lose revenue if I forget to claim (or if I unstake)?
+
+**No.** Claims never expire. Without staked GOV you cannot withdraw, but the value stays accrued until you re-stake.
 
 ### Why is my claim zero?
 
 Possible reasons:
 
-- Round not finalized (`RoundNotFinalized`).
-- You already claimed (`AlreadyClaimed`).
-- Your weight was zero at `snapshotBlock`.
-- Project generated no burn and had no global weight.
+- The project's round is not `Funded` (the rev-share only activates after the target is hit).
+- The app has not processed payments since funding (`grossVolumeOf` flat).
+- You already withdrew everything (`NothingToClaim`).
+- You have no GOV staked on the project (`NoGovStaked` — the accrual is not lost).
 
-Use `previewClaim(you, round, projectId)` to diagnose.
+Use `pendingRevenue(projectId, you)` to diagnose.
 
 ### How much will I receive?
 
-Depends on project burn × your weight × round total. Formula in [Rewards distribution](../02-core-concepts/04-rewards-distribution.md).
+`amount × revShareBps/10000 × (your shares / total shares)` on every payment. Illustrative yield of 14-19% p.a. in the docs' examples — it depends 100% on the app's real revenue and is not promised. See [Value accrual](../06-for-investors/02-value-accrual.md).
+
+### What about the old emission rewards?
+
+**Legacy.** Claims of finalized `RewardDistributor` V1/V2 rounds remain withdrawable indefinitely (`previewClaim` + `claim`), but there are no new emission rounds since the remodel. Detail in [Claiming rewards](../04-for-users/05-claiming-rewards.md).
 
 ## Projects / Apps
 
@@ -126,11 +154,15 @@ Detail in [Submitting a project](../05-for-developers/03-submitting-a-project.md
 
 ### How much do I receive per payment?
 
-10% by default (rebate) in the Phase 0 deploy split (`(7000, 2000, 1000)` = 70% burn / 20% treasury / 10% app). Adjustable per project via proposal (`setProjectSplit`).
+**97.5%** of every payment, instantly (protocol fee: 2.5%). If the project raised a round in `ProjectFunding`, the chosen rev-share (1-30%) is also deducted — e.g., with an 8% rev-share, you keep **~89.5%**. Use `feeRouterV2.previewPay(projectId, amount)` to simulate. (Legacy: under the V1 FeeRouter the app received only a 10% rebate.)
 
 ### If I stake in my own project, do I earn more?
 
-Yes. You capture a slice of emission proportional to your stake weight. Detail in [Value flow](../03-protocol-overview/03-economic-flows.md).
+Staking GOV on your own project lets you **invest in your own round** (and withdraw rev-share like any investor), besides signaling conviction. (Legacy: in the old model the stake captured a slice of the burn-based emission.) Detail in [Value flow](../03-protocol-overview/03-economic-flows.md).
+
+### How do I raise capital for my app?
+
+With the project Active, call `ProjectFunding.openRound(projectId, target, revShareBps, duration)`: target ≥ 100 CREDIT, rev-share between 1% and 30%, duration of 1 to 90 days. **One round per project** (MVP). All-or-nothing: target hit → you receive the raise instantly and the rev-share activates; expired without the target → investors get refunds and nothing changes for you. Detail in [ProjectFunding](../08-contracts-reference/16-ProjectFunding.md).
 
 ### Do I lose my collateral if I leave?
 

@@ -5,11 +5,66 @@
 
 Métricas que você pode calcular direto dos contratos. Todas on-chain, sem depender de indexador externo.
 
-## Métricas de uso (saúde do protocolo)
+## Métricas do remodel 2026-07-08 (saúde do protocolo)
+
+A renda do investidor agora é **receita real, não emissão** — as métricas primárias mudaram de burn/emissão para GMV/receita distribuída.
+
+### Volume bruto por projeto (GMV)
+
+**O que é**: todo pagamento que passou pelo `FeeRouterV2` para o projeto. É o proxy direto de uso real — substitui o burn como métrica primária.
+
+```solidity
+feeRouterV2.grossVolumeOf(projectId);
+```
+
+**Como interpretar**: crescente → app ganhando tração (e rev-share dos investidores crescendo junto). Zero por muito tempo → sinal terminal. Para série temporal, indexe eventos `PaymentRouted` (têm o detalhamento fee/rev-share/app por pagamento).
+
+### Receita distribuída aos investidores
+
+```solidity
+funding.totalRevenueDistributed(projectId);   // acumulado pago via rev-share
+funding.pendingRevenue(projectId, investor);  // pendente de claim do investidor
+```
+
+### Yield realizado por projeto
+
+```
+round = funding.rounds(projectId);
+yield_acumulado = totalRevenueDistributed / round.raised
+yield_anualizado ~= yield_acumulado * (365 dias / idade_da_rodada)
+```
+
+**Como interpretar**: compare com o custo de oportunidade (rev-share de 8% sobre GMV mensal de 20% do captado ≈ 19% a.a.). Yield real depende 100% do GMV do app — não é prometido.
+
+### Rev-share ativo e status das rodadas
+
+```solidity
+funding.revShareBpsOf(projectId);   // 0 = sem rodada Funded; 100-3000 bps
+funding.rounds(projectId);          // { target, raised, deadline, revShareBps, status }
+```
+
+Razão Funded/Failed entre projetos indica confiança dos investidores na esteira de projetos.
+
+### Lastro do PSM (peg do CREDIT)
+
+```solidity
+psm.backingNormalized();     // lastro USDC em 18 dec
+psm.mintedOutstanding();     // CREDIT em circulacao mintado pelo PSM
+```
+
+**Invariante I-PSM1**: `backingNormalized() >= mintedOutstanding`. Qualquer um verifica a qualquer momento. Violação = bug crítico (não há função de saque do lastro).
+
+### Fee acumulada do protocolo
+
+Indexe `PaymentRouted` e some `feeToTreasury` / `feeToBuyback` / `feeToGrants`: receita do protocolo (1% do GMV pro treasury), pressão de buyback de GOV (1% do GMV) e grants (0,5% do GMV).
+
+## Métricas de uso do trilho legado (burn-to-mint)
+
+> ⚠️ **LEGADO** — as métricas de burn/emissão abaixo só se movem para claims históricos; o FeeRouterV2 não queima nem emite. Úteis para auditar o passado, não para acompanhar o presente.
 
 ### Burn por rodada
 
-**O que é**: quanto CREDIT foi queimado em cada rodada. Proxy direto do uso real dos apps.
+**O que é**: quanto CREDIT foi queimado em cada rodada. Era o proxy de uso real no modelo antigo.
 
 **Como ler**:
 
@@ -101,7 +156,7 @@ Não há view agregada para distribuição de `lockDuration`. Métrica derivada 
 credit.totalSupply();
 ```
 
-Compare com o último valor e com `supply + emissao - burn` esperado da rodada. Divergência → investigar.
+No modelo vigente, deve acompanhar `psm.mintedOutstanding()` (+ resíduo legado de genesis/emissões antigas). Supply cresce = demanda por trilho crescendo; encolhe = usuários resgatando USDC. Não é mais métrica de deflação.
 
 ### Supply de GOV em circulação
 
@@ -125,7 +180,7 @@ staking.totalStaked();                    // em staking
 
 Razão `GOV_imobilizado / totalSupply` indica quão "em atividade" o GOV está. Alta = boa sinalização. Baixa = muitos holders parados.
 
-### Emissão por rodada
+### Emissão por rodada (legado)
 
 ```solidity
 rd.getEmission(round);             // se finalized
@@ -134,7 +189,7 @@ rd.previewEmission(round);         // preview
 
 Compare com `capMax` para saber se está dominado pelo cap (emissão saturou) ou pelo burn.
 
-### Razão emissão / burn
+### Razão emissão / burn (legado)
 
 ```
 ratio = emissao_R / burn_{R-1}
@@ -192,7 +247,7 @@ gov.getVotes(account);      // voting power atual
 
 Agregado: soma de `getVotes` para addresses conhecidos. Compare com `totalSupply` para % delegado. Alta % delegada = governança vibrante.
 
-## Métricas de rodadas
+## Métricas de rodadas de burn (legado)
 
 ### Rodada atual
 
@@ -222,34 +277,41 @@ for (uint r = 0; r <= rd.lastFinalizedRound(); r++) {
 
 Calcule cumulativo de emissão vs cumulativo de burn para ver saldo líquido de supply ao longo do tempo.
 
-## Métricas operacionais do FeeRouter
+## Métricas operacionais do FeeRouterV2
 
 ### Volume total pago
 
-Indexar eventos `Paid(projectId, user, payer, amount, burned, toTreasury, toApp, recipient)`.
+Indexar eventos `PaymentRouted(projectId, payer, amount, feeToTreasury, feeToBuyback, feeToGrants, revShare, toApp)`.
 
-Sum(amount) = volume bruto do protocolo.
-Sum(burned) = pressão deflacionária acumulada.
-Sum(toApp) = caixa total distribuído para apps.
+Sum(amount) = GMV do protocolo (bate com Σ `grossVolumeOf`).
+Sum(revShare) = renda total repassada a investidores.
+Sum(toApp) = caixa total distribuído para apps (~89,5-97,5% do GMV).
+Sum(fee*) = receita do protocolo (2,5% do GMV: 40/40/20).
 
-### Split efetivo por projeto
+### Preview de pagamento
 
 ```solidity
-feeRouter.getEffectiveSplit(projectId);
+feeRouterV2.previewPay(projectId, amount);  // (fee, revShare, toApp)
 ```
 
-Para projetos com override vs default.
+(Legado: `feeRouter.getEffectiveSplit` e eventos `Paid` do V1 seguem consultáveis para o histórico.)
 
 ## Dashboard mínimo sugerido
 
-Para dev/staker/operador acompanhar:
+Para dev/investidor/operador acompanhar:
 
 ```
-┌ Saúde do uso ─────────────────────────┐
-│ Total burn (ultimas 4 rodadas)         │
-│ Burn por projeto top-5                 │
-│ N projetos com burn                    │
+┌ Saúde do uso (GMV) ───────────────────┐
+│ GMV total (PaymentRouted, 30d)         │
+│ grossVolumeOf top-5 projetos           │
+│ N projetos com pagamento no periodo    │
 │ N projetos Active no Registry          │
+└────────────────────────────────────────┘
+┌ Funding / rev-share ──────────────────┐
+│ Rodadas Open / Funded / Failed         │
+│ totalRevenueDistributed top-5          │
+│ Yield anualizado por projeto           │
+│ Rev-share medio (bps) das Funded       │
 └────────────────────────────────────────┘
 ┌ Staking ──────────────────────────────┐
 │ Total staked (GOV)                     │
@@ -257,11 +319,11 @@ Para dev/staker/operador acompanhar:
 │ Top-5 projetos por weight              │
 │ Weight / Staked ratio (lock medio)     │
 └────────────────────────────────────────┘
-┌ Supply ───────────────────────────────┐
+┌ Peg / Supply ─────────────────────────┐
+│ psm.backingNormalized vs               │
+│   psm.mintedOutstanding (I-PSM1)       │
 │ CREDIT totalSupply                     │
 │ GOV totalSupply vs cap                 │
-│ Delta supply ultima rodada             │
-│ Ratio emissao/burn                     │
 └────────────────────────────────────────┘
 ┌ Governança ───────────────────────────┐
 │ Propostas abertas                      │
@@ -269,9 +331,9 @@ Para dev/staker/operador acompanhar:
 │ Quorum vigente (4% do supply)          │
 │ Lista pendente no Timelock             │
 └────────────────────────────────────────┘
-┌ Treasury ─────────────────────────────┐
+┌ Treasury / fee ───────────────────────┐
+│ Fee acumulada (treasury/buyback/grants)│
 │ Saldos GOV, CREDIT, outros tokens      │
-│ ETH                                    │
 │ Saidas recentes (Transferred event)    │
 └────────────────────────────────────────┘
 ```
@@ -280,12 +342,15 @@ Todas essas métricas são derivadas de chamadas `view` nos contratos + indexaç
 
 ## Sinais de alerta
 
-- Burn por rodada caindo por > 3 rodadas consecutivas.
-- `totalStaked` caindo rapidamente (stakers unstakando após lock).
+- GMV (`PaymentRouted`) caindo por > 4 semanas consecutivas.
+- `backingNormalized() < mintedOutstanding` — violação de I-PSM1; bug crítico, investigar imediatamente.
+- Rodadas de funding consistentemente `Failed` — investidores não confiam na esteira de projetos.
+- `totalRevenueDistributed` estagnado em projetos Funded com GMV positivo — rev-share não está fluindo (investigar roles).
+- `FeeUpdated` aproximando `feeBps` do teto de 500 sem justificativa clara.
+- `totalStaked` caindo rapidamente (stakers unstakando após lock — enfraquece o gate de investimento).
 - Participação em propostas < 50% do quorum mínimo.
-- Projetos atingindo `SanityCapExceeded` — sinal de possível abuso.
-- `RoundClosed.earlyClose = true` sem contexto claro via proposta.
 - Saídas grandes do Treasury sem proposta correspondente conhecida (investigar imediatamente — seria evidência de exploit, embora access control mitigue).
+- (Legado) claims históricos anômalos nos RewardDistributors.
 
 ---
 

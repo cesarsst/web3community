@@ -1,7 +1,9 @@
 # Staking direcionado
 
-**Para quem é:** dev ou staker querendo entender como o peso de rewards é calculado.
+**Para quem é:** dev ou staker querendo entender o que o stake de GOV faz e como o peso é calculado.
 **Pré-requisitos:** [Dual-token](01-dual-token-economy.md).
+
+> **Remodel 2026-07-08**: o stake de GOV **não rende mais emissão de CREDIT**. No modelo vigente ele cumpre três papéis: (1) **curadoria** — sinaliza publicamente em quais projetos você tem convicção; (2) **gate de investimento** — `invest` e `claim` no [ProjectFunding](../08-contracts-reference/16-ProjectFunding.md) exigem GOV stakeado no projeto; (3) **governança** (peso de longo prazo). A renda do investidor vem do **rev-share de receita real**, não de emissão.
 
 ## O que "direcionado" significa
 
@@ -62,7 +64,7 @@ Consultas:
 - `getTotalWeightAt(projectId, blockNumber)` — histórico.
 - `getGlobalWeight()`, `getGlobalWeightAt(blockNumber)` — peso global.
 
-O `RewardDistributor` **sempre** consulta `...At(block)` no `snapshotBlock` da rodada, nunca o valor atual. Isso é a proteção anti-flashloan análoga à do `ERC20Votes`.
+O consumidor vigente do peso é o **[ProjectFunding](../08-contracts-reference/16-ProjectFunding.md)**: `invest` e `claim` exigem `getWeight(investor, projectId) > 0` (skin in the game). O `RewardDistributor` (legado) consultava `...At(block)` no `snapshotBlock` da rodada, nunca o valor atual — proteção anti-flashloan análoga à do `ERC20Votes`, que os checkpoints continuam oferecendo.
 
 ## Unstake
 
@@ -76,28 +78,33 @@ Probation inicial por tempo **não** bypassa lock. Probation punitiva **não** b
 
 ## Por que direcionado e não genérico
 
-Um staking genérico ("ganho reward geral") cria incentivo passivo: você staka, espera, colhe. A DAO precisa que alguém **selecione ativamente** quais projetos merecem suporte — esse alguém é o staker. É quase uma curadoria descentralizada:
+Um staking genérico ("ganho reward geral") cria incentivo passivo: você staka, espera, colhe. A DAO precisa que alguém **selecione ativamente** quais projetos merecem suporte — esse alguém é o staker. É uma curadoria descentralizada com skin in the game:
 
 ```
-   Staker escolhe projetos que acredita
-   que vao gerar burn (= uso)
+   Staker escolhe projetos em que acredita
+   e tranca GOV neles (lock 14-365 dias)
                 |
                 v
-   Peso fica amarrado ao sucesso daquele projeto
+   O stake abre a porta do funding: so quem tem
+   GOV stakeado NO projeto pode investir CREDIT
+   na rodada e sacar rev-share (ProjectFunding)
                 |
                 v
-   Se projeto gera burn, staker ganha reward
-   Se nao gera, reward = zero pra ele
+   Se o app vende, o investidor recebe % da
+   receita REAL a cada pagamento
+   Se nao vende, rev-share = zero
 
-   => staker so ganha se escolheu bem
+   => quem financia e quem ja sinalizou conviccao
 ```
 
-O modelo punisce má alocação. Apoiar todo mundo "por igual" exige stakar em cada um individualmente, o que custa gas e imobiliza capital em proporção.
+O modelo pune má alocação: capital (GOV lockado + CREDIT investido) fica amarrado ao sucesso do projeto. Apoiar todo mundo "por igual" exige stakar em cada um individualmente, o que custa gas e imobiliza capital em proporção.
 
-## Como o peso vira reward
+## Como o peso vira renda
 
-Ver [Rewards distribution](04-rewards-distribution.md). Em resumo: dentro de um `projectId`, a fatia de emissão do projeto é dividida proporcionalmente ao peso de cada staker no `snapshotBlock` da rodada.
+No modelo vigente, o peso **não gera emissão** — ele é o **gate**: com `getWeight(você, projectId) > 0` você pode investir CREDIT na rodada do projeto e sacar rev-share da receita bruta (1–30%, definido na rodada). A distribuição é pro-rata às shares de investimento (CREDIT investido, 1:1), não ao peso de stake. Ver [ProjectFunding](../08-contracts-reference/16-ProjectFunding.md). Importante: **retirar o stake não perde o rev-share acruado** — o `claim` apenas fica retido até você voltar a stakear (nunca expira).
+
+> **Legado**: no modelo pré-remodel, a fatia de emissão do projeto era dividida proporcionalmente ao peso de cada staker no `snapshotBlock` da rodada — ver [Rewards distribution (legado)](04-rewards-distribution.md).
 
 ---
 
-**Próximo →** [Burn-to-mint](03-burn-to-mint.md)
+**Próximo →** [Burn-to-mint (legado)](03-burn-to-mint.md)

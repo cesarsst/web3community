@@ -1,5 +1,7 @@
 # RewardDistributorV2
 
+> ⚠️ **LEGADO** — substituído pelo remodel 2026-07-08 (ver [CreditPSM](15-CreditPSM.md), [FeeRouterV2](08b-FeeRouterV2.md) e [ProjectFunding](16-ProjectFunding.md)). Mantido deployado por compatibilidade histórica.
+
 **Para quem é:** stakers consultando claim, owners de apps, LPs, auditores, devs integrando UIs.
 **Pré-requisitos:** [RewardDistributor (V1)](07-RewardDistributor.md), [Distribuição de rewards](../02-core-concepts/04-rewards-distribution.md).
 

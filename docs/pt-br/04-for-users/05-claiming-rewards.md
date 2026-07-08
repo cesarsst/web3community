@@ -1,7 +1,47 @@
-# Reivindicar rewards
+# Sacando rev-share (e claims legados)
 
-**Para quem é:** staker esperando para sacar o CREDIT que gerou.
-**Pré-requisitos:** [Staking em projetos](03-staking-in-projects.md), [Rewards distribution](../02-core-concepts/04-rewards-distribution.md).
+**Para quem é:** investidor esperando para sacar a receita que acumulou — e staker antigo com claims de emissão pendentes.
+**Pré-requisitos:** [Staking em projetos](03-staking-in-projects.md), [ProjectFunding](../08-contracts-reference/16-ProjectFunding.md).
+
+> **Remodel 2026-07-08**: a renda vigente é o **rev-share** do [ProjectFunding](../08-contracts-reference/16-ProjectFunding.md), sacado na aba **Investir** do hub. O claiming de emissão (`RewardDistributor` V1/V2) é **legado** — claims históricos continuam sacáveis, mas não há emissão nova. As duas jornadas estão nesta página.
+
+## Sacando rev-share (modelo vigente)
+
+### O que precisa ter acontecido antes
+
+1. Você investiu CREDIT numa rodada que bateu o alvo (`Funded`) — com GOV stakeado no projeto.
+2. O app recebeu pagamentos via `FeeRouterV2.pay` — cada um acumula sua fatia automaticamente.
+3. Você **mantém** GOV stakeado no projeto (gate do `claim`).
+
+### Descobrindo o que pode sacar
+
+```solidity
+uint256 pendente = funding.pendingRevenue(projectId, you);
+```
+
+Sem side effects — use livremente na UI (aba Investir).
+
+### Sacando
+
+```solidity
+uint256 amount = funding.claim(projectId);
+```
+
+- Reverte `NoGovStaked` se você não tem mais GOV stakeado no projeto — o valor **não é perdido**, fica retido até você re-stakear.
+- Reverte `NothingToClaim` se não há receita pendente.
+- **Nunca expira.** Sem deadline, sem janela.
+
+O que você recebe é CREDIT **estável** (resgatável 1:1 em USDC no PSM) que veio de receita real do app — não de emissão.
+
+### Rodada Failed — refund
+
+Se a rodada venceu sem bater o alvo, o caminho é outro: `funding.refund(projectId)` devolve 100% do que você investiu.
+
+---
+
+## Claims de emissão (LEGADO)
+
+> ⚠️ **LEGADO** — todo o restante desta página descreve o claiming do trilho de emissão pré-remodel (`RewardDistributor` V1/V2). Direitos históricos persistem (não há deadline), mas rodadas novas não geram emissão.
 
 ## O que precisa ter acontecido antes
 

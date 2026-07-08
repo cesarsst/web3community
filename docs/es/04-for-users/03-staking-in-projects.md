@@ -1,7 +1,9 @@
 # Staking en proyectos
 
-**Audiencia:** quien ya tiene GOV y quiere recibir CREDIT como reward.
+**Audiencia:** quien ya tiene GOV y quiere apoyar un proyecto — y habilitarse a invertir en su ronda.
 **Requisitos previos:** [Directed staking (concepto)](../02-core-concepts/02-directed-staking.md), [Tener GOV](02-holding-gov.md).
+
+> **⚠️ Actualización — remodel 2026-07-08.** Los pasos operacionales de stake/unstake de esta página siguen válidos. Lo que cambió es el **para qué**: el stake ya no genera rewards de emisión (legado) — es el requisito para invertir en la ronda del proyecto y reclamar rev-share vía [`ProjectFunding`](../08-contracts-reference/16-ProjectFunding.md). Los ejemplos con emisión/burn más abajo son del modelo anterior.
 
 ## El modelo mental en 3 líneas
 

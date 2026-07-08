@@ -1,6 +1,10 @@
 # Burn-to-mint
 
-**Audience:** anyone who wants to understand how the protocol sustains emission without becoming a Ponzi.
+> ⚠️ **LEGACY — entire page.** The burn-to-mint cycle described here was **replaced in the 2026-07-08 remodel** and is no longer the current mechanism. The contracts (`BurnTracker`, `RewardDistributor` V1/V2, `FeeRouter` V1) remain deployed for historical claims, but the burn rail is de facto deactivated: [FeeRouterV2](../08-contracts-reference/08b-FeeRouterV2.md) burns nothing.
+>
+> **Why it was replaced**: the economic analysis `audit/economist/2026-07-08-feerouter-bypass.md` showed that the effective ~80-90% take on every payment made **bypassing the FeeRouter the dominant strategy** for apps — and the compensatory emission (α·burn) paid investors with inflation, not real value. In the current model, CREDIT is stable 1:1 with USDC via [CreditPSM](../08-contracts-reference/15-CreditPSM.md), payments pay only a 2.5% fee in FeeRouterV2 (40% treasury / 40% GOV buyback / 20% grants), and investor income comes from **rev-share of real revenue** via [ProjectFunding](../08-contracts-reference/16-ProjectFunding.md). Start with [Value flow](../03-protocol-overview/03-economic-flows.md).
+
+**Audience:** anyone who wants to understand how the old model sustained emission without becoming a Ponzi.
 **Prerequisites:** [Dual-token](01-dual-token-economy.md).
 
 ## The formula

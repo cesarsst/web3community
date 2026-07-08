@@ -32,10 +32,54 @@ credit.balanceOf(account);
 credit.allowance(owner, spender);
 
 credit.genesisMinted();                     // true after mintGenesis
-credit.hasRole(credit.MINTER_ROLE(), account);  // in production: RewardDistributor
-credit.hasRole(credit.BURNER_ROLE(), account);  // in production: BurnTracker
+credit.hasRole(credit.MINTER_ROLE(), account);  // current: CreditPSM (legacy: RewardDistributor)
+credit.hasRole(credit.BURNER_ROLE(), account);  // current: CreditPSM (legacy: BurnTracker)
 credit.hasRole(credit.DEFAULT_ADMIN_ROLE(), account);  // in production: Timelock
 ```
+
+### CreditPSM
+
+```solidity
+psm.backing();                              // current USDC backing (6 decimals)
+psm.backingNormalized();                    // backing in 18 decimals
+psm.mintedOutstanding();                    // circulating CREDIT minted by this PSM
+// verifiable invariant I-PSM1: backingNormalized() >= mintedOutstanding
+```
+
+### FeeRouterV2
+
+```solidity
+feeRouterV2.feeBps();                       // fee in bps (default 250 = 2.5%)
+feeRouterV2.FEE_BPS_CAP();                  // 500 — hard cap
+feeRouterV2.feeSplit();                     // struct { treasuryBps, buybackBps, grantsBps } = 4000/4000/2000
+feeRouterV2.treasuryRecipient();            // fee destinations
+feeRouterV2.buybackRecipient();
+feeRouterV2.grantsRecipient();
+
+feeRouterV2.appRecipientOf(projectId);      // explicit recipient or 0 (= Registry owner)
+feeRouterV2.grossVolumeOf(projectId);       // project's accumulated GMV — on-chain metric
+
+feeRouterV2.previewPay(projectId, amount);  // (fee, revShare, toApp) — preview, no side effects
+```
+
+### ProjectFunding
+
+```solidity
+funding.minTarget();                        // minimum round target (default 100e18)
+funding.MIN_REV_SHARE_BPS();                // 100 (1%)
+funding.MAX_REV_SHARE_BPS();                // 3000 (30%)
+funding.MIN_ROUND_DURATION();               // 1 day
+funding.MAX_ROUND_DURATION();               // 90 days
+
+funding.rounds(projectId);                  // struct { target, raised, deadline, revShareBps, status }
+funding.revShareBpsOf(projectId);           // active rev-share (0 if round not Funded)
+funding.sharesOf(projectId, investor);      // shares (== CREDIT invested)
+funding.pendingRevenue(projectId, investor);// revenue pending claim
+funding.totalRevenueDistributed(projectId); // total revenue already distributed (audit/UI)
+funding.accRevenuePerShare(projectId);      // MasterChef accumulator (1e18)
+```
+
+Round status enum: `0=None`, `1=Open`, `2=Funded`, `3=Failed`.
 
 ### ProjectRegistry
 
@@ -89,7 +133,7 @@ staking.isUnlocked(user, projectId);        // bool
 staking.multiplier(lockDuration);           // pure — compute multiplier for lock X
 ```
 
-### BurnTracker
+### BurnTracker (legacy)
 
 ```solidity
 burnTracker.currentRound();                 // ongoing round
@@ -114,7 +158,7 @@ burnTracker.hasRole(burnTracker.RECORDER_ROLE(), account);  // listed apps
 burnTracker.hasRole(burnTracker.GOVERNANCE_ROLE(), account); // Timelock
 ```
 
-### RewardDistributor
+### RewardDistributor (legacy)
 
 ```solidity
 rd.alpha();                                 // FP 1e18
@@ -139,7 +183,7 @@ rd.getEmission(round);                      // emission (0 if not finalized)
 rd.getProjectEmission(round, projectId);    // project's share
 ```
 
-### FeeRouter
+### FeeRouter V1 (legacy)
 
 ```solidity
 feeRouter.defaultSplit();                   // struct Split
@@ -224,7 +268,21 @@ event RoundClosed(uint256 indexed round, uint256 totalBurn, uint256 projectsCoun
 event RoundFinalized(uint256 indexed round, uint256 totalEmission, uint256 totalBurnAtFinalize, uint64 snapshotBlock);
 event Claimed(address indexed user, uint256 indexed round, uint256 indexed projectId, uint256 amount);
 
-# FeeRouter
+# CreditPSM
+event Bought(address indexed user, uint256 usdcIn, uint256 creditOut);
+event Sold(address indexed user, uint256 creditIn, uint256 usdcOut);
+
+# FeeRouterV2
+event PaymentRouted(uint256 indexed projectId, address indexed payer, uint256 amount, uint256 feeToTreasury, uint256 feeToBuyback, uint256 feeToGrants, uint256 revShare, uint256 toApp);
+
+# ProjectFunding
+event RoundOpened(uint256 indexed projectId, uint256 target, uint16 revShareBps, uint64 deadline);
+event Invested(uint256 indexed projectId, address indexed investor, uint256 amount, uint256 totalRaised);
+event RoundFunded(uint256 indexed projectId, uint256 raised, address indexed paidTo);
+event RevenueNotified(uint256 indexed projectId, uint256 amount);
+event RevenueClaimed(uint256 indexed projectId, address indexed investor, uint256 amount);
+
+# FeeRouter V1 (legacy)
 event Paid(uint256 indexed projectId, address indexed user, address indexed payer, uint256 amount, uint256 burned, uint256 toTreasury, uint256 toApp, address recipient);
 
 # CommunityGovernor (includes OZ default)
@@ -239,22 +297,24 @@ event ProposalExecuted(proposalId);
 
 Every mutating function has a "preview" via view:
 
-- `FeeRouter.quote(projectId, amount)` — split preview.
-- `RewardDistributor.previewClaim(user, round, projectId)` — reward preview.
-- `RewardDistributor.previewEmission(round)` — emission preview for a round.
+- `FeeRouterV2.previewPay(projectId, amount)` — fee/rev-share/toApp preview.
+- `ProjectFunding.pendingRevenue(projectId, investor)` — how much `claim` would withdraw now.
+- `FeeRouter.quote(projectId, amount)` — split preview (legacy).
+- `RewardDistributor.previewClaim(user, round, projectId)` — reward preview (legacy).
 
 Use in UI to show values before the user signs.
 
 ### Batch reads
 
-Multicall (or similar) is useful to read aggregate state. Example — build user dashboard:
+Multicall (or similar) is useful to read aggregate state. Example — build investor dashboard:
 
 ```
-user.balanceOf(GOV)
-user.delegates(GOV)
-positions[user][projectId] for each staked projectId
-staking.getWeight(user, projectId) for each
-rd.previewClaim(user, round, projectId) for each finalized (round, projectId)
+user.balanceOf(GOV) / user.balanceOf(CREDIT)
+staking.getWeight(user, projectId) for each staked projectId
+funding.rounds(projectId) + sharesOf(projectId, user) for each
+funding.pendingRevenue(projectId, user) for each
+feeRouterV2.grossVolumeOf(projectId) for each (GMV)
+psm.backingNormalized() vs psm.mintedOutstanding() (peg health)
 ```
 
 ## Historic snapshots

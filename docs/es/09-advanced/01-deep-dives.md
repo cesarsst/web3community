@@ -5,6 +5,8 @@
 
 Esta página agrega decisiones de diseño no obvias que atraviesan múltiples contratos.
 
+> **Nota — remodel 2026-07-08**: los deep dives sobre burn/emisión (BurnTracker, splits del FeeRouter V1, incentivo al burn) documentan el razonamiento del modelo **anterior**. Se mantienen porque explican por qué el diseño llegó a donde llegó — incluida la falla (bypass del router) que motivó el remodel.
+
 ## Anti-flashloan en dos dimensiones
 
 Dos dimensiones del protocolo están protegidas contra manipulación por préstamo relámpago:

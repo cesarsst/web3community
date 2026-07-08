@@ -5,28 +5,31 @@
 
 This page gives the four mental models the protocol uses. If you internalize all four, the rest of the docs read fast — most details are consequences of these models.
 
+> **2026-07-08 remodel.** The protocol stopped being "deflationary burn-to-mint" and became a **payment rail + rev-share funding**: CREDIT is stable 1:1 with USDC (via [CreditPSM](../08-contracts-reference/15-CreditPSM.md)), apps pay a 2.5% fee on [FeeRouterV2](../08-contracts-reference/08b-FeeRouterV2.md), and investors fund projects in exchange for a slice of real revenue via [ProjectFunding](../08-contracts-reference/16-ProjectFunding.md). The models below already reflect this; the old mechanism appears marked as legacy.
+
 ## 1. Two tokens, two totally distinct roles
 
 The first trap is treating GOV and CREDIT as "two tokens of a DAO". They are **not symmetric**. Each one serves a role the other cannot serve.
 
 ```
-  GOV (Governance)                     CREDIT (Utility)
+  GOV (Governance)                     CREDIT (Payment rail)
   -----------------                    -----------------
   FIXED supply 100M                    ELASTIC supply
-  (immutable cap)                      (mint/burn via roles)
+  (immutable cap)                      (mint on buy, burn on sell
+                                        at the CreditPSM, 1:1 USDC)
 
   Votes on proposals                   Does NOT vote
 
-  Staking collateral                   Burned when a user
-  (locked to earn weight)              pays in an app
+  Staking collateral                   Means of payment in the apps
+  (locked to earn weight and           (stable: 1 CREDIT = 1 USDC,
+   the right to invest)                 backing 100% held in the PSM)
 
-  NOT burned on usage                  Minted as reward
-
-  Appreciates (if) via                 Disinflates via
-  ecosystem appreciation               formula burn > mint
+  Captures appreciation via            Does NOT appreciate or drop:
+  continuous buyback (40% of           redeemable at any time
+  the FeeRouterV2 fee)                 at the PSM
 ```
 
-GOV is **political right and long-term economic weight**. CREDIT is **the platform's operational money**. Never mix the two in your reasoning — a common mistake is thinking "stake more CREDIT" (doesn't exist — you stake GOV) or "sell votes with CREDIT" (doesn't exist — only GOV votes).
+GOV is **political right, investment gate and long-term economic weight**. CREDIT is **the platform's stable operational money** — think of it as "USDC with ecosystem rails", not as a bet. Ecosystem appreciation is captured by GOV (via the fee-funded buyback); CREDIT is not meant to appreciate in the current model. A common mistake is thinking "stake CREDIT" (doesn't exist — you stake GOV and **invest** CREDIT) or "sell votes with CREDIT" (doesn't exist — only GOV votes).
 
 Reference: [Dual-token economy](../02-core-concepts/01-dual-token-economy.md). Contracts: [GovernanceToken](../08-contracts-reference/01-GovernanceToken.md), [CreditToken](../08-contracts-reference/02-CreditToken.md).
 
@@ -34,7 +37,10 @@ Reference: [Dual-token economy](../02-core-concepts/01-dual-token-economy.md). C
 
 On Uniswap, Aave, Curve: you stake a token and receive a reward "from the protocol". Undefined. Here it is different.
 
-When you stake GOV, you **choose a project**. Your weight in rewards is tied to that project's success. If ChatApp is the chosen project and ChatApp generates a lot of burn, you capture a lot of reward. If ChatApp disappears from the map, your weight earns zero reward — even if other projects are booming.
+When you stake GOV, you **choose a project**. And the stake buys two things tied to that project:
+
+1. **The right to invest**: only those with GOV staked on the project can enter its fundraising round in [ProjectFunding](../08-contracts-reference/16-ProjectFunding.md) — and must **keep** the stake to withdraw the rev-share (skin in the game).
+2. **Curation with skin in the game**: your capital is tied to that project's success. If ChatApp generates revenue, your investment yields; if it disappears from the map, it doesn't — even if other projects are booming.
 
 ```
   stake(projectId=ChatApp, amount=100 GOV, lock=180 days)
@@ -43,36 +49,41 @@ When you stake GOV, you **choose a project**. Your weight in rewards is tied to 
   You generate weight ONLY in ChatApp. Weight = 100 * multiplier(180 days).
   The multiplier ranges from 1x (14 days) to 4x (365 days).
 
-  When the round closes:
-     your_reward = round_emission
-                * (ChatApp_burn / total_burn)
-                * (your_weight / total_weight_in_ChatApp)
+  With GOV staked on ChatApp, you can:
+     invest(ChatApp, X CREDIT)   in the fundraising round
+     claim(ChatApp)              accrued revenue at any time
 ```
 
-**Practical consequence**: you need to pick projects. Active selection is part of the model — it is not passive. Being a staker here is like being an "app curator": you allocate capital where you think it will generate usage.
+(Legacy: in the pre-remodel model, stake weight also pro-rated CREDIT emission by burn — formula in [Rewards distribution](../02-core-concepts/04-rewards-distribution.md), contracts `RewardDistributor`/`V2`, now legacy.)
 
-Reference: [Directed staking](../02-core-concepts/02-directed-staking.md). Contract: [Staking](../08-contracts-reference/05-Staking.md).
+**Practical consequence**: you need to pick projects. Active selection is part of the model — it is not passive. Being a staker here is like being an "app curator": you allocate capital where you think real revenue will be generated.
 
-## 3. Rewards come from burn — not from thin air
+Reference: [Directed staking](../02-core-concepts/02-directed-staking.md). Contracts: [Staking](../08-contracts-reference/05-Staking.md), [ProjectFunding](../08-contracts-reference/16-ProjectFunding.md).
 
-Many protocols mint rewards using new supply without backing ("dilute whoever didn't stake to pay whoever did"). That tends to create an inflationary spiral.
+## 3. Income comes from real revenue — not from emission
 
-Here the formula is explicitly **post-paid**:
+Many protocols mint rewards using new supply without backing ("dilute whoever didn't stake to pay whoever did"). That tends to create an inflationary spiral. Since the 2026-07-08 remodel, here **there is no emission as income at all**: what the investor receives is a slice of the **real gross revenue** of the project they funded.
 
 ```
-  emission of round R = min( max( alpha * burn_{R-1}, floor(R) ), capMax )
+  user pays 100 CREDIT in ChatApp (FeeRouterV2.pay)
+       |
+       +--> 2.5 CREDIT  protocol fee (40% treasury / 40% GOV buyback / 20% grants)
+       +--> 8.0 CREDIT  rev-share (if ChatApp raised at an 8% rev-share)
+       |                 --> pro-rata across the round's investors
+       +--> 89.5 CREDIT to ChatApp's owner, instantly
 ```
 
 Translating:
 
-- `burn_{R-1}` — how much CREDIT was burned in the previous round. Verifiable on-chain source in [`BurnTracker`](../08-contracts-reference/06-BurnTracker.md).
-- `alpha` — multiplier. In production 0.95 (`950000000000000000` wei from `ignition/parameters/production.json`), i.e., it emits **slightly less** than was burned. The system is **slightly deflationary if usage is constant**.
-- `floor(R)` — emission floor of round R. Decreasing table with 24 entries (~6 months if `roundDuration = 7 days`). It exists only for the bootstrap — it guarantees some reward while usage does not yet exist.
-- `capMax` — hard ceiling. Default 5M CREDIT per round in production (`capMax: 5000000000000000000000000`).
+- The investor funded ChatApp's round in CREDIT and receives a % of **every payment** — not of emission. If the app has no revenue, there is no income. Yield verifiable on-chain (`totalRevenueDistributed`, `grossVolumeOf`).
+- The rev-share is chosen by the owner when opening the round, between **1% and 30%** (100-3000 bps), with a 1-90 day deadline and an all-or-nothing rule.
+- The 2.5% fee (5% hard cap) funds the protocol: 40% treasury, 40% continuous GOV buyback, 20% grants.
 
-**Implication**: if nobody uses the apps, there is no burn, and after round 24 there is no floor — therefore, no emission. Stakers only earn if the ecosystem generates real usage. It is a bridge between on-chain utility and reward, not a bottomless pit.
+**Implication**: if nobody uses the apps, there is no revenue — therefore, no income for anyone. It remains a bridge between real utility and return, but now without inflating or burning supply.
 
-Reference: [Burn-to-mint](../02-core-concepts/03-burn-to-mint.md). Contract: [RewardDistributor](../08-contracts-reference/07-RewardDistributor.md).
+(Legacy: the old formula `emission_R = min(max(alpha * burn_{R-1}, floor(R)), capMax)` with α=0.95 is documented in [Burn-to-mint](../02-core-concepts/03-burn-to-mint.md) and [RewardDistributor](../08-contracts-reference/07-RewardDistributor.md) — contracts kept deployed for historical compatibility.)
+
+Reference: [ProjectFunding](../08-contracts-reference/16-ProjectFunding.md), [FeeRouterV2](../08-contracts-reference/08b-FeeRouterV2.md).
 
 ## 4. Every political change goes through delay
 
@@ -94,10 +105,11 @@ Reference: [Proposal lifecycle](../07-governance/01-proposal-lifecycle.md). Cont
 
 To avoid common confusions:
 
-- **It's not yield farming.** Staking here locks GOV directed to a project. Rewards are in CREDIT and come from real usage, not from dilution.
-- **It's not an AMM.** There is no internal liquidity pool. Swapping CREDIT for a stable happens outside web3community (external DEX).
-- **It's not a launchpad.** The Registry is a whitelist of apps that accept CREDIT, not a distributor of new tokens.
-- **It's not a CREDIT ICO.** The 10M CREDIT genesis is minted only once to the treasury (`mintGenesis`, one-shot). Subsequent emission comes only from `RewardDistributor`, tied to burn.
+- **It's not yield farming.** Staking here locks GOV directed to a project and is the gate to invest. Investor income is a rev-share of real revenue, not emission or dilution.
+- **CREDIT is not a bet.** It is stable 1:1 with USDC via the `CreditPSM` — it doesn't appreciate, doesn't drop, and redeems at any time. Whoever wants exposure to ecosystem appreciation holds GOV.
+- **It's not a token launchpad.** The Registry is a whitelist of apps that accept CREDIT; `ProjectFunding` sells a slice of **revenue**, not new tokens.
+- **It's not a bank.** The PSM backing is segregated with no withdrawal function — not even governance can reach it. The treasury lives off the fee (1% of GMV), never off the backing.
+- **It's not the burn-to-mint model.** 70% burn, formula-driven emission, 55/25/15/5 buckets and burn rounds are pre-2026-07-08 **legacy** — contracts still deployed, but outside the current flow.
 
 ---
 

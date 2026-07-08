@@ -1,5 +1,7 @@
 # FeeRouter
 
+> ⚠️ **LEGADO — sustituido por el remodel 2026-07-08.** Este es el router del modelo burn-to-mint (split 70% burn / 20% treasury / 10% rebate). El riel de pagos vigente es el [FeeRouterV2](08b-FeeRouterV2.md): fee de 2,5% (techo duro 5%), split 40/40/20 y ~97,5% del pago directo a la app. Motivo del cambio: con ~80% de tasa efectiva, el bypass era la estrategia dominante (`audit/economist/2026-07-08-feerouter-bypass.md`). Esta página se mantiene como referencia.
+
 **Audiencia:** devs de apps integrando pagos, auditores.
 **Requisitos previos:** [Treasury y fees](../02-core-concepts/07-treasury-and-fees.md).
 

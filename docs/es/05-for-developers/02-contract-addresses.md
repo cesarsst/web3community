@@ -50,8 +50,11 @@ El orden en este índice corresponde al orden numérico en `08-contracts-referen
 | 12 | `UserSubsidy` | `contracts/UserSubsidy.sol` |
 | 13 | `LiquidityGauge` | `contracts/LiquidityGauge.sol` |
 | — | `CreditPriceOracle` | `contracts/CreditPriceOracle.sol` |
+| 15 | `CreditPSM` **(remodel — vigente)** | `contracts/CreditPSM.sol` |
+| 08b | `FeeRouterV2` **(remodel — vigente)** | `contracts/FeeRouterV2.sol` |
+| 16 | `ProjectFunding` **(remodel — vigente)** | `contracts/ProjectFunding.sol` |
 
-Son **15 contratos de producción** en total. Doc detallada por contrato en [`08-contracts-reference/`](../08-contracts-reference/).
+Son **18 contratos** en total: los 3 del remodel 2026-07-08 (núcleo económico vigente, deployados vía `scripts/deploy-remodel.ts`) + 15 del deploy base (varios en modo legado — ver los avisos "⚠️ LEGADO" en la referencia). Doc detallada por contrato en [`08-contracts-reference/`](../08-contracts-reference/).
 
 ## Versiones de dependencias
 

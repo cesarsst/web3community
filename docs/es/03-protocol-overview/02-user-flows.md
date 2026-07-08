@@ -3,75 +3,94 @@
 **Audiencia:** dev o usuario tratando de entender lo que pasa de punta a punta en cada accion tipica.
 **Requisitos previos:** [Arquitectura](01-architecture.md).
 
-Cada diagrama abajo es un flujo end-to-end. Flecha simple = llamada de funcion. `|=>` = transicion de estado implicita.
+Cada diagrama abajo es un flujo end-to-end del **modelo vigente (remodel 2026-07-08)**. Flecha simple = llamada de funcion. `|=>` = transicion de estado implicita. Los flujos del modelo legado (burn en pagos, claim de emisión, cierre de rondas contables) están en las páginas de contratos marcadas como legado.
 
-## Flujo 1 — Usuario paga en una app
+## Flujo 1 — Usuario compra CREDIT en el PSM
 
-Actor: **Charlie** (usuario final). Tiene 1000 CREDIT y quiere usar ChatApp, cuyo `projectId = 42`.
+Actor: **Charlie** (usuario final). Tiene 1000 USDC y quiere saldo para usar apps.
 
 ```
 Charlie.wallet
      |
-     | 1. approve(feeRouter, 1000 CREDIT)
+     | 1. approve(psm, 1000e6 USDC)
      v
-CreditToken  |=> allowance[charlie][feeRouter] = 1000
+USDC  |=> allowance[charlie][psm] = 1000e6
      |
-     | 2. app UI construye tx:
-     |    feeRouter.pay(42, charlie, 1000)
-     |    (tx puede ser firmada por Charlie o por un relayer
-     |     que paga el gas; el usuario economico es siempre `charlie`)
+     | 2. psm.buy(1000e6)
      v
-FeeRouter.pay(projectId=42, user=charlie, amount=1000)
+CreditPSM.buy(usdcAmount=1000e6)
      |
+     | Check: usdcAmount > 0
+     |
+     | 3. creditOut = 1000e6 * SCALE(1e12) = 1000e18
+     |
+     | 4. USDC.safeTransferFrom(charlie, psm, 1000e6)
+     |    mintedOutstanding += 1000e18
+     |    CREDIT.mint(charlie, 1000e18, "psm:buy")
+     |
+     +-------- Bought(charlie, 1000e6, 1000e18)
+```
+
+**Efectos post-tx:** Charlie tiene 1000 CREDIT; el PSM retiene 1000 USDC como respaldo. Sin fee, sin slippage. El camino inverso es `sell(creditAmount)` — quema el CREDIT y devuelve USDC 1:1 (el monto debe ser múltiplo de `1e12`; el polvo revierte con `DustAmount` en vez de confiscarse).
+
+## Flujo 2 — Usuario paga en una app
+
+Actor: **Charlie**. Tiene 1000 CREDIT y quiere usar ChatApp (`projectId = 42`), que tiene una ronda financiada con rev-share de 8%.
+
+```
+Charlie.wallet
+     |
+     | 1. approve(feeRouterV2, 1000e18 CREDIT)
+     v
+CreditToken  |=> allowance[charlie][routerV2] = 1000e18
+     |
+     | 2. feeRouterV2.pay(42, 1000e18)
+     |    (el payer economico es msg.sender — sin parametro `user` como en V1)
+     v
+FeeRouterV2.pay(projectId=42, amount=1000e18)
+     |
+     | Check: amount > 0
      | Check: registry.isActive(42)
-     | Check: user != 0, amount > 0
      |
      | 3. pull CREDIT
      | CREDIT.safeTransferFrom(charlie, router, 1000)
      |
-     | 4. calcula split default = (7000, 2000, 1000)
-     |    burned = 700, toTreasury = 200, toApp = 100
+     | 4. fee del protocolo: feeBps = 250 (2,5%)
+     |    fee        = 1000 * 2,5%  = 25
+     |    toTreasury = 25 * 40%     = 10    (40% de la fee)
+     |    toBuyback  = 25 * 40%     = 10    (40% de la fee — buyback de GOV)
+     |    toGrants   = 25 - 10 - 10 = 5     (residuo -> grants)
      |
-     | 5. resuelve recipient = registry.getProject(42).owner
-     |    (o appRecipient[42] si esta seteado)
+     | 5. rev-share del proyecto
+     |    revShare = 1000 * funding.revShareBpsOf(42) = 1000 * 8% = 80
+     |    (0 si el proyecto nunca tuvo ronda Funded)
      |
-     | 6. paga rebate + porcion del treasury
-     | CREDIT.safeTransfer(recipient, 100)
-     | CREDIT.safeTransfer(treasury, 200)
+     | 6. resto para la app
+     |    toApp = 1000 - 25 - 80 = 895   (~89,5%; seria 975 = 97,5% sin rev-share)
      |
-     | 7. dispara burn
-     | CREDIT.forceApprove(burnTracker, 700)
-     | BurnTracker.burnAndRecord(42, router, 700)
-     |        |
-     |        | check: registry.isActive(42)
-     |        | check: acumulado + 700 <= sanityCap
-     |        |
-     |        | 8. actualiza storage del tracker
-     |        | burnByRoundProject[R][42] += 700
-     |        | totalBurnByRound[R]       += 700
-     |        | projectsWithBurnCount[R]  += 1 (se 1a vez)
-     |        |
-     |        | 9. quema
-     |        | CREDIT.burnByRole(router, 700, "burnTracker")
-     |        |        |
-     |        |        | _burn(router, 700) => totalSupply -= 700
-     |        |        v
-     |        +-------- BurnedByRole event
+     | 7. transferencias (misma tx):
+     | CREDIT.safeTransfer(treasuryRecipient, 10)
+     | CREDIT.safeTransfer(buybackRecipient, 10)
+     | CREDIT.safeTransfer(grantsRecipient, 5)
+     | CREDIT.safeTransfer(projectFunding, 80)
+     |        + funding.notifyRevenue(42, 80)   // acumula pro-rata a los inversores
+     | CREDIT.safeTransfer(appRecipient(42), 895)  // fallback: owner del Registry
      |
-     |  Paid event emitted
+     | 8. grossVolumeOf[42] += 1000   (metrica on-chain para inversores)
+     |
+     +-------- PaymentRouted(42, charlie, 1000, 10, 10, 5, 80, 895)
 ```
 
 **Efectos post-tx:**
 
-- Supply de CREDIT cayo en 700.
-- `appOwner.balance += 100` en CREDIT.
-- `treasury.balance += 200` en CREDIT.
-- `burnByRoundProject[R][42] += 700` on-chain.
-- Charlie `|=>` puede usar el servicio del ChatApp (logica del app, fuera del protocolo).
+- La app recibió 895 CREDIT **al instante** (no hay claim ni espera de ronda).
+- Los inversores de la ronda acumularon 80 CREDIT pro-rata (retirables vía `claim`).
+- El supply de CREDIT **no cambió** — nada se quema en un pago.
+- Charlie `|=>` puede usar el servicio del ChatApp (lógica de la app, fuera del protocolo).
 
-## Flujo 2 — Staker abre posicion en un proyecto
+## Flujo 3 — Staker abre posicion en un proyecto
 
-Actor: **Alice**, tiene 50.000 GOV y quiere stakear por 1 año en el `projectId = 42`.
+Actor: **Alice**, tiene 50.000 GOV y quiere stakear por 1 año en el `projectId = 42` — requisito para poder invertir en la ronda del proyecto.
 
 ```
 Alice.wallet
@@ -93,20 +112,9 @@ Staking.stake(projectId=42, amount=50_000 GOV, lockDuration=31_536_000)
      | 3. Si no existia posicion:
      |    positions[alice][42] = { amount=50_000, lockStartAt=now, lockDuration=365d }
      |
-     | 4. Actualiza agregados
-     | totalStakedByProject[42] += 50_000
-     | totalStaked              += 50_000
+     | 4. Actualiza agregados + checkpoints (peso = 50_000 * 4 = 200_000)
      |
-     | 5. Calcula peso
-     | weight = 50_000 * 4e18 / 1e18 = 200_000
-     |
-     | 6. Escribe 3 checkpoints en block.number
-     | _userWeight[alice][42].push(block.number, 200_000)
-     | _projectWeight[42].push(block.number, oldProjectW - 0 + 200_000)
-     | _globalWeightCheckpoints.push(block.number, oldGlobalW - 0 + 200_000)
-     |
-     | 7. Pull GOV
-     | GOV.safeTransferFrom(alice, staking, 50_000)
+     | 5. GOV.safeTransferFrom(alice, staking, 50_000)
      |
      +-------- Staked event emitted
 ```
@@ -114,60 +122,89 @@ Staking.stake(projectId=42, amount=50_000 GOV, lockDuration=31_536_000)
 **Efectos post-tx:**
 
 - Alice inmovilizo 50k GOV por 365 dias.
-- El peso total del `projectId=42` subio en 200k.
-- El peso global subio en 200k.
+- `staking.getWeight(alice, 42) > 0` |=> Alice **puede invertir** en la ronda del proyecto 42 y reclamar rev-share.
 - Alice no puede `unstake` hasta `now + 365 dias` (excepto si el proyecto pasa a `Removed`).
 
-## Flujo 3 — Staker reclama reward
+En el modelo vigente el stake **no genera emisión** — es señal de compromiso y llave de inversión.
 
-Actor: **Alice**, ya stakeo y la ronda `R=5` fue finalizada.
+## Flujo 4 — Dueño abre ronda y Alice invierte
+
+Actores: **el equipo de ChatApp** (dueño del proyecto 42) y **Alice** (staker del flujo 3).
 
 ```
+1. Dueño abre la ronda (una unica por proyecto):
+   ProjectFunding.openRound(42, target=10_000e18, revShareBps=800, duration=30 days)
+       |
+       | Check: REGISTRY.isActive(42) y msg.sender == owner
+       | Check: rounds[42].status == None      (nunca abrio antes)
+       | Check: 100 <= revShareBps <= 3000     (1% a 30%)
+       | Check: target >= minTarget (100e18 default)
+       | Check: 1 day <= duration <= 90 days
+       |
+       | rounds[42] = { target: 10_000, raised: 0,
+       |                deadline: now+30d, revShareBps: 800, status: Open }
+       +-- RoundOpened(42, 10_000e18, 800, deadline)
+
+2. Alice invierte (necesita GOV stakeado en el 42):
+   CREDIT.approve(funding, 4_000e18)
+   ProjectFunding.invest(42, 4_000e18)
+       |
+       | Check: status == Open && now <= deadline
+       | Check: staking.getWeight(alice, 42) > 0   // sin stake -> NoGovStaked
+       | Check: amount <= target - raised          // no puede pasar el alvo
+       |
+       | raised += 4_000 ; sharesOf[42][alice] += 4_000
+       | CREDIT.safeTransferFrom(alice, funding, 4_000)
+       +-- Invested(42, alice, 4_000, 4_000)
+
+3. Otros inversores completan el alvo (raised == target = 10_000):
+       |
+       | _fund(42):  status = Funded
+       | CREDIT.safeTransfer(chatAppOwner, 10_000)   // capital anticipado, integro
+       +-- RoundFunded(42, 10_000, chatAppOwner)
+
+   |=> revShareBpsOf(42) pasa a retornar 800 (8%)
+   |=> cada pago futuro via FeeRouterV2 descuenta 8% para los inversores
+
+   -- o, si el plazo vence sin alcanzar el alvo --
+
+3'. Cualquiera llama closeExpiredRound(42)  ->  status = Failed
+    Alice llama refund(42)                  ->  recupera sus 4_000 CREDIT (100%)
+```
+
+**All-or-nothing**: el dueño solo recibe si el alvo se alcanza al 100%; no existe captación parcial.
+
+## Flujo 5 — Inversor reclama receita (rev-share)
+
+Actor: **Alice**, invirtió 4.000 de los 10.000 CREDIT de la ronda (40% de las shares). Desde el `Funded`, ChatApp procesó 50.000 CREDIT en pagos.
+
+```
+Receita acumulada del proyecto: 50_000 * 8% = 4_000 CREDIT
+(acreditada pago a pago via notifyRevenue -> accRevenuePerShare)
+
 Alice.wallet
      |
      | (opcional: preview)
-     | rewardDistributorV2.previewClaim(alice, 5, 42) -> 156_750 CREDIT
+     | funding.pendingRevenue(42, alice) -> 1_600 CREDIT   (40% de 4_000)
      |
      | 1. claim
      v
-RewardDistributorV2.claim(round=5, projectId=42)
+ProjectFunding.claim(42)
      |
-     | Check: roundData[5].finalized = true
-     | Check: !claimed[5][42][alice]
+     | Check: staking.getWeight(alice, 42) > 0
+     |        // exige GOV AUN stakeado en el proyecto (skin in the game).
+     |        // Sin stake el valor NO se pierde: queda acumulado hasta re-stake.
      |
-     | 2. _calculateClaim
+     | 2. amount = sharesOf * accRevenuePerShare / 1e18 - rewardDebt = 1_600
+     | 3. actualiza rewardDebt (patron MasterChef)
+     | 4. CREDIT.safeTransfer(alice, 1_600)
      |
-     |    share = _projectStakerShare(5, 42):
-     |      - base = bucketEmissionByRound[5][STAKERS]
-     |             = 55% * totalEmission (902_500) = 496_375 CREDIT
-     |      - si totalBurnAtFinalize > 0:
-     |          burnDelProyecto = burnByRoundProject[4][42] = 600_000
-     |          totalBurn       = totalBurnByRound[4]       = 950_000
-     |          share = 496_375 * 600_000 / 950_000 = 313_500 CREDIT
-     |      - isInProbation(42)? (false - proyecto tiene > 30 dias de edad)
-     |    share = 313_500
-     |
-     |    userWeight    = staking.getWeightAt(alice, 42, snapshotBlock_5) = 200_000
-     |    projectWeight = staking.getTotalWeightAt(42, snapshotBlock_5)   = 400_000
-     |
-     |    amount = 313_500 * 200_000 / 400_000 = 156_750 CREDIT
-     |
-     | 3. claimed[5][42][alice] = true
-     |
-     | 4. Claimed event
-     |
-     | 5. CREDIT.mint(alice, 156_750, "rewardRoundV2:stakers")
-     |            |
-     |            | requiere MINTER_ROLE
-     |            | (RewardDistributorV2 lo tiene)
-     |            v
-     |    totalSupply += 156_750
-     |    balance[alice] += 156_750
-     v
-alice recibe 156_750 CREDIT
+     +-------- RevenueClaimed(42, alice, 1_600)
 ```
 
-## Flujo 4 — La DAO lista un proyecto nuevo
+El derecho de claim **nunca expira**. La receita es CREDIT ya transferido al contrato por el router — no hay mint.
+
+## Flujo 6 — La DAO lista un proyecto nuevo
 
 Actor: **El equipo de ChatApp** quiere listar `ChatApp` como `projectId` nuevo.
 
@@ -194,7 +231,6 @@ Actor: **El equipo de ChatApp** quiere listar `ChatApp` como `projectId` nuevo.
         |
         | Check: GOVERNANCE_ROLE (Timelock lo tiene)
         | Check: colateral >= minCollateral (10k)
-        | Check: allowance >= 10k
         |
         | projectId = 42 (_nextProjectId++)
         | graba proyecto como Pending
@@ -204,18 +240,17 @@ Actor: **El equipo de ChatApp** quiere listar `ChatApp` como `projectId` nuevo.
 
 7. Segunda propuesta (puede ir en la misma batch):
    registry.activateProject(42)
-   burnTracker.grantRole(RECORDER_ROLE, feeRouter)
-     (si FeeRouter aun no lo tiene; en v1 ya lo tiene desde el deploy)
 
 8. Tras aprobacion + delay:
    |=> projectId=42 queda Active
-   |=> probationEndsAt = now + 30 dias
-   |=> feeRouter.pay(42, ...) passa a funcionar
+   |=> feeRouterV2.pay(42, ...) pasa a funcionar
+   |=> el dueño puede abrir su ronda de captacion (openRound)
+   |=> (opcional) feeRouterV2.setAppRecipient(42, walletOperacional) — solo el owner
 ```
 
-A partir de ahi el ChatApp puede aceptar pagos. Durante los proximos 30 dias, su share de rewards se divide por 4 (probation inicial).
+En el modelo vigente no hay `RECORDER_ROLE` que conceder: el `FeeRouterV2` no quema ni registra burn — solo exige que el proyecto esté `Active`.
 
-## Flujo 5 — Unstake despues del lock
+## Flujo 7 — Unstake despues del lock
 
 Actor: **Alice**, stakeo 50k GOV con lock de 365 dias, ya pasaron 366 dias.
 
@@ -226,9 +261,7 @@ Alice.wallet
      v
 Staking.unstake(projectId=42, amount=50_000)
      |
-     | Check: amount > 0
-     | Check: positions[alice][42].amount > 0
-     | Check: amount <= position.amount
+     | Check: amount > 0 y <= position.amount
      |
      | 2. verifica lock
      | projectRemoved = REGISTRY.getProject(42).status == Removed  // false
@@ -237,78 +270,14 @@ Staking.unstake(projectId=42, amount=50_000)
      |     revert LockNotExpired
      | (aqui block.timestamp = lockStartAt + 366d, ya paso)
      |
-     | 3. Effects
-     | remaining = 50_000 - 50_000 = 0
-     | delete positions[alice][42]
-     | totalStakedByProject[42] -= 50_000
-     | totalStaked              -= 50_000
+     | 3. Effects: delete position, agregados y checkpoints a 0
      |
-     | 4. checkpoint con newUserWeight = 0
-     | _userWeight[alice][42].push(block.number, 0)
-     | _projectWeight[42].push(block.number, oldP - 200_000 + 0)
-     | _globalWeightCheckpoints.push(block.number, oldG - 200_000)
-     |
-     | 5. GOV.safeTransfer(alice, 50_000)
+     | 4. GOV.safeTransfer(alice, 50_000)
      v
-     +-------- Unstaked event (sin EarlyUnstakeAllowed porque lock expiro)
+     +-------- Unstaked event
 ```
 
-## Flujo 6 — La ronda cierra y es finalizada
-
-Actor: **la gobernanza** (via propuesta) y despues **cualquiera**.
-
-```
-Estado pre-close: BurnTracker.currentRound = 5, roundStartedAt = timestamp antiguo
-
-1. Propuesta aprobada:
-   BurnTracker.closeRound()
-       |
-       | only GOVERNANCE_ROLE (Timelock lo tiene)
-       |
-       | earlyClose = now < roundStartedAt + roundDuration?
-       | totalBurn = totalBurnByRound[5]
-       | projectsCount = projectsWithBurnCount[5]
-       |
-       | currentRound = 6
-       | roundStartedAt = now
-       v
-       +-- RoundClosed event
-
-Estado: BurnTracker.currentRound = 6.
-        Datos de R=5 siguen accesibles via views.
-
-2. Cualquiera (Alice, bot, etc) llama:
-   RewardDistributorV2.finalizeRound(5)
-       |
-       | Check: !roundData[5].finalized
-       | Check: expected = 5 (lastFinalizedRound + 1)
-       | Check: BurnTracker.currentRound() = 6 > 5
-       |
-       | totalBurnPrev = BurnTracker.getTotalBurnForRound(4) = 950_000
-       | alphaBurn = 950_000 * 0.95e18 / 1e18 = 902_500
-       | floorAmount = floorSchedule[5] = 316_666 (declinando)
-       | rawEmission = max(902_500, 316_666) = 902_500
-       | totalEmission = min(902_500, capMax=5_000_000) = 902_500
-       |
-       | split bucketBps = [5500, 2500, 1500, 500]:
-       |   stakers = 55% = 496_375  (lazy — minteado solo en el claim)
-       |   lps     = 25% = 225_625  (mint + notify en el LiquidityGauge;
-       |                             fallback Treasury si gauge paused)
-       |   apps    = 15% = 135_375  (mint directo p/ ownerRecipient(p),
-       |                             proporcional al burn de cada proyecto en R=4)
-       |   bonders =  5% =  45_125  (mint p/ Treasury + depositPolRefill)
-       |
-       | snapshotBlock = block.number
-       |
-       | roundData[5] = { 902_500, 950_000, snapshotBlock, true }
-       | bucketEmissionByRound[5][0..3] grabado
-       | lastFinalizedRound = 5
-       | isFirstRoundFinalized = true
-       v
-       +-- RoundFinalized event
-
-Estado: stakers pueden ahora llamar claim(5, projectId).
-```
+**Atención**: tras el unstake, `getWeight(alice, 42) == 0` — Alice pierde el gate de `claim` en `ProjectFunding`. Su receita pendiente **no se pierde**: queda acumulada y vuelve a ser reclamable si re-stakea en el proyecto. Lo prudente es `claim` **antes** de `unstake`.
 
 ---
 

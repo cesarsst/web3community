@@ -1,5 +1,7 @@
 # RewardDistributor (V1)
 
+> ⚠️ **LEGADO — sustituido por el remodel 2026-07-08.** El protocolo ya no emite rewards: la renta del inversor viene de rev-share sobre receita real vía [ProjectFunding](16-ProjectFunding.md) + [FeeRouterV2](08b-FeeRouterV2.md). Este contrato solo atiende claims históricos pre-remodel. Esta página se mantiene como referencia.
+
 **Para quién es:** stakers consultando preview de rewards V1 aún no reclamados, auditores, devs integrando UIs de reward.
 **Prerrequisitos:** [Burn-to-mint](../02-core-concepts/03-burn-to-mint.md), [Distribución de rewards](../02-core-concepts/04-rewards-distribution.md), [RewardDistributorV2](07b-RewardDistributorV2.md).
 

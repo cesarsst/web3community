@@ -5,9 +5,9 @@
 
 ## Visión rápida
 
-Token ERC-20 utilitario, quemado en el consumo dentro de los apps. Supply elástico sin cap hardcodeado — la inflación es controlada económicamente por quien tiene `MINTER_ROLE` (el `RewardDistributor` V1 y/o el `RewardDistributorV2` del CLP), que aplica la fórmula `min(max(alpha*burn, floor), capMax)` por ronda.
+Token ERC-20 de pago del protocolo. **Desde el remodel 2026-07-08 es estable 1:1 con USDC**: el minter/burner operacional es el [`CreditPSM`](15-CreditPSM.md) — `buy` mintea contra USDC depositado, `sell` quema y libera el respaldo. Supply elástico sin cap hardcodeado, que sigue la demanda de saldos de pago.
 
-Quema en tres caminos: `burn` (self), `burnFrom` (con allowance), `burnByRole` (sin allowance, role-gated). El camino `burnByRole` existe para habilitar burn atómico por el `BurnTracker` (consumo en apps) y por el `Treasury` (FFP buyback — el CREDIT comprado se quema inmediatamente), sin exigir approve previo.
+Quema en tres caminos: `burn` (self), `burnFrom` (con allowance), `burnByRole` (sin allowance, role-gated). En el modelo vigente, `burnByRole` lo usa el `CreditPSM` sobre su **propio** saldo en `sell`. *(Legado: `BurnTracker` — burn en pagos — y `Treasury` — FFP buyback; los `RewardDistributor` aplicaban la fórmula `min(max(alpha*burn, floor), capMax)` como minters.)*
 
 ## Herencia
 
@@ -36,8 +36,8 @@ Sin cap hardcodeado.
 | Role | En producción concedido a |
 |---|---|
 | `DEFAULT_ADMIN_ROLE` | `CommunityTimelock` (tras handoff) |
-| `MINTER_ROLE` | `RewardDistributor` (V1) y/o `RewardDistributorV2` (Fase 1.4); durante una migración V1→V2, ambos pueden tener la role transitoriamente |
-| `BURNER_ROLE` | `BurnTracker` (consumo en apps vía `burnAndRecord`) **y** `Treasury` (FFP buyback — `burnByRole(this, creditOut, "treasury:buyback")`) |
+| `MINTER_ROLE` | **`CreditPSM`** (vigente — mint 1:1 en `buy`); legado: `RewardDistributor` V1/V2 (claims históricos, revocables por la gobernanza) |
+| `BURNER_ROLE` | **`CreditPSM`** (vigente — burn del saldo propio en `sell`); legado: `BurnTracker` (burn en pagos) y `Treasury` (FFP buyback) |
 
 ## Funciones externas
 

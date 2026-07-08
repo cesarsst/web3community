@@ -25,9 +25,9 @@ Puedes combinar las tres. Muchos stakers también son usuarios y votantes.
 
 1. En la UI de la app, descubre el precio del servicio en CREDIT.
 2. Haces clic en "pagar" — la app te dirige a firmar:
-   - `CREDIT.approve(feeRouter, amount)` (una única vez — aprueba el gasto).
-   - `FeeRouter.pay(projectId, you, amount)` (efectiviza el pago).
-3. Recibes el servicio de la app. Por el split default (70/20/10): 70% del valor pagado fue quemado, 20% fue al Treasury y 10% fue a la app.
+   - `CREDIT.approve(feeRouterV2, amount)` (una única vez — aprueba el gasto).
+   - `FeeRouterV2.pay(projectId, amount)` (efectiviza el pago; el payer eres tú, `msg.sender`).
+3. Recibes el servicio de la app. Del valor pagado: 2,5% es la fee del protocolo (40% treasury / 40% buyback de GOV / 20% grants), el rev-share (si el proyecto tiene ronda financiada) va a los inversores y el resto (~89,5–97,5%) va a la app al instante. Nada se quema.
 
 **Lo que no es necesario:**
 
@@ -111,7 +111,7 @@ Valores aproximados en gas — el costo en ETH depende de la red y del precio de
 
 **¿La DAO puede confiscar mi GOV stakeado?** No. El lock protege incluso contra la propia gobernanza. Mientras el lock está vigente, ni una propuesta aprobada destraba tu stake (excepto si el proyecto es removido — ahí el destrabe es a favor tuyo, no en contra).
 
-**¿Y si el protocolo muere?** Si el uso cae a casi cero, la emisión colapsa, el APR va a casi cero, los stakers tienden a salir. La DAO puede intervenir (ajustar α, abrir subsidio vía Treasury, contratar nuevas apps). Pero el tokenomics no salva a un producto malo.
+**¿Y si el protocolo muere?** Si el uso cae a casi cero, el GMV colapsa, el rev-share y el buyback van a cero, los inversores dejan de recibir. Tu CREDIT sigue redimible 1:1 contra el respaldo del PSM. La DAO puede intervenir (subsidios vía Treasury, grants, nuevas apps). Pero el tokenomics no salva a un producto malo.
 
 ---
 

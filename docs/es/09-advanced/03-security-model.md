@@ -3,7 +3,17 @@
 **Audiencia:** auditores, seguridad ofensiva, investigadores.
 **Requisitos previos:** conocimiento general de la arquitectura.
 
-Este documento consolida invariantes, superficies de ataque identificadas y mitigaciones implementadas en los 12 contratos.
+Este documento consolida invariantes, superficies de ataque identificadas y mitigaciones implementadas en los contratos.
+
+> **⚠️ Actualización — remodel 2026-07-08.** Las invariantes económicas de emisión/burn de abajo (IE1, caps de emisión, sanity cap, "todo pago quema") pertenecen al modelo legado. Invariantes del núcleo vigente:
+>
+> - **I-PSM1 (respaldo integral)**: `USDC.balanceOf(CreditPSM) >= mintedOutstanding` (normalizado). No existe función de retiro del respaldo — ni para la gobernanza.
+> - **I-PSM2 (conversión exacta)**: `buy` = `usdc × 1e12`; `sell` exige múltiplo de `1e12` (el polvo revierte, no se confisca).
+> - **Techo duro de la fee**: `FeeRouterV2.feeBps <= FEE_BPS_CAP = 500` (constante).
+> - **Conservación en `pay`**: `toTreasury + toBuyback + toGrants + revShare + toApp == amount`.
+> - **All-or-nothing**: `ProjectFunding` solo paga al dueño con `raised == target`; `ExceedsTarget` impide sobrepasar el alvo; refund integral en rondas `Failed`.
+> - **Gate de GOV**: `invest`/`claim` exigen `Staking.getWeight(caller, projectId) > 0`; el lock mínimo de 14 días hace el gate incompatible con flash-loans.
+> - **Transfer-then-notify**: `notifyRevenue` (solo `REVENUE_NOTIFIER_ROLE` = FeeRouterV2) contabiliza CREDIT ya transferido — nunca promete fondos ausentes.
 
 ## Invariantes globales
 

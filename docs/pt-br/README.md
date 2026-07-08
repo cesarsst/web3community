@@ -67,7 +67,8 @@ Vá direto a [`08-contracts-reference/`](08-contracts-reference/). Um arquivo po
 
 ## Status do protocolo
 
-- 15 contratos em produção (veja [08-contracts-reference](08-contracts-reference/)).
+- **Remodel 2026-07-08 ativo**: trilho de pagamento + funding por rev-share ([CreditPSM](08-contracts-reference/15-CreditPSM.md), [FeeRouterV2](08-contracts-reference/08b-FeeRouterV2.md), [ProjectFunding](08-contracts-reference/16-ProjectFunding.md)). O ciclo burn-to-mint (FeeRouter V1, BurnTracker, RewardDistributor V1/V2, LiquidityGauge) é legado, mantido deployado por compatibilidade histórica.
+- 18 contratos (veja [08-contracts-reference](08-contracts-reference/)).
 - Solidity 0.8.24 com `viaIR` ativado.
 - OpenZeppelin Contracts 5.0.2 pinado.
 - Pronto para deploy Sepolia pós-auditoria externa.

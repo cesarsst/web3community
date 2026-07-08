@@ -1,11 +1,15 @@
 # Distribuição de rewards
 
-**Para quem é:** stakers, LPs, owners de apps e devs querendo entender exatamente como o pool de uma rodada vira claim/incentive.
+> ⚠️ **LEGADO — página inteira.** A distribuição por emissão (buckets 55/25/15/5 do `RewardDistributorV2`) foi **substituída no remodel 2026-07-08**. Os contratos seguem deployados para claims históricos, mas não há mais emissão nova: sem burn no trilho de pagamento (o [FeeRouterV2](../08-contracts-reference/08b-FeeRouterV2.md) não queima), a fórmula α·burn não produz emissão.
+>
+> **A ponte para o modelo vigente**: a renda do investidor deixou de ser CREDIT emitido (inflação) e passou a ser **rev-share de receita real** — quem tem GOV stakeado num projeto pode investir CREDIT na rodada dele no [ProjectFunding](../08-contracts-reference/16-ProjectFunding.md) (rev-share 1–30% da receita bruta, prazo 1–90 dias, all-or-nothing) e recebe pro-rata a cada pagamento roteado pelo FeeRouterV2. Claims nunca expiram. Comece por [Fluxo de valor](../03-protocol-overview/03-economic-flows.md) e [Sacando rev-share](../04-for-users/05-claiming-rewards.md).
+
+**Para quem é:** stakers, LPs, owners de apps e devs querendo entender exatamente como o pool de uma rodada virava claim/incentive no modelo antigo.
 **Pré-requisitos:** [Directed staking](02-directed-staking.md), [Burn-to-mint](03-burn-to-mint.md).
 
-## Onde estamos: V1 (legado) → V2 (bucket-aware split)
+## Onde estávamos: V1 → V2 (bucket-aware split)
 
-Esta página descreve o modelo **V2** (Fase 1.4 do pivot CLP), que está em produção a partir de abril/2026. O modelo V1 (pré-pivot) continua funcionando em modo claim-only durante uma janela de migração de 4 rounds — para detalhes ver [RewardDistributor (V1)](../08-contracts-reference/07-RewardDistributor.md). O pré-requisito da Fase 1.4 no lado dos fees está satisfeito: o split default do `FeeRouter` em produção é **`70/20/10`** (`burnBps=7000, treasuryBps=2000, rebateBps=1000` em `ignition/parameters/production.json`), dando ao Treasury receita recorrente em CREDIT.
+Esta página descreve o modelo **V2** (Fase 1.4 do pivot CLP), que esteve em produção a partir de abril/2026 até o remodel de 2026-07-08. O modelo V1 (pré-pivot) continua funcionando em modo claim-only durante uma janela de migração de 4 rounds — para detalhes ver [RewardDistributor (V1)](../08-contracts-reference/07-RewardDistributor.md). O pré-requisito da Fase 1.4 no lado dos fees estava satisfeito: o split default do `FeeRouter` V1 em produção era **`70/20/10`** (`burnBps=7000, treasuryBps=2000, rebateBps=1000` em `ignition/parameters/production.json`), dando ao Treasury receita recorrente em CREDIT.
 
 O V2 reescreve a finalização de rodada para **dividir a emissão em 4 buckets** simultâneos:
 

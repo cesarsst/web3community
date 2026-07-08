@@ -1,5 +1,7 @@
 # BurnTracker
 
+> ⚠️ **LEGACY** — superseded by the 2026-07-08 remodel (see [CreditPSM](15-CreditPSM.md), [FeeRouterV2](08b-FeeRouterV2.md) and [ProjectFunding](16-ProjectFunding.md)). Kept deployed for historical compatibility.
+
 **Audience:** devs of listed apps (granted `RECORDER_ROLE`), auditors.
 **Prerequisites:** [Burn-to-mint](../02-core-concepts/03-burn-to-mint.md).
 

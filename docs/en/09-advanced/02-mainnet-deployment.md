@@ -1,5 +1,7 @@
 # Mainnet deployment
 
+> ⚠️ **Legacy note (2026-07-08 remodel)**: this procedure covers the core module deploy and cites old-rail parameters (alpha, 70/20/10 split, BurnTracker/RewardDistributor roles) **as current** — treat them as legacy. The current rail's deploy (CreditPSM, FeeRouterV2, ProjectFunding — today via `scripts/deploy-remodel.ts`) still needs to be incorporated into the mainnet procedure. Additional pre-mainnet blockers: external audit **and the rev-share legal opinion** (see [Risks](../06-for-investors/03-risk-and-security.md)).
+
 **Audience:** technical team doing deploy on a public network.
 **Prerequisites:** familiarity with Hardhat + Ignition.
 

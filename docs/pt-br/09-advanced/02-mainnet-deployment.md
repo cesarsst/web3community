@@ -1,5 +1,7 @@
 # Mainnet deployment
 
+> ⚠️ **Nota de legado (remodel 2026-07-08)**: este procedimento cobre o deploy do módulo core e cita parâmetros do trilho antigo (alpha, split 70/20/10, roles do BurnTracker/RewardDistributor) **como vigentes** — trate-os como legado. O deploy do trilho vigente (CreditPSM, FeeRouterV2, ProjectFunding — hoje via `scripts/deploy-remodel.ts`) ainda precisa ser incorporado ao procedimento de mainnet. Bloqueadores pré-mainnet adicionais: auditoria externa **e parecer jurídico do rev-share** (ver [Riscos](../06-for-investors/03-risk-and-security.md)).
+
 **Para quem é:** equipe técnica fazendo deploy em rede pública.
 **Pré-requisitos:** familiaridade com Hardhat + Ignition.
 

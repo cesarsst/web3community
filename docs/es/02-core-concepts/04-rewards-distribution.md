@@ -1,6 +1,8 @@
 # Distribución de rewards
 
-**Para quién es:** stakers, LPs, owners de apps y devs que quieren entender exactamente cómo el pool de una ronda se vuelve claim/incentive.
+> ⚠️ **LEGADO — sustituido por el remodel 2026-07-08.** No hay más emisión de rewards por ronda: la renta del inversor viene de rev-share sobre receita real vía [ProjectFunding](../08-contracts-reference/16-ProjectFunding.md) + [FeeRouterV2](../08-contracts-reference/08b-FeeRouterV2.md). Los claims de rondas pre-remodel siguen retirables (no expiran). Esta página se mantiene como referencia histórica.
+
+**Para quién es:** stakers, LPs, owners de apps y devs que quieren entender exactamente cómo el pool de una ronda se volvía claim/incentive.
 **Prerrequisitos:** [Directed staking](02-directed-staking.md), [Burn-to-mint](03-burn-to-mint.md).
 
 ## Dónde estamos: V1 (legado) -> V2 (bucket-aware split)

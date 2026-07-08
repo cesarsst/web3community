@@ -3,6 +3,8 @@
 **Audience:** anyone who wants to understand the protocol's cash flow.
 **Prerequisites:** [Dual-token](01-dual-token-economy.md), [Governance](05-governance.md).
 
+> **Remodel 2026-07-08**: the current payment interface is [FeeRouterV2](../08-contracts-reference/08b-FeeRouterV2.md) — a **2.5%** fee (250 bps; hard cap 500) split **40% treasury / 40% GOV buyback / 20% grants**. FeeRouter V1 (burn split) and the Treasury's CLP loops (FFP buyback, POL, buckets) are **legacy**. And note: the USDC backing of the [CreditPSM](../08-contracts-reference/15-CreditPSM.md) is **segregated** — it is not Treasury cash.
+
 ## The DAO's vault
 
 `Treasury` is the central multi-asset vault. Three foundational properties:
@@ -11,24 +13,19 @@
 2. **Releases only via governance**. Every outflow function requires `GOVERNANCE_ROLE`.
 3. **No pause**. Deliberately no function to freeze outflows. Any unilateral power to freeze the treasury would be a capture vector.
 
-From the CLP pivot (Phase 1, April/2026) onwards, the Treasury also performs four additional economic functions:
+The Treasury receives (current model):
 
-| Function | CLP phase | Summary |
-|---|---|---|
-| **FFP buyback** | 1.1 | Real USDC -> CREDIT swap + immediate burn, defending the floor |
-| **POL** | 1.2 | Protocol-owned liquidity in the CREDIT/USDC pool (custodied NFT, full range) |
-| **Bonders bucket** | 1.4 | Receives 5% of per-round emission as the `polRefillBucket` ledger |
-| **Gauge fallback** | 1.4 | Accumulates the LPs bucket in `pendingGaugeRewards` while gauge is paused |
-
-The Treasury receives:
-
-- **Genesis CREDIT mint** (10M in production). Sole "programmatic" initial input.
-- **`treasuryBps` slice** of the FeeRouter's split (default 0; CLP recommendation: raise to `(7000, 2000, 1000)` to fund USDC for POL refill).
-- **Slash collateral** of removed projects.
+- **40% of the FeeRouterV2 fee** (= 1.0% of GMV) on every payment — recurring revenue in CREDIT, proportional to real usage. This is the main operational source.
+- **Genesis CREDIT mint** (10M in production — deploy parameter `genesisAmount`). Sole "programmatic" initial input.
+- **Slash collateral** of projects removed with `slash == true`.
 - **Returned subsidies** from `UserSubsidy.closeCampaign` campaigns.
-- **Bonders bucket** from `RewardDistributorV2` (5% of per-round emission — `polRefillBucket` ledger).
-- **LPs bucket** when gauge paused (`pendingGaugeRewards` ledger).
 - **Any donation** the DAO chooses to accept.
+
+### What the Treasury does NOT have: the PSM backing
+
+The USDC backing CREDIT is **held in the [CreditPSM](../08-contracts-reference/15-CreditPSM.md)**, segregated from the Treasury. There is no function to move it — not even via governance proposal. The DAO spends from the fee (2.5% of flow), never from the backing (invariant I-PSM1). This is deliberate: the user's 1:1 redemption right cannot depend on the DAO's budget discipline.
+
+> **Legacy — the Treasury's CLP functions.** From the CLP pivot (Phase 1, April/2026), the Treasury also performed FFP buyback (USDC -> CREDIT swap + burn, floor defence), POL (own CREDIT/USDC liquidity), the bonders bucket (`polRefillBucket`, 5% of emission), and the gauge fallback (`pendingGaugeRewards`). With CREDIT stable via the PSM, floor defence and pool liquidity are no longer needed — those functions remain in the code, described at the end of this page as legacy.
 
 ## What the DAO does with the Treasury
 
@@ -37,130 +34,80 @@ Typical operations, all via proposal:
 - **Pay rebates to apps** (`payRebates(token, apps[], amounts[], round)`).
 - **Sponsor `UserSubsidy` campaigns** — transfer CREDIT before `createCampaign`.
 - **Fund `TeamVesting`** — transfer GOV to a beneficiary's vesting.
-- **Execute FFP buyback** — `executeBuyback(usdcAmount, minCreditOut)` swap USDC -> CREDIT + immediate burn (Phase 1.1).
-- **Add POL** — `addPOL(creditAmount, usdcAmount, ...)` provisions liquidity in the CREDIT/USDC pair (Phase 1.2).
-- **Refill POL with bonders bucket** — `addPOLFromRefill(creditAmount, usdcAmount, ...)` matches CREDIT from the ledger with USDC from the free balance.
-- **Drain gauge fallback** — `flushPendingGaugeRewards(duration)` ships the accumulated ledger back to the gauge after unpause.
 - **Fund off-chain operations** — `transfer` to an operational multisig.
+- **(CLP legacy)** FFP buyback, POL, POL refill and gauge flush — see the legacy section at the end.
 
-## Fees — the FeeRouter
+## Fees — the FeeRouterV2
 
-**Sole** payment interface between users and apps. Main function:
-
-```solidity
-function pay(uint256 projectId, address user, uint256 amount)
-    external returns (uint256 burned, uint256 toTreasury, uint256 toApp);
-```
-
-The `user` must have called `approve(feeRouter, amount)` on CREDIT **before**. `msg.sender` is whoever initiates the tx — could be the user themselves, the app, a relayer, a smart wallet.
-
-## Default split — 95 / 0 / 5
-
-In production (`ignition/parameters/production.json`):
-
-```
-burnBps     = 9500   (95% burned via BurnTracker)
-treasuryBps = 0      (nothing to Treasury by default)
-rebateBps   = 500    (5% to the appRecipient)
-```
-
-Sum must be exactly 10_000 (`_BPS_DENOMINATOR`). Different splits are rejected with `InvalidSplit`.
-
-Design decision: 0% to treasury by default **so the burn incentive is not eroded**. The Treasury earns revenue through other paths (already-minted genesis, slash, donations, managed buyback). If at some point the DAO wants to capture a direct slice, just propose `setDefaultSplit({burnBps: 9000, treasuryBps: 500, rebateBps: 500})` — the architecture allows it.
-
-### Structural consequence — Treasury without recurring revenue by default
-
-With `treasuryBps = 0` in production, the Treasury **does not accumulate automatic operational revenue**. The recurring split inputs are zero — only:
-
-- Slash of collateral from `removeProject(slash = true)` (eventual).
-- Leftovers of `UserSubsidy.closeCampaign` campaigns (eventual).
-- External donations and direct ETH.
-- Bonders bucket and gauge fallback (Phase 1.4) — those **accumulate in separate ledgers** (`polRefillBucket` and `pendingGaugeRewards`), not in the free balance. The bonders bucket is earmarked for POL refill; only that.
-
-**For Phase 1.4 (CLP) to operate fully — i.e., for `addPOLFromRefill` to have USDC to match the CREDIT in the bonders bucket —, the Treasury needs USDC to flow in recurrently.** The only structural source for that is to raise `treasuryBps > 0` in `FeeRouter`. The parecer's operational recommendation is `(7000, 2000, 1000)` (70% burn / 20% treasury / 10% rebate), which:
-
-- Reduces burn from 95% to 70% — more CREDIT in circulation.
-- Routes 20% to the Treasury in USDC/CREDIT (depending on payer and form).
-- Keeps 10% rebate for apps.
-
-That decision belongs to the DAO via `setDefaultSplit`. Without it, the bonders bucket keeps accumulating CREDIT in the ledger without governance being able to drain it (USDC would be missing).
-
-## Per-project override
-
-Some projects can negotiate different splits via proposal:
+**Sole** payment interface between users and apps in the current model. Main function:
 
 ```solidity
-feeRouter.setProjectSplit(projectId, Split({burnBps, treasuryBps, rebateBps}));
+function pay(uint256 projectId, uint256 amount) external;
 ```
 
-The flag `hasProjectSplit[projectId]` signals an active override. `clearProjectSplit` removes.
+The payer is `msg.sender` and must have called `approve(feeRouterV2, amount)` on CREDIT **before**. Requires an Active project in the Registry. Fully atomic, order: fee → rev-share → app.
 
-Typical use: a high-volume app willing to accept a higher effective fee (because it has another revenue source) can negotiate `8000/1500/500` (15% treasury), funding the vault more aggressively.
+## Fee — 2.5%, split 40 / 40 / 20
 
-## Rebate recipient
+Deploy default: `feeBps = 250` (2.5% of the payment), with a **hard cap `FEE_BPS_CAP = 500`** (5%) — not even governance can exceed it. The fee is split internally (`feeSplit`, must sum to 10,000 bps):
 
-By default, the rebate goes to `ProjectRegistry.getProject(projectId).owner`. If the owner transfers the project, the destination switches automatically — **dynamic lookup**.
+```
+fee = amount * 250 / 10000        (2.5% of the payment)
+  40% -> treasuryRecipient   (= 1.0% of GMV)
+  40% -> buybackRecipient    (= 1.0% of GMV, continuous GOV buyback)
+  20% -> grantsRecipient     (= 0.5% of GMV, ecosystem grants)
+```
 
-The current owner can set an explicit address via:
+After the fee, the project's **rev-share** is deducted (`ProjectFunding.revShareBpsOf`; 0 if the project never raised a round) and the rest goes **immediately** to the `appRecipient`: **97.5%** without a round, **~89.5%** with an 8% rev-share. Compare: Stripe ~3.8%, app stores 15-30% — while the old model gave the app only a nominal 10%.
+
+In the dev MVP the three recipients all point to the Treasury; the `PaymentRouted` events carry the per-portion breakdown regardless — `grossVolumeOf` and `PaymentRouted` are the on-chain volume metrics.
+
+## App recipient
+
+By default, `toApp` goes to `ProjectRegistry.getProject(projectId).owner` — **dynamic lookup**. The current owner can set an explicit address via:
 
 ```solidity
-feeRouter.setAppRecipient(projectId, recipient);
+feeRouterV2.setAppRecipient(projectId, recipient);
 ```
-
-Useful when the owner is a multisig and the rebate should land in a separate operational wallet. Passing `address(0)` resets to dynamic lookup.
 
 **Not governance-gated** — owner-gated. Operational cash rotation does not need a proposal.
 
 ## Dust handling
 
-In splits with non-exact division:
-
-```
-burned     = amount * burnBps / 10_000
-toTreasury = amount * treasuryBps / 10_000
-toApp      = amount - burned - toTreasury   <- residue lands here
-```
-
-Instead of rounding each portion separately (losing wei), `toApp` captures the residue. Consequence: the app may receive 1-2 wei more than the nominal calculation. Acceptable and auditable.
+Inside the fee, the rounding residue of the split goes to grants. Globally, conservation holds: `toApp + fee + revShare == amount` on every `pay` — nothing evaporates, nothing is burned.
 
 ## Full payment flow
 
 ```
-user has 1000 CREDIT                FeeRouter
-user calls approve(feeRouter, 1000) --- allowance OK
-user calls pay(projectId, user, 1000)
+user has 1000 CREDIT                    FeeRouterV2
+user calls approve(feeRouterV2, 1000) --- allowance OK
+user calls pay(42, 1000)
                                       |
                                       v
-                      Check: projectId is Active
-                      Check: user != 0, amount > 0
+                      Check: project 42 is Active
+                      Check: amount > 0
                                       |
                                       v
                       transferFrom(user, this, 1000)
-                      FeeRouter holds 1000 CREDIT
                                       |
-                                      | split = 9500/0/500
+                                      | fee 2.5% + rev-share 8% (Funded round)
                                       v
-                        burned = 950, toTreasury = 0, toApp = 50
+                 fee = 25, revShare = 80, toApp = 895
                                       |
-          +---------------------------+----------------------------+
-          |                           |                            |
-          v                           v                            v
-   approve(tracker, 950)       (no Treasury transfer        transfer(appRecipient, 50)
-   tracker.burnAndRecord       in this split)
-                                                              appRecipient is
-                                                              projectOwner by default
+          +----------+----------+-----+--------------+
+          |          |          |                    |
+          v          v          v                    v
+    treasury 10  buyback 10  grants 5      ProjectFunding 80        appRecipient 895
+    (40% fee)    (40% fee)   (20% fee)     + notifyRevenue          (immediate, ~89.5%;
+                                           (pro-rata investors)      97.5% without round)
                                       |
-   tracker calls                      |
-   credit.burnByRole(router, 950)    |
-                                      |
-   CREDIT.totalSupply -= 950          |
-   burnByRoundProject[R][pid] += 950  |
-   totalBurnByRound[R] += 950         |
-                                      v
-                              Paid event emitted
+                       grossVolumeOf[42] += 1000
+                       PaymentRouted event emitted
 ```
 
-After the tx: **FeeRouter holds 0 CREDIT**. It never custodies between calls. Each `pay` is atomic.
+After the tx: **FeeRouterV2 holds 0 CREDIT**. It never custodies between calls. Each `pay` is atomic.
+
+> **Legacy — FeeRouter V1 (70/20/10 split)**: in the pre-remodel model, `FeeRouter.pay(projectId, user, amount)` burned 70% via BurnTracker, sent 20% to the Treasury and a 10% rebate to the app, with per-project overrides (`setProjectSplit`). The contract remains deployed, but the current rail is V2. See [FeeRouter V1](../08-contracts-reference/08-FeeRouter.md).
 
 ## ETH outflows
 
@@ -168,7 +115,9 @@ The Treasury accepts ETH via `receive` and can withdraw via `sweepETH(to, amount
 
 The use is **courtesy** — the protocol operates primarily in ERC-20 (CREDIT, GOV, stables). ETH is accepted not to leave donations stuck but isn't the main flow.
 
-## Buyback — real FFP (Phase 1.1)
+> ⚠️ **LEGACY from here to "Summary"** — the following sections (FFP buyback, POL, bonders bucket, gauge fallback) belong to the pre-remodel CLP pivot. With CREDIT stable 1:1 via the PSM, floor defence and pool liquidity are no longer needed. The code remains deployed.
+
+## Buyback — real FFP (Phase 1.1, legacy)
 
 From the CLP pivot onwards, `executeBuyback(uint256 usdcAmount, uint256 minCreditOut)` **executes a real swap** USDC -> CREDIT via Uniswap V3 + immediate burn. Floor price defence under the Floating-with-Floor-Price (FFP) model. Details in [Treasury](../08-contracts-reference/04-Treasury.md).
 
@@ -251,15 +200,14 @@ Treasury.flushPendingGaugeRewards (Timelock executes)
 
 | Component | Function | Gatekeeping |
 |---|---|---|
-| Treasury | Multi-asset custody | `GOVERNANCE_ROLE` on outflows |
-| FeeRouter | Payment interface | `GOVERNANCE_ROLE` on setters, public on `pay` |
-| Default split | 95% burn / 0% treasury / 5% rebate (CLP recommendation: `(7000, 2000, 1000)`) | Adjustable by proposal |
-| Per-project split | Override via `setProjectSplit` | `GOVERNANCE_ROLE` |
-| Rebate recipient | Project owner (dynamic) or explicit | Project owner (setter) |
-| FFP buyback | Real (Phase 1.1) — USDC->CREDIT swap + burn | `GOVERNANCE_ROLE` |
-| POL | Own CREDIT/USDC liquidity, full range | `GOVERNANCE_ROLE` |
-| Bonders bucket | 5% emission -> POL refill ledger | `POL_REFILL_DEPOSITOR_ROLE` (V2) |
-| Gauge fallback | Paused ledger -> manual flush | `GAUGE_FALLBACK_DEPOSITOR_ROLE` (V2) + governance |
+| Treasury | Multi-asset custody; receives 40% of the fee (1% of GMV) | `GOVERNANCE_ROLE` on outflows |
+| FeeRouterV2 | Current payment interface (`pay(projectId, amount)`) | `GOVERNANCE_ROLE` on setters, public on `pay` |
+| Fee | 2.5% (250 bps; hard cap 500) | `setFeeBps` by proposal, up to the cap |
+| Fee split | 40% treasury / 40% GOV buyback / 20% grants (`4000/4000/2000`) | `setFeeSplit` by proposal (sum = 10,000) |
+| Fee recipients | `treasuryRecipient` / `buybackRecipient` / `grantsRecipient` | `setRecipients` by proposal |
+| App recipient | Project owner (dynamic) or explicit | Project owner (setter) |
+| PSM backing | USDC segregated in the CreditPSM — **out of the Treasury's reach** | No withdrawal possible (immutable) |
+| FeeRouter V1, FFP buyback, POL, buckets | **CLP legacy** — code deployed, rail deactivated | `GOVERNANCE_ROLE` |
 
 ---
 

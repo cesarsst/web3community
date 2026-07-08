@@ -1,21 +1,23 @@
 # Staking em projetos
 
-**Para quem é:** quem já tem GOV e quer receber CREDIT como reward.
+**Para quem é:** quem já tem GOV e quer apoiar projetos — e destravar o direito de investir nas rodadas deles.
 **Pré-requisitos:** [Directed staking (conceito)](../02-core-concepts/02-directed-staking.md), [Ter GOV](02-holding-gov.md).
+
+> **Remodel 2026-07-08**: stakar GOV **não rende mais emissão de CREDIT**. O stake é curadoria + **gate de investimento**: só quem tem GOV stakeado no projeto pode investir CREDIT na rodada dele no [ProjectFunding](../08-contracts-reference/16-ProjectFunding.md) e sacar rev-share da receita real.
 
 ## O mental model em 3 linhas
 
 1. Você escolhe **um** projeto (`projectId`).
 2. Você trava GOV por **14 a 365+ dias** — multiplier 1x a 4x.
-3. Rodadas depois, você reivindica CREDIT proporcional ao burn que aquele projeto gerou × o quanto seu peso pesa dentro do projeto.
+3. Com o stake ativo, você pode **investir CREDIT na rodada do projeto** e receber % da receita bruta dele a cada pagamento (rev-share, pro-rata ao investido).
 
 ## Escolhendo um projeto
 
 Antes de stakar, verifique no Registry:
 
 - Status = `Active` (projetos `Pending`/`Probation`/`Removed` bloqueiam stake novo).
-- Idade do projeto (se está em probation inicial por tempo, share é /4).
-- Burn histórico nas últimas rodadas (sinal de tração real).
+- GMV histórico on-chain (`FeeRouterV2.grossVolumeOf`) — sinal de tração real.
+- A rodada de funding, se houver: alvo, rev-share (1-30%), prazo, quanto já captou.
 
 Ferramentas (via UI do hub):
 
@@ -23,10 +25,13 @@ Ferramentas (via UI do hub):
 // status
 registry.getProject(projectId);            // struct completa
 registry.isActive(projectId);              // bool
-registry.isInProbation(projectId);         // probation inicial por tempo
 
-// burn historico
-burnTracker.getBurnForProjectInRound(round, projectId);
+// tracao real
+feeRouterV2.grossVolumeOf(projectId);      // GMV acumulado
+funding.totalRevenueDistributed(projectId);// receita ja paga a investidores
+
+// rodada de funding
+funding.rounds(projectId);                 // alvo, captado, prazo, revShareBps, status
 
 // concorrencia
 staking.getTotalWeight(projectId);         // quanto peso ja tem no projeto
@@ -58,10 +63,11 @@ Função em `Staking._multiplier`:
 
 **Regras de bolso:**
 
-- Menor lock possível (14d, 1x): só vale se você tem certeza que vai sair cedo. APR efetivo baixo.
-- Lock médio (90-180d, 1.6x–2.4x): flexibilidade vs peso, bom padrão.
+- Para o **gate de investimento** do ProjectFunding, qualquer peso > 0 basta — inclusive o lock mínimo (14d, 1x).
+- Lock médio (90-180d, 1.6x–2.4x): flexibilidade vs peso de curadoria/sinalização, bom padrão.
 - Lock máximo (365d, 4x): maximiza peso por GOV. Use se está confiante no projeto por um ano.
 - Lock > 365d: não adiciona peso, só adiciona imobilização. Raramente vantajoso a menos que você queira sinalizar commitment extremo.
+- Lembre: você precisa **manter** GOV stakeado no projeto para sacar rev-share (`claim`) — dimensione o lock junto com o horizonte do investimento.
 
 ## A operação de `stake`
 
@@ -138,36 +144,36 @@ Se o lock ainda está vigente e o projeto não é `Removed`, reverte com `LockNo
 
 ## O que você ganha
 
-Após cada rodada R ser `finalizeRound`ada, você pode reivindicar reward:
+O stake em si **não gera renda** — ele destrava o investimento. A renda vem do [ProjectFunding](../08-contracts-reference/16-ProjectFunding.md):
 
 ```
-amount = projectShare(round, projectId)
-       × seuPeso(round)
-       ÷ pesoTotal(round)
+1. Com GOV stakeado no projeto, invista CREDIT na rodada aberta:
+   funding.invest(projectId, amount)      [shares = CREDIT investido, 1:1]
 
-projectShare = bucketStakers × burn_do_projeto_em_R-1 ÷ burn_total_R-1
-             (se não houve burn: via peso global)
+2. Rodada bate o alvo (Funded) -> rev-share ativa
 
-bucketStakers = 55% da totalEmission no split default do RewardDistributorV2
-              (bucketBps[stakers] = 5500; os outros 45% vão para LPs, apps
-               e bonders — não passam pelo claim de staker)
+3. A cada pagamento no app (FeeRouterV2.pay), sua fatia acumula:
+   sua_fatia = revShare_do_pagamento × suas_shares / total_captado
 
-Se projeto em probation inicial: projectShare /= 4.
+4. Saque quando quiser: funding.claim(projectId)
+   (exige GOV ainda stakeado; nunca expira)
 ```
 
-A fórmula completa está em [Rewards distribution](../02-core-concepts/04-rewards-distribution.md).
+O retorno é **fatia de receita real** — verificável on-chain via `pendingRevenue(projectId, você)` e `totalRevenueDistributed(projectId)`.
 
 ## Simulação hipotética
 
-Alice stakou 50.000 GOV no `projectId=42` com lock de 365 dias (peso = 200k). O projeto gerou 600k de burn na rodada R-1, o total da rodada foi 950k, emissão da rodada R é 902.500 CREDIT (0,95 × 950k) — dos quais o bucket stakers (55%) é o que vai para claim. Peso total no projeto (incluindo Alice) é 400k.
+Alice staka 50.000 GOV no `projectId=42` com lock de 365 dias (gate ativo). O projeto abriu rodada de 10.000 CREDIT com rev-share de 8%; Alice investe 2.500 CREDIT (25% das shares) e a rodada fecha Funded. O app fatura 2.000 CREDIT/mês de GMV:
 
 ```
-bucketStakers = 902_500 × 55% = 496_375 CREDIT
-projectShare  = 496_375 × 600_000 / 950_000 = 313.500 CREDIT
-aliceShare    = 313.500 × 200.000 / 400.000 = 156.750 CREDIT
+revShare mensal do projeto = 2.000 × 8% = 160 CREDIT
+fatia da Alice             = 160 × 2.500 / 10.000 = 40 CREDIT/mes
+ao ano                     = 480 CREDIT  (~19,2% a.a. sobre os 2.500 investidos)
 ```
 
-Alice reivindica 156.750 CREDIT no round R. Se a rodada é semanal e ela mantém a posição por um ano com burn similar, captura ~8.15M CREDIT em 52 rodadas (ilustrativo — realidade depende de dinâmica do uso).
+Ilustrativo — realidade depende 100% da receita do app. Sem GMV, não há repasse. O CREDIT recebido é estável: resgatável 1:1 em USDC no PSM.
+
+> **Legado**: no modelo pré-remodel, o staker reivindicava CREDIT emitido proporcional ao burn do projeto (bucket stakers 55%). A fórmula antiga está em [Rewards distribution (legado)](../02-core-concepts/04-rewards-distribution.md); claims históricos continuam sacáveis.
 
 ## Edge cases úteis
 

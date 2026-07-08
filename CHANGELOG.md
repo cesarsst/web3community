@@ -9,7 +9,53 @@ de segurança (invariantes, access control, static analysis) ficam em `Security`
 
 ## [Unreleased]
 
+### Changed
+
+- **REMODEL 2026-07-08 — payment rail + funding por rev-share.** O protocolo
+  abandona o modelo burn-to-mint (taxa efetiva de ~80% sobre a receita do app;
+  bypass era estrategia dominante — parecer
+  `audit/economist/2026-07-08-feerouter-bypass.md`) e passa a operar como
+  trilho de pagamento com taxa competitiva (2,5%) e investimento por fatia de
+  receita real. CREDIT vira stablecoin de pagamento (1:1 USDC, lastro
+  integral no `CreditPSM`); a renda do investidor passa a vir de receita dos
+  apps (`ProjectFunding`), nao de emissao; GOV captura valor via buyback
+  financiado pela fee (`FeeRouterV2`). Contratos do modelo antigo
+  (`FeeRouter` V1, `BurnTracker`, `RewardDistributor`/`V2`,
+  `LiquidityGauge`) permanecem deployados como legado, sem papel no fluxo
+  novo.
+
 ### Added
+
+- **`CreditPSM` — Peg Stability Module (remodel 2026-07-08).**
+  `contracts/CreditPSM.sol`: `buy()`/`sell()` convertem USDC<->CREDIT 1:1
+  (escala 6<->18 dec; poeira reverte `DustAmount`). Lastro 100% retido no
+  contrato, sem NENHUMA funcao de saque (nem governanca) — I-PSM1. Burn de
+  resgate sempre sobre saldo proprio (`BURNER_ROLE` nunca toca terceiros).
+  `mintedOutstanding` com clamp conservador para CREDIT de origem externa.
+
+- **`ProjectFunding` — captacao + rev-share (remodel 2026-07-08).**
+  `contracts/ProjectFunding.sol`: dono de projeto Active abre UMA rodada
+  (alvo >= `minTarget`, rev-share 100–3000 bps, prazo 1–90d). Investir e
+  sacar exigem GOV stakeado no projeto. All-or-nothing: alvo batido paga o
+  dono e ativa `revShareBpsOf`; prazo vencido -> `closeExpiredRound`
+  (permissionless) -> `refund` integral. Distribuicao O(1) via acumulador
+  MasterChef; claims nunca expiram. `notifyRevenue` restrito a
+  `REVENUE_NOTIFIER_ROLE` (FeeRouterV2).
+
+- **`FeeRouterV2` — trilho de pagamento (remodel 2026-07-08).**
+  `contracts/FeeRouterV2.sol`: `pay()` com fee default 250 bps (teto duro
+  `FEE_BPS_CAP = 500`), split interno 40/40/20 (treasury/buyback/grants,
+  recipients configuraveis), rev-share descontado no ato e o restante
+  (~89,5–97,5%) direto pro `appRecipient`. `grossVolumeOf` como metrica
+  on-chain de investidor; `previewPay` para UI; `PaymentRouted` detalha as
+  5 parcelas.
+
+- **`scripts/deploy-remodel.ts`** — deploy dos tres contratos sobre ambiente
+  `deploy-prod-sim`, wiring de roles e persistencia em `dev_addresses.json`.
+
+- **`test/Remodel.test.ts`** — 14 testes: PSM (escala, lastro, dust, resgate
+  acima do lastro), Funding (gates, bounds, all-or-nothing, refund, claim
+  pro-rata) e RouterV2 (split exato, teto de fee, gates).
 
 - **`CreditPriceOracle` — adapter de producao do `ICreditPriceOracle` (FFP).**
   `contracts/CreditPriceOracle.sol` (novo, SPDX `GPL-2.0-or-later` por conter

@@ -11,9 +11,9 @@ Whitelist on-chain de proyectos/apps del ecosistema. Fuente única de la verdad 
 - Cuánto GOV se lockeó como colateral (skin in the game).
 - Status del proyecto (`Pending`, `Active`, `Probation`, `Removed`).
 - URI de metadata off-chain.
-- **`ownerRecipient`** — destinatario canónico del bucket apps del `RewardDistributorV2` (Fase 1.4), con timelock de 48h.
+- **`ownerRecipient`** — destinatario canónico con timelock de 48h (usado por el bucket apps del `RewardDistributorV2`, legado).
 
-Consumido por `Staking`, `BurnTracker`, `RewardDistributor`/`RewardDistributorV2` y `FeeRouter` para gating y lookup de owner/recipient.
+Consumido en el modelo vigente por `Staking`, [`FeeRouterV2`](08b-FeeRouterV2.md) (gate `isActive` + fallback de recipient) y [`ProjectFunding`](16-ProjectFunding.md) (gate `isActive` + validación de owner en `openRound`). Consumidores legados: `BurnTracker`, `RewardDistributor`/`RewardDistributorV2`, `FeeRouter` V1.
 
 ## Herencia
 

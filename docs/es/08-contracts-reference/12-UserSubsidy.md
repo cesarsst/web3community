@@ -5,7 +5,7 @@
 
 ## Visión rápida
 
-Distribuye CREDIT pre-financiado a primeros usuarios de las apps vía Merkle drops con cap de claims. Subsidia **demanda** (no oferta) durante el bootstrap (~6 meses), hasta que el burn orgánico sustente la emisión vía `RewardDistributor`.
+Distribuye CREDIT pre-financiado a primeros usuarios de las apps vía Merkle drops con cap de claims. Subsidia **demanda** (no oferta) durante el bootstrap, hasta que el GMV orgánico de las apps se sostenga solo. *(La redacción original apuntaba al burn/emisión del modelo pre-remodel; el mecanismo de subsidio en sí sigue vigente y es independiente del modelo económico.)*
 
 Campañas múltiples simultáneas con IDs monotónicos, una por app/ronda. La DAO aprueba root + budget vía propuesta; los usuarios elegibles hacen claim vía Merkle proof.
 

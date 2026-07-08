@@ -1,58 +1,58 @@
 # Value accrual
 
 **Audiencia:** lector evaluando la arquitectura económica del protocolo.
-**Requisitos previos:** [Tokenomics](01-tokenomics.md), [Burn-to-mint](../02-core-concepts/03-burn-to-mint.md).
+**Requisitos previos:** [Tokenomics](01-tokenomics.md), [Flujo de valor](../03-protocol-overview/03-economic-flows.md).
 
-> **Aviso**: esta página describe **mecanismos on-chain** por los cuales el valor transita en el protocolo. No es recomendación, proyección ni promesa. La exposición a GOV o CREDIT implica riesgos descritos en [Riesgos y seguridad](03-risk-and-security.md).
+> **Aviso**: esta página describe **mecanismos on-chain** por los cuales el valor transita en el protocolo. No es recomendación, proyección ni promesa. La exposición a GOV o a rondas de captación implica riesgos descritos en [Riesgos y seguridad](03-risk-and-security.md).
 
 ## Dónde entra el valor
 
-La única fuente de **valor externo** en el sistema es el usuario final que compra CREDIT (en DEX externa, con stable, ETH, etc.) porque quiere usar los apps del ecosistema.
+La única fuente de **valor externo** en el sistema es el usuario final que deposita USDC en el `CreditPSM` para obtener CREDIT y pagar por los servicios de las apps.
 
-Si **cero** usuarios compran CREDIT para usar los apps, ningún mecanismo descrito abajo produce valor. La sustentación del protocolo depende de la utilidad ofrecida por los apps listados.
+Si **cero** usuarios pagan en las apps, ningún mecanismo descrito abajo produce valor. La sustentación del protocolo depende de la utilidad ofrecida por las apps listadas.
 
-## Caminos por los cuales CREDIT adquiere presión de compra
+## Qué cambió con el remodel 2026-07-08
 
-1. **Consumo en los apps**: el usuario necesita CREDIT para pagar servicios. Compra en DEX, genera presión de compra.
-2. **Retención por los apps**: los apps reciben rebate en CREDIT (10% default) y emisión vía stake (si stakearon). Mientras no venden, retiran CREDIT de circulación en DEX.
-3. **Retención por los stakers**: los stakers reciben CREDIT como reward. Quien mantiene (en vez de vender inmediatamente) retira CREDIT de circulación.
-4. **Subsidios por la DAO**: `UserSubsidy` distribuye CREDIT pre-financiado del Treasury a primeros usuarios. Eso **no crea demanda**, pero crea usuarios iniciales que pueden generar demanda recurrente tras el subsidio.
-5. **Buyback de CREDIT (FFP)**: `Treasury.executeBuyback(usdcAmount, minCreditOut)` es **real** — compra CREDIT con USDC del Treasury (swap Uniswap V3) y **quema inmediatamente** el CREDIT comprado (`burnByRole`). El precio viene del `CreditPriceOracle` (TWAP Uniswap V3 CREDIT/USDC + sanidad Chainlink USDC/USD). Solo ejecuta vía propuesta DAO y bajo condiciones on-chain: spot TWAP por debajo del floor FFP por al menos `triggerDurationSecs` (default 24h), USDC sin depeg, cap por evento (default 20% de las reservas) y cap mensual (default 30% del snapshot). Presión de compra + reducción de supply en el mismo acto.
+En el modelo anterior, la tesis del inversor era doble: emisión de CREDIT para stakers + deflación del supply. Ambas murieron con el remodel:
 
-## Caminos por los cuales CREDIT sale de circulación
+- **CREDIT ya no es un activo de inversión.** Es estable 1:1 con USDC vía PSM. No se aprecia, no se deprecia, no rinde. Tenerlo es tener saldo prepago.
+- **No hay emisión de rewards.** El retorno del inversor viene de **rev-share sobre receita real** de la app que financió — pagado en CREDIT (= dólares) en cada pago que la app procesa.
 
-1. **Burn en pagos**: principal. 70% default de cada pago se quema vía `BurnTracker.burnAndRecord` → `CreditToken.burnByRole` (split Fase 0: 70% burn / 20% treasury / 10% rebate).
-2. **Burn por buyback**: cada `executeBuyback` quema 100% del CREDIT comprado — no recicla al Treasury.
+El activo con tesis de apreciación es **GOV**; el instrumento de renta es la **ronda de captación**.
 
-## Dinámica de supply
+## Retorno del inversor: rev-share sobre receita real
 
-Con `alpha = 0.95`:
+El mecanismo, de punta a punta:
 
-```
-supply_R = supply_{R-1} + emissao_R - burn_R
-         = supply_{R-1} + 0.95 * burn_{R-1} - burn_R
-```
+1. Stakeas GOV en el proyecto que quieres financiar (requisito de elegibilidad — `NoGovStaked` sin eso).
+2. Aportas CREDIT en la ronda (`invest`). All-or-nothing: si el alvo no se alcanza en el plazo, `refund` devuelve el 100%.
+3. Con la ronda `Funded`, **cada** pago que la app recibe vía `FeeRouterV2.pay` descuenta el rev-share (1%–30%, fijado al abrir la ronda) y lo acredita pro-rata a tus shares (= CREDIT invertido).
+4. `claim` retira lo acumulado, cuando quieras — el derecho **nunca expira** (exige mantener GOV stakeado; sin stake el valor queda retenido hasta re-stake, no se pierde).
 
-Si `burn_R ≈ burn_{R-1}` (uso estable):
+### La cuenta del rendimiento
 
 ```
-supply_R ≈ supply_{R-1} - 0.05 * burn_R
+rendimiento_anual ≈ revShareBps × GMV_anual / capital_invertido
 ```
 
-Es decir, el supply cae en ~5% del burn de cada ronda.
+Ejemplo ilustrativo (el mismo de [Flujo de valor](../03-protocol-overview/03-economic-flows.md)): ronda de 10.000 CREDIT al 8% de rev-share; la app factura 2.000 CREDIT/mes → los inversores reciben 160 CREDIT/mes → **~19% a.a.** sobre el capital. Del lado de la app, ese es su costo de capital — comparable a revenue-based financing.
 
-Si el uso está creciendo (`burn_R > burn_{R-1}`), el supply aún puede caer pero más lento. Si está reduciéndose, puede caer más rápido (emisión basada en burn antiguo, menor, mientras burn nuevo es mayor — improbable pero posible).
+Tres propiedades a internalizar:
+
+- **El rendimiento es variable y no garantizado**: sigue el GMV real. App que factura el doble → rendimiento dobla; app que muere → rendimiento cero. No hay APR prometido.
+- **Es renta, no apreciación**: recibes CREDIT (estable). El "upside" ilimitado no existe — existe una fatia perpetua de la receita bruta.
+- **Es auditable antes de invertir**: `grossVolumeOf[projectId]` (router) da el historial de facturación on-chain; `totalRevenueDistributed[projectId]` (funding) muestra cuánto ya se pagó a inversores de cada proyecto.
 
 ## Caminos por los cuales GOV adquiere presión de compra
 
-1. **Stakers comprando GOV en DEX externa** para stakear en proyectos (cuanto más optimistas sobre el protocolo, más GOV stakeado).
-2. **Apps comprando GOV** para stakear en su propio proyecto y capturar emisión — la vía (B) descrita en [Flujo de valor](../03-protocol-overview/03-economic-flows.md).
+1. **Buyback continuo financiado por la fee**: 40% de la fee del protocolo (= 1% del GMV con fee de 2,5%) va al `buybackRecipient` para recompra de GOV. Es presión de compra estructural, proporcional al volumen de pagos — no depende de decisión discrecional por pago.
+2. **Gate de inversión**: cada inversor necesita GOV stakeado en el proyecto para entrar en su ronda y para reclamar el rev-share. Más rondas atractivas → más GOV demandado y lockeado.
 3. **Nuevos proyectos comprando GOV** para cumplir `minCollateral` (10.000 GOV por listado).
-4. **Programas de recompra de GOV aprobados por la DAO** — atención: **no hay mecanismo dedicado on-chain para GOV**. El `Treasury.executeBuyback` compra y quema **CREDIT**, no GOV. La recompra de GOV exigiría propuestas usando las transferencias genéricas del Treasury.
+4. **Gobernanza**: control sobre parámetros económicos reales (fee, split, whitelist) con flujo de caja real detrás.
 
 ## Caminos por los cuales GOV sale de circulación
 
-1. **Staking**: GOV bloqueado en `Staking` por hasta 365+ días, multiplicador de peso en función del lock.
+1. **Staking**: GOV bloqueado en `Staking` (lock 14–365+ días, gate de inversión).
 2. **Colateral en proyectos**: GOV bloqueado en `ProjectRegistry` hasta `removeProject`.
 3. **Vesting**: GOV bloqueado en instancias de `TeamVesting` hasta liberación gradual.
 4. **Holding simple**: GOV parado en la wallet para votar.
@@ -63,91 +63,72 @@ GOV **no se quema**. El cap de 100M es la cantidad máxima que existirá.
 
 ### Usuario final
 
-Captura el **servicio del app**. El valor está fuera del protocolo — es lo que el app entrega a cambio del CREDIT pagado.
+Captura el **servicio de la app**. El valor está fuera del protocolo — es lo que la app entrega a cambio del CREDIT pagado. Sin riesgo cambiario: el CREDIT sobrante se redime 1:1.
 
 ### App listada
 
-Tres vectores combinados:
+- **~97,5% de cada pago, al instante** (fee de 2,5%; ~89,5% si cedió 8% de rev-share). Sin ciclo de rondas, sin claim.
+- **Capital anticipado sin deuda**: la ronda entrega el alvo íntegro si se completa; el "repago" es una fatia de la receita futura (costo ~19% a.a. en el ejemplo ilustrativo).
+- Elegible a **grants** (20% de la fee del protocolo) vía gobernanza.
 
-- **(A) Rebate directo**: 5% (default) de cada pago. Flujo de caja operacional inmediato.
-- **(B) Stake en el propio proyecto**: si el app también stakeó GOV en su propio `projectId`, captura porción de la emisión proporcional al peso. Puede ser significativa — ver ejemplo numérico en [Flujo de valor](../03-protocol-overview/03-economic-flows.md).
-- **(C) Apreciación del CREDIT retenido**: si el supply cae, el CREDIT no vendido vale más en términos reales.
+### Inversor (rondas de captación)
 
-### Staker
+Renta en CREDIT proporcional a `shares × revShareBps × GMV`. Riesgos específicos: GMV puede caer a cero; capital lockeado hasta `Funded` o refund; exige mantener GOV stakeado para claim. Ver [Riesgos](03-risk-and-security.md).
 
-Captura emisión del RewardDistributor, proporcional al peso de su stake dentro del proyecto × share del proyecto en el burn total de la ronda.
+### Holder de GOV
 
-Fórmula:
+Derecho de voto + exposición al buyback continuo. Si el GMV agregado crece, el buyback crece; si el protocolo muere, GOV pierde utilidad y demanda.
 
-```
-amount = total_emission
-       × (burn_del_proyecto / burn_total)     // share del proyecto
-       × (mi_peso / peso_total_del_proyecto)  // mi fraccion en el proyecto
-       × (1 o 1/4 si probation)               // penalizacion
-```
+### Treasury (la DAO)
 
-Bajo el `RewardDistributorV2` (Fase 1.4 del pivote CLP, activado por migración de gobernanza), la emisión se divide en 4 buckets antes de esa cuenta — default `[5500, 2500, 1500, 500]` bps = **55% stakers** / 25% LPs / 15% apps / 5% bonders. Es decir, sustituye `total_emission` por `0.55 × total_emission` en la fórmula de arriba.
+1% del GMV (40% de la fee) para opex + 0,5% del GMV para grants. Presupuesto proporcional al uso real — sin tocar jamás el respaldo del PSM (segregado, sin función de retiro).
 
-El reward es en CREDIT. El staker puede vender (presión de venta) o retener.
+## Por qué no es Ponzi
 
-Importante: **el staker también asume riesgo** — lock de 14 a 365+ días en GOV, posibilidad de que el proyecto elegido no genere burn, etc. Ver [Riesgos](03-risk-and-security.md).
+Ponzi característico: se paga a los participantes antiguos con el capital de los nuevos, sin generación externa de valor. Aquí:
 
-### Holder de GOV sin stake
+- El retorno del inversor viene de **receita real de las apps** — usuarios pagando por servicios, no nuevos inversores entrando.
+- **No hay emisión**: el protocolo no puede "imprimir" retorno. Cada CREDIT reclamado por un inversor fue transferido por un pago real (evento `PaymentRouted` lo detalla parcela por parcela).
+- **CREDIT está respaldado 1:1**: cada unidad minteada por el PSM tiene USDC retenido en el contrato, verificable on-chain (`backing()` vs `mintedOutstanding`).
+- **All-or-nothing** impide que un proyecto capte a medias y desaparezca con capital parcial.
 
-Captura derecho de voto. Exposición indirecta a la dinámica agregada — si el protocolo crece y GOV pasa a ser demandado (stakers nuevos, apps nuevas, buybacks), GOV puede valorizarse. Si el protocolo muere, GOV pierde utilidad.
+Lo que **ocurre** si nadie usa las apps:
 
-## Mecanismo deflacionario — por qué no es Ponzi
-
-Ponzi característico: se emite token nuevo para pagar a holders antiguos sin contrapartida real. Aquí:
-
-- La emisión depende de burn real.
-- El burn viene de pagos reales de los usuarios.
-- Los pagos ocurren porque los usuarios compran CREDIT para usar apps.
-- Los usuarios compran CREDIT porque quieren los servicios de los apps.
-
-Si cualquier eslabón de la cadena se rompe (apps sin utilidad, usuarios no existen, CREDIT sin demanda), la emisión colapsa junto con el burn. El protocolo se desacelera — **pero no implota** simplemente porque alguien salió.
-
-Lo que **ocurre** si nadie usa:
-
-- Burn → 0.
-- Emisión por la fórmula principal → 0 (después de que el floor se agote en el round 24).
-- Los stakers dejan de entrar (sin reward).
-- El protocolo queda zombi — los contratos corriendo pero sin actividad.
+- GMV → 0; rev-share → 0; buyback → 0; grants/opex → 0.
+- Los inversores de rondas ya financiadas dejan de recibir (su capital ya fue entregado a la app — ese riesgo es explícito).
+- El protocolo queda zombi — los contratos corriendo pero sin actividad. **El CREDIT en circulación sigue redimible 1:1** hasta el límite del respaldo del PSM.
 
 Lo que **no ocurre**:
 
-- El protocolo no promete reward fijo. No hay obligación contractual de pagar a stakers X% al año.
-- No hay contraparte "de último recurso" que pague reward si burn es cero.
-- No hay salida caótica ("banco quebrado") — cada staker puede unstake cuando expire el lock.
+- No hay APR prometido ni obligación contractual de retorno.
+- No hay "corrida bancaria" contra el PSM en el sentido clásico: el respaldo de lo minteado vía `buy` es 100% y no está prestado ni invertido en nada.
 
-## Mecanismos de salvaguarda
+## Salvaguardas estructurales
 
-Tres salvaguardas impiden patologías:
-
-1. **Floor decay** (rondas 0-23): emisión mínima durante bootstrap. Da tiempo para atraer usuarios. Después desaparece — forzando al ecosistema a caminar con sus propias piernas.
-
-2. **Sanity cap por (ronda, proyecto)**: impide wash-burn por proyecto malicioso.
-
-3. **Probation penalty** (25% share): proyectos nuevos capturan 25% de su share por 30 días. Desincentiva fraudes de listado rápido.
+1. **Techo duro de la fee (5%)**: ni la gobernanza puede convertir el protocolo en una app store — `FEE_BPS_CAP = 500` es constante.
+2. **Respaldo segregado**: el USDC del PSM no tiene función de retiro. La DAO gasta de la fee, nunca del respaldo.
+3. **All-or-nothing + bounds de ronda**: rev-share 1%–30%, plazo 1–90 días, una ronda por proyecto, refund integral en falla — límites constantes del contrato.
+4. **Skin in the game del inversor**: el gate de GOV stakeado alinea al inversor con el proyecto que financió (y con el protocolo).
 
 ## No hay garantía de valor
 
 Ningún mecanismo garantiza:
 
 - Que GOV se va a valorizar.
-- Que CREDIT va a mantener poder de compra.
-- Que el uso de los apps va a crecer.
-- Que un staker va a "lucrar".
+- Que una app va a facturar lo suficiente para pagar el rev-share esperado.
+- Que el uso de las apps va a crecer.
+- Que un inversor va a recuperar su capital.
 
-La arquitectura alinea incentivos con uso real. Si el uso existe, el sistema opera según lo proyectado. Si no existe, la emisión (y por lo tanto el incentivo económico) colapsa. **Un producto malo no se salva con tokenomics.**
+La arquitectura alinea incentivos con uso real. Si el uso existe, el sistema opera según lo proyectado. Si no existe, la receita (y por lo tanto el retorno) colapsa. **Un producto malo no se salva con tokenomics.**
 
 ## Puntos a observar antes de cualquier exposición
 
-- Salud del uso de los apps (vía `BurnTracker.getTotalBurnForRound`).
-- Crecimiento o decremento de staking (vía `Staking.totalStaked` y `getGlobalWeight`).
+- GMV real por proyecto (`feeRouterV2.grossVolumeOf(projectId)`) y su tendencia.
+- Receita ya distribuida a inversores (`funding.totalRevenueDistributed(projectId)`).
+- Salud del respaldo del PSM (`psm.backingNormalized()` vs `psm.mintedOutstanding()`).
+- Términos de la ronda: rev-share ofrecido vs GMV histórico (la cuenta del rendimiento arriba).
 - Propuestas recientes en el Governor (señal de dirección política).
-- Distribución real del GOV (¿solo el genesis del Treasury post-deploy, o ya hubo asignaciones a equipo / venta pública / liquidez?).
-- Liquidez del CREDIT en DEX externa (¿puede salir cuando quiera?).
+- Distribución real del GOV (¿ya hubo asignaciones a equipo / venta pública / liquidez?).
 
 Ver [Métricas que importan](04-metrics-that-matter.md).
 

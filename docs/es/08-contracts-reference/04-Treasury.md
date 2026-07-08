@@ -5,9 +5,11 @@
 
 ## Vista rápida
 
+> **⚠️ Actualización — remodel 2026-07-08.** El Treasury sigue vigente como cofre de la DAO: hoy su ingreso recurrente es el **40% de la fee del `FeeRouterV2`** (≈ 1% del GMV) para opex. Los mecanismos CLP descritos abajo (FFP buyback, POL, ledgers de buckets) son **legado** — con CREDIT estable 1:1 vía [`CreditPSM`](15-CreditPSM.md) no hay floor que defender ni emisión que reciclar. Importante: el respaldo USDC del PSM está **segregado** y fuera del alcance del Treasury.
+
 Custodia multi-activo de la DAO. Recibe pasivamente cualquier ERC-20 (y ETH vía `receive`). La única vía de salida es `GOVERNANCE_ROLE` — ningún admin puede drenar fondos fuera del ciclo de gobernanza (invariante I4).
 
-A partir del pivote Credit Liquidity Protocol (CLP, abril/2026), el Treasury también:
+A partir del pivote Credit Liquidity Protocol (CLP, abril/2026 — hoy legado), el Treasury también:
 
 1. **Ejecuta FFP buyback** (Fase 1.1) — swap real USDC -> CREDIT vía Uniswap V3 + quema inmediata, defendiendo el **floor price** cuando el spot rompe debajo del MA90 por 24h.
 2. **Provisiona POL** (Fase 1.2) — Protocol-Owned Liquidity en el pool CREDIT/USDC 0.3%, NFT custodiado por el Treasury, rango full ticks.

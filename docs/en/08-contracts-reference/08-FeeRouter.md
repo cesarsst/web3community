@@ -1,5 +1,7 @@
 # FeeRouter
 
+> ⚠️ **LEGACY** — superseded by the 2026-07-08 remodel (see [FeeRouterV2](08b-FeeRouterV2.md), [CreditPSM](15-CreditPSM.md) and [ProjectFunding](16-ProjectFunding.md)). Kept deployed for historical compatibility.
+
 **Audience:** devs of apps integrating payments, auditors.
 **Prerequisites:** [Treasury and fees](../02-core-concepts/07-treasury-and-fees.md).
 

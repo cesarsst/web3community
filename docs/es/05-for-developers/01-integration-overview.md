@@ -1,15 +1,26 @@
 # Visión general de integración
 
 **Audiencia:** dev que quiere listar una app en el ecosistema y aceptar CREDIT como pago.
-**Requisitos previos:** [Arquitectura](../03-protocol-overview/01-architecture.md), [Treasury y fees](../02-core-concepts/07-treasury-and-fees.md).
+**Requisitos previos:** [Arquitectura](../03-protocol-overview/01-architecture.md), [Flujo de valor](../03-protocol-overview/03-economic-flows.md).
+
+> **⚠️ Actualización — remodel 2026-07-08.** El router de pagos vigente es el [`FeeRouterV2`](../08-contracts-reference/08b-FeeRouterV2.md), **no** el FeeRouter V1 descrito en partes de esta página. Cambios clave para tu integración:
+>
+> - **Firma nueva**: `pay(projectId, amount)` — sin parámetro `user`; el payer es `msg.sender`. El usuario aprueba y llama (o firma vía tu UI).
+> - **Recibes ~97,5% al instante** (fee del protocolo: 2,5%, techo duro 5%) — no un rebate del 10%. Con ronda financiada, se descuenta además tu rev-share (1%–30%).
+> - **Sin roles**: no hay `RECORDER_ROLE` que pedir — basta el proyecto `Active` en el Registry.
+> - **Preview**: `feeRouterV2.previewPay(projectId, amount)` retorna `(fee, revShare, toApp)`.
+> - **Capital**: puedes captar por adelantado abriendo una ronda en [`ProjectFunding`](../08-contracts-reference/16-ProjectFunding.md).
+> - Tu usuario compra CREDIT 1:1 con USDC en el [`CreditPSM`](../08-contracts-reference/15-CreditPSM.md) — sin DEX, sin slippage.
+>
+> Las secciones de abajo que citan `FeeRouter.pay(projectId, user, amount)`, split 70/20/10, burn o `RewardDistributor` describen el flujo **legado**.
 
 ## El contrato que necesitas conocer
 
 Para aceptar pagos en CREDIT, vas a interactuar con **un** contrato principal:
 
-- [`FeeRouter`](../08-contracts-reference/08-FeeRouter.md) — función `pay(projectId, user, amount)`.
+- [`FeeRouterV2`](../08-contracts-reference/08b-FeeRouterV2.md) — función `pay(projectId, amount)`.
 
-Todo lo demás (burn, treasury, rebate, status del proyecto) se maneja automáticamente dentro de él.
+Todo lo demás (fee, rev-share, destino del pago, status del proyecto) se maneja automáticamente dentro de él.
 
 ## El ciclo completo de integración
 
@@ -55,12 +66,11 @@ El "payer económico" siempre es `user` (pagado vía `transferFrom`).
 
 ## Cuánto recibe la app
 
-Dado el split default en producción (70% burn, 20% treasury, 10% rebate — `burnBps/treasuryBps/rebateBps = 7000/2000/1000` en `ignition/parameters/production.json`):
+**Modelo vigente (FeeRouterV2)**: de cada pago, la app recibe `amount - fee (2,5%) - revShare` **al instante** en la misma tx — **~97,5%** sin ronda financiada, **~89,5%** con rev-share de 8%. Verifica con `feeRouterV2.previewPay(projectId, amount)`.
 
-- Inmediato: **10%** va al `appRecipient` (default es el `owner` del proyecto en el Registry).
-- Indirectamente, vía `RewardDistributor` de la ronda siguiente: **share de emisión proporcional al burn del proyecto**, que la app puede capturar si stakea.
+*(Legado — FeeRouter V1, split `7000/2000/1000`: 10% inmediato al `appRecipient` + share de emisión vía `RewardDistributor` proporcional al burn, capturable vía stake.)*
 
-Desarrollo de las 3 fuentes de ingreso (rebate + stake + apreciación del CREDIT retenido) en [Flujo de valor](../03-protocol-overview/03-economic-flows.md).
+Desarrollo completo (incluida la captación de capital vía ronda) en [Flujo de valor](../03-protocol-overview/03-economic-flows.md).
 
 ## Eventos que quieres monitorear
 

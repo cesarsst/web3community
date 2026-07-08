@@ -9,6 +9,14 @@
 
 Deploy via `npx hardhat ignition deploy ./ignition/modules/Dao.ts --parameters ignition/parameters/dev.json --network localhost`. Addresses are deterministic based on Ignition's deploy order, but vary with the deployer's nonce. Use the deploy output.
 
+The remodel contracts (CreditPSM, FeeRouterV2, ProjectFunding) + dev mocks are deployed by `scripts/deploy-remodel.ts` and live in:
+
+```
+ignition/deployments/chain-31337/dev_addresses.json
+```
+
+> ⚠️ **Dev only — changes on every deploy.** The hardhat node is in-memory: every restart wipes the chain and every redeploy generates new addresses. Never hardcode; always read from the JSON (or from the `/config.json` served by the frontend). Current keys: `USDC` (mock), `DevSwapPool`, `CreditPriceOracle`, `DevFaucet`, `CreditPSM`, `ProjectFunding`, `FeeRouterV2`.
+
 ### Sepolia (testnet)
 
 ```
@@ -40,15 +48,21 @@ The order in this index matches the numeric order in `08-contracts-reference/`:
 | 03 | `ProjectRegistry` | `contracts/ProjectRegistry.sol` |
 | 04 | `Treasury` | `contracts/Treasury.sol` |
 | 05 | `Staking` | `contracts/Staking.sol` |
-| 06 | `BurnTracker` | `contracts/BurnTracker.sol` |
-| 07 | `RewardDistributor` | `contracts/RewardDistributor.sol` |
-| 08 | `FeeRouter` | `contracts/FeeRouter.sol` |
+| 06 | `BurnTracker` (legacy) | `contracts/BurnTracker.sol` |
+| 07 | `RewardDistributor` (legacy) | `contracts/RewardDistributor.sol` |
+| 07b | `RewardDistributorV2` (legacy) | `contracts/RewardDistributorV2.sol` |
+| 08 | `FeeRouter` (legacy) | `contracts/FeeRouter.sol` |
+| 08b | `FeeRouterV2` | `contracts/FeeRouterV2.sol` |
 | 09 | `CommunityTimelock` | `contracts/CommunityTimelock.sol` |
 | 10 | `CommunityGovernor` | `contracts/CommunityGovernor.sol` |
 | 11 | `TeamVesting` | `contracts/TeamVesting.sol` |
 | 12 | `UserSubsidy` | `contracts/UserSubsidy.sol` |
+| 13 | `LiquidityGauge` | `contracts/LiquidityGauge.sol` |
+| 14 | `CreditPriceOracle` | `contracts/CreditPriceOracle.sol` |
+| 15 | `CreditPSM` | `contracts/CreditPSM.sol` |
+| 16 | `ProjectFunding` | `contracts/ProjectFunding.sol` |
 
-Per-contract detailed docs in [`08-contracts-reference/`](../08-contracts-reference/).
+The last three (2026-07-08 remodel) are the current rail; `FeeRouter` V1, `BurnTracker` and `RewardDistributor` V1/V2 are deployed legacy. Per-contract detailed docs in [`08-contracts-reference/`](../08-contracts-reference/).
 
 ## Dependency versions
 
@@ -73,6 +87,16 @@ const REWARD_DISTRIBUTOR = deployed['CommunityDAOModule#RewardDistributor'];
 const FEE_ROUTER = deployed['CommunityDAOModule#FeeRouter'];
 const TIMELOCK = deployed['CommunityDAOModule#CommunityTimelock'];
 const GOVERNOR = deployed['CommunityDAOModule#CommunityGovernor'];
+```
+
+For the remodel contracts on the local network (dev, changes on every deploy):
+
+```typescript
+const dev = require('./ignition/deployments/chain-31337/dev_addresses.json');
+const PSM           = dev['CreditPSM'];
+const FEE_ROUTER_V2 = dev['FeeRouterV2'];
+const FUNDING       = dev['ProjectFunding'];
+const USDC_MOCK     = dev['USDC'];
 ```
 
 ## Contracts not deployed by the main module

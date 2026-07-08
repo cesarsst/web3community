@@ -1,5 +1,7 @@
 # Security model
 
+> ⚠️ **Legacy note (2026-07-08 remodel)**: invariants and surfaces tied to the old economic rail (I2 burn-on-consumption, α·burn emission, wash-burn, BurnTracker sanity caps) describe the **pre-remodel** model — the contracts remain deployed, but the current rail is PSM + FeeRouterV2 + ProjectFunding, with its own invariants (I-PSM1 full backing, 500 bps hard fee cap, conservation `toApp + fee + revShare == amount`, all-or-nothing funding) described in [CreditPSM](../08-contracts-reference/15-CreditPSM.md), [FeeRouterV2](../08-contracts-reference/08b-FeeRouterV2.md) and [ProjectFunding](../08-contracts-reference/16-ProjectFunding.md). Governance/roles invariants (I1, I4, I7, etc.) remain current.
+
 **Audience:** auditors, offensive security, researchers.
 **Prerequisites:** general knowledge of the architecture.
 

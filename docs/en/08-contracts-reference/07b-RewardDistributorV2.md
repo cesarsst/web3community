@@ -1,5 +1,7 @@
 # RewardDistributorV2
 
+> ⚠️ **LEGACY** — superseded by the 2026-07-08 remodel (see [CreditPSM](15-CreditPSM.md), [FeeRouterV2](08b-FeeRouterV2.md) and [ProjectFunding](16-ProjectFunding.md)). Kept deployed for historical compatibility.
+
 **Audience:** stakers checking their claim, app owners, LPs, auditors, devs integrating UIs.
 **Prerequisites:** [RewardDistributor (V1)](07-RewardDistributor.md), [Rewards distribution](../02-core-concepts/04-rewards-distribution.md).
 

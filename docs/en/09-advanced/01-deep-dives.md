@@ -1,5 +1,7 @@
 # Deep dives
 
+> ⚠️ **Legacy note (2026-07-08 remodel)**: parts of this page analyze old-rail economic decisions (atomic burn, rounds, α·burn emission, buckets) **as if current**. Treat those sections as historical design record — the current rail is PSM + FeeRouterV2 + ProjectFunding (see [Value flow](../03-protocol-overview/03-economic-flows.md)). Cross-cutting decisions (anti-flashloan, checkpoints, roles) still hold.
+
 **Audience:** auditors and devs needing to understand specific architectural decisions in depth.
 **Prerequisites:** reading sections 01–08.
 

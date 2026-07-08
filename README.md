@@ -2,7 +2,26 @@
 
 DAO dual-token para uma plataforma multi-aplicativos: governança on-chain, staking direcionado por projeto e um ciclo econômico sustentado pelo consumo real dentro dos apps do ecossistema.
 
-> **Status**: testes verdes (858 passing, 0 failing) · slither sem findings high/medium · simulação econômica cobre 3 cenários · **pendências pré-mainnet listadas em §7; requer auditoria externa + distribuição inicial antes de produção**.
+> **Status**: testes verdes (872 passing, 0 failing) · slither sem findings high/medium · simulação econômica cobre 3 cenários · **pendências pré-mainnet listadas em §7; requer auditoria externa + distribuição inicial antes de produção**.
+
+> ⚠️ **REMODEL 2026-07-08 — payment rail + funding por rev-share.** O modelo
+> econômico descrito nos diagramas abaixo (burn 70% via FeeRouter V1 +
+> emissão α·burn com buckets 55/25/15/5) foi **substituído** — a taxa efetiva
+> de ~80% sobre a receita do app não competia com processadores de pagamento
+> e tornava o bypass estratégia dominante (parecer
+> `audit/economist/2026-07-08-feerouter-bypass.md`). O modelo vigente:
+>
+> - **`CreditPSM`** — CREDIT é estável, 1:1 USDC, lastro integral sem função de saque;
+> - **`FeeRouterV2`** — pagamento com fee de **2,5%** (teto duro 5%), split
+>   40/40/20 treasury/buyback GOV/grants, ~97,5% pro app na hora;
+> - **`ProjectFunding`** — apps captam capital antecipado vendendo 1–30% da
+>   receita bruta (rev-share) a investidores com GOV stakeado no projeto;
+>   distribuição automática a cada `pay()`, all-or-nothing com refund.
+>
+> Detalhes: `CHANGELOG.md` (Unreleased) e `docs/pt-br/`. Os contratos do
+> modelo antigo permanecem deployados como legado. As seções §1–§6 abaixo
+> descrevem majoritariamente o desenho anterior e valem como referência
+> histórica até a reescrita completa.
 
 ---
 

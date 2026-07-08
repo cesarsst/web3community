@@ -7,15 +7,30 @@
 
 ### O que é a web3community?
 
-Uma plataforma multi-aplicativos governada por DAO. Os apps aceitam CREDIT como pagamento; o split default de deploy é 70% queimado / 20% treasury / 10% app (Fase 0 do CLP, ajustável por proposta). Stakers de GOV em projetos específicos recebem CREDIT emitido na próxima rodada em função do burn total. Detalhe em [O que é](../01-getting-started/01-what-is-web3community.md).
+Uma plataforma multi-aplicativos governada por DAO. Desde o **remodel 2026-07-08**, é um **trilho de pagamento + funding por rev-share**: os apps aceitam CREDIT (estável 1:1 USDC via [CreditPSM](../08-contracts-reference/15-CreditPSM.md)) com fee de apenas 2,5% no [FeeRouterV2](../08-contracts-reference/08b-FeeRouterV2.md), e investidores financiam projetos em troca de fatia da receita real via [ProjectFunding](../08-contracts-reference/16-ProjectFunding.md). (Legado: o modelo burn-to-mint com split 70/20/10 e emissão por rodada foi substituído.) Detalhe em [O que é](../01-getting-started/01-what-is-web3community.md).
 
 ### Qual a diferença entre GOV e CREDIT?
 
-GOV é governança (supply fixo 100M, vota). CREDIT é utilitário (supply elástico, queimado no uso). Detalhes em [Dual-token](../02-core-concepts/01-dual-token-economy.md).
+GOV é governança + gate de investimento (supply fixo 100M, vota, captura valor via buyback contínuo). CREDIT é meio de pagamento **estável 1:1 com USDC** (mint/burn no PSM, não especulativo). Detalhes em [Dual-token](../02-core-concepts/01-dual-token-economy.md) e [Modelo mental](../01-getting-started/02-mental-model.md).
 
 ### Onde estão os contratos?
 
-15 contratos de produção em `contracts/*.sol` (inclui a Fase 1 do pivot CLP: `LiquidityGauge`, `RewardDistributorV2` e `CreditPriceOracle`). Referência individual em [08-contracts-reference](../08-contracts-reference/). Endereços on-chain em [Contract addresses](../05-for-developers/02-contract-addresses.md).
+18 contratos em `contracts/*.sol` — 3 do remodel 2026-07-08 (`CreditPSM`, `FeeRouterV2`, `ProjectFunding`) + 15 anteriores (parte deles agora legado: `FeeRouter` V1, `BurnTracker`, `RewardDistributor` V1/V2, `LiquidityGauge`). Referência individual em [08-contracts-reference](../08-contracts-reference/). Endereços on-chain em [Contract addresses](../05-for-developers/02-contract-addresses.md).
+
+### Por que um app usaria o FeeRouter em vez de cobrar por fora?
+
+No modelo antigo, não usaria — a taxa efetiva de ~80% tornava o bypass estratégia dominante (equilíbrio de Nash no colapso; parecer `audit/economist/2026-07-08-feerouter-bypass.md`). Foi exatamente por isso que o protocolo mudou. No modelo vigente:
+
+- **Fee de 2,5%** — mais barato que Stripe (~3,8%) e muito abaixo de app stores (15-30%). Teto duro de 5% que nem governança ultrapassa.
+- **Capital antecipado** — só projetos que roteiam receita pelo FeeRouterV2 têm rev-share verificável e conseguem captar no `ProjectFunding` (custo de capital ~19% a.a. nos exemplos, comparável a revenue-based financing: Pipe/Clearco 15-25%).
+- **Métricas on-chain pra investidores** — `grossVolumeOf` é o histórico de GMV que dá credibilidade à rodada.
+- **Hub, base de usuários e trilho pronto** (PSM + router, sem adquirente/chargeback).
+
+Cobrar por fora significa abrir mão do funding e da distribuição — pra pagar mais caro em outro processador.
+
+### CREDIT valoriza?
+
+**Não — por desenho.** CREDIT é estável: 1 CREDIT = 1 USDC, sempre, com compra e resgate 1:1 no PSM (lastro 100% retido, sem função de saque — nem governança). Quem captura a valorização do ecossistema é o **GOV**: 40% da fee de cada pagamento (= 1% do GMV) financia buyback contínuo de GOV. Quem busca renda financia projetos via `ProjectFunding` (rev-share de receita real).
 
 ### Qual rede está rodando?
 
@@ -33,9 +48,10 @@ Gas da rede + tokens necessários (GOV para stakar, CREDIT para pagar apps). Em 
 
 ### Como recebo CREDIT?
 
-- Compra em DEX externa (Uniswap, etc.).
-- Recebe como reward se stakou em projeto que gerou burn.
+- Compra no `CreditPSM` com USDC, 1:1 e sem taxa (`buy`). Resgata do mesmo jeito (`sell`).
+- Recebe como rev-share se investiu em rodada de projeto que fatura (`ProjectFunding.claim`).
 - Recebe via `UserSubsidy` se era elegível em uma campanha.
+- (Legado: rewards de emissão por burn — claims históricos seguem sacáveis.)
 
 ### Como recebo GOV?
 
@@ -56,11 +72,13 @@ Detalhe em [Votar em propostas](../04-for-users/04-voting.md).
 
 ### E se o protocolo morrer?
 
-Se o uso cair a quase zero, emissão colapsa, APR vai a quase zero, stakers saem. A DAO pode intervir (ajustar α, abrir subsídio via Treasury, contratar novos apps). Mas tokenomics não salva produto ruim.
+Se o uso cair a quase zero, o GMV seca: rev-share vai a zero, fee vai a zero (sem buyback, sem opex). Investidores ficam com posições que não rendem — mas o CREDIT continua resgatável 1:1 no PSM (o lastro não depende de atividade). A DAO pode intervir (grants, subsídio via Treasury, contratar novos apps). Mas tokenomics não salva produto ruim.
 
-### O buyback de CREDIT é real ou "futuro"?
+### O buyback de GOV é real ou "futuro"?
 
-**Real.** Desde a Fase 1.1 do pivot CLP, `Treasury.executeBuyback` faz o swap USDC → CREDIT via Uniswap V3 e queima imediata do CREDIT comprado, defendendo o floor price (modelo FFP). O preço vem de um oracle real (`CreditPriceOracle`, TWAP Uniswap V3 CREDIT/USDC + sanity Chainlink USDC/USD), setado via `setPriceOracle`. Cada buyback exige proposta DAO aprovada (é `GOVERNANCE_ROLE` = Timelock) e passa por caps por evento (20%) e mensal (30%) sobre as reservas USDC. Detalhe em [Treasury](../08-contracts-reference/04-Treasury.md) e [CreditPriceOracle](../08-contracts-reference/14-CreditPriceOracle.md).
+**Real e contínuo.** 40% da fee de cada `FeeRouterV2.pay` (= 1% do GMV) vai automaticamente pro `buybackRecipient` — não depende de proposta por evento. Quanto mais pagamento nos apps, mais pressão de compra de GOV. Detalhe em [FeeRouterV2](../08-contracts-reference/08b-FeeRouterV2.md).
+
+(Legado: o buyback de **CREDIT** do modelo FFP — `Treasury.executeBuyback`, swap USDC→CREDIT + queima com caps de 20%/30% — pertence ao trilho antigo; com CREDIT estável via PSM, não há floor a defender. Detalhe em [Treasury](../08-contracts-reference/04-Treasury.md).)
 
 ## Staking
 
@@ -88,30 +106,40 @@ Sim. Cada `projectId` é uma posição independente.
 
 **Não.** `extendLock` só muda `lockDuration`.
 
-## Rewards
+## Renda do investidor (rev-share)
 
-### Quando posso reivindicar?
+### Como invisto num projeto?
 
-Após a rodada fechar (`closeRound` via governança) e ser finalizada (`finalizeRound` — permissionless). Detalhe em [Reivindicar rewards](../04-for-users/05-claiming-rewards.md).
+1. Stake GOV no projeto (`Staking.stake`) — é o gate.
+2. Com a rodada aberta, `ProjectFunding.invest(projectId, amount)` em CREDIT.
+3. Se a rodada bater o alvo (all-or-nothing), o rev-share ativa; se vencer sem bater, `refund` devolve 100%.
 
-### Perco reward se esquecer?
+### Quando posso sacar minha receita?
 
-**Não.** Não há deadline. Uma vez finalizada, seu direito de claim persiste indefinidamente.
+A qualquer momento, via `ProjectFunding.claim(projectId)` — a receita acumula a cada pagamento processado pelo FeeRouterV2. Exige **manter GOV stakeado no projeto** (skin in the game).
+
+### Perco receita se esquecer de sacar (ou se der unstake)?
+
+**Não.** Claims nunca expiram. Sem GOV stakeado você não consegue sacar, mas o valor fica acruado até você voltar a stakear.
 
 ### Por que meu claim é zero?
 
 Possíveis razões:
 
-- Rodada não finalizada (`RoundNotFinalized`).
-- Você já reivindicou (`AlreadyClaimed`).
-- Seu peso era zero no `snapshotBlock`.
-- Projeto não gerou burn nem tinha peso global.
+- A rodada do projeto não está `Funded` (rev-share só ativa depois de bater o alvo).
+- O app ainda não processou pagamentos desde o funding (`grossVolumeOf` parado).
+- Você já sacou tudo (`NothingToClaim`).
+- Você não tem GOV stakeado no projeto (`NoGovStaked` — o acumulado não se perde).
 
-Use `previewClaim(you, round, projectId)` para diagnosticar.
+Use `pendingRevenue(projectId, you)` para diagnosticar.
 
 ### Quanto vou receber?
 
-Depende do burn do projeto × seu peso × total da rodada. Fórmula em [Rewards distribution](../02-core-concepts/04-rewards-distribution.md).
+`amount × revShareBps/10000 × (suas shares / total de shares)` a cada pagamento. Yield ilustrativo de 14-19% a.a. nos exemplos da doc — depende 100% da receita real do app, não é prometido. Ver [Value accrual](../06-for-investors/02-value-accrual.md).
+
+### E os rewards de emissão antigos?
+
+**Legado.** Claims de rodadas finalizadas do `RewardDistributor` V1/V2 continuam sacáveis indefinidamente (`previewClaim` + `claim`), mas não há novas rodadas de emissão desde o remodel. Detalhe em [Reivindicar rewards](../04-for-users/05-claiming-rewards.md).
 
 ## Projetos / Apps
 
@@ -126,11 +154,15 @@ Detalhe em [Submeter um projeto](../05-for-developers/03-submitting-a-project.md
 
 ### Quanto recebo por pagamento?
 
-10% por default (rebate) no split de deploy da Fase 0 (`(7000, 2000, 1000)` = 70% burn / 20% treasury / 10% app). Ajustável por projeto via proposta (`setProjectSplit`).
+**97,5%** de cada pagamento, na hora (fee do protocolo: 2,5%). Se o projeto captou rodada no `ProjectFunding`, desconta também o rev-share escolhido (1-30%) — ex.: com rev-share de 8%, você fica com **~89,5%**. Use `feeRouterV2.previewPay(projectId, amount)` para simular. (Legado: no FeeRouter V1 o app recebia só 10% de rebate.)
 
 ### Se eu stakar no meu próprio projeto, ganho mais?
 
-Sim. Você captura fatia da emissão proporcional ao peso do seu stake. Detalhe em [Fluxo de valor](../03-protocol-overview/03-economic-flows.md).
+Stakar GOV no próprio projeto permite **investir na própria rodada** (e sacar rev-share como qualquer investidor), além de sinalizar convicção. (Legado: no modelo antigo o stake capturava fatia da emissão por burn.) Detalhe em [Fluxo de valor](../03-protocol-overview/03-economic-flows.md).
+
+### Como capto capital pro meu app?
+
+Com o projeto Active, chame `ProjectFunding.openRound(projectId, alvo, revShareBps, prazo)`: alvo ≥ 100 CREDIT, rev-share entre 1% e 30%, prazo de 1 a 90 dias. **Uma rodada por projeto** (MVP). All-or-nothing: bateu o alvo → você recebe o captado na hora e o rev-share ativa; venceu sem bater → investidores pegam refund e nada muda pra você. Detalhe em [ProjectFunding](../08-contracts-reference/16-ProjectFunding.md).
 
 ### Perco meu colateral se eu sair?
 

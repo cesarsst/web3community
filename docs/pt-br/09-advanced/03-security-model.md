@@ -1,5 +1,7 @@
 # Modelo de segurança
 
+> ⚠️ **Nota de legado (remodel 2026-07-08)**: invariantes e superfícies ligadas ao trilho econômico antigo (I2 burn no consumo, emissão α·burn, wash-burn, sanity caps do BurnTracker) descrevem o modelo **pré-remodel** — os contratos seguem deployados, mas o trilho vigente é PSM + FeeRouterV2 + ProjectFunding, com invariantes próprias (I-PSM1 lastro integral, teto duro de fee 500 bps, conservação `toApp + fee + revShare == amount`, all-or-nothing do funding) descritas em [CreditPSM](../08-contracts-reference/15-CreditPSM.md), [FeeRouterV2](../08-contracts-reference/08b-FeeRouterV2.md) e [ProjectFunding](../08-contracts-reference/16-ProjectFunding.md). As invariantes de governança/roles (I1, I4, I7 etc.) continuam vigentes.
+
 **Para quem é:** auditores, segurança ofensiva, pesquisadores.
 **Pré-requisitos:** conhecimento geral da arquitetura.
 

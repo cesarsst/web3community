@@ -1,5 +1,7 @@
 # LiquidityGauge
 
+> ⚠️ **LEGADO** — substituído pelo remodel 2026-07-08 (ver [CreditPSM](15-CreditPSM.md), [FeeRouterV2](08b-FeeRouterV2.md) e [ProjectFunding](16-ProjectFunding.md)). Mantido deployado por compatibilidade histórica.
+
 **Para quem é:** LPs do par CREDIT/USDC, devs integrando UI de stake LP, auditores.
 **Pré-requisitos:** [Treasury e fees](../02-core-concepts/07-treasury-and-fees.md), [Distribuição de rewards](../02-core-concepts/04-rewards-distribution.md).
 

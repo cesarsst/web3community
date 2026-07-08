@@ -1,5 +1,7 @@
 # RewardDistributorV2
 
+> ⚠️ **LEGADO — sustituido por el remodel 2026-07-08.** La emisión por buckets (55/25/15/5) pertenece al modelo burn-to-mint anterior. En el modelo vigente no hay emisión: la renta del inversor viene de rev-share sobre receita real vía [ProjectFunding](16-ProjectFunding.md) + [FeeRouterV2](08b-FeeRouterV2.md). Este contrato solo atiende claims históricos. Esta página se mantiene como referencia.
+
 **Para quién es:** stakers consultando claim, owners de apps, LPs, auditores, devs integrando UIs.
 **Prerrequisitos:** [RewardDistributor (V1)](07-RewardDistributor.md), [Distribución de rewards](../02-core-concepts/04-rewards-distribution.md).
 

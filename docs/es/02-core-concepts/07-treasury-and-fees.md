@@ -3,6 +3,8 @@
 **Para quién es:** quien quiere entender el flujo de caja del protocolo.
 **Prerrequisitos:** [Dual-token](01-dual-token-economy.md), [Gobernanza](05-governance.md).
 
+> **⚠️ Actualización — remodel 2026-07-08.** El modelo de fees descrito en esta página (split 70/20/10 del `FeeRouter` V1, FFP buyback, POL) es el **anterior**. Vigente: el [`FeeRouterV2`](../08-contracts-reference/08b-FeeRouterV2.md) cobra fee de **2,5%** (techo duro 5%) repartida **40% treasury / 40% buyback de GOV / 20% grants** — el Treasury recibe ≈ 1% del GMV para opex. El respaldo del CREDIT está **segregado** en el [`CreditPSM`](../08-contracts-reference/15-CreditPSM.md), fuera del alcance del Treasury. Flujo actualizado en [Flujo de valor](../03-protocol-overview/03-economic-flows.md). El funcionamiento del cofre (recepción pasiva, salida solo vía propuesta, sin pause) sigue válido.
+
 ## El cofre de la DAO
 
 `Treasury` es el cofre multi-activo central. Tres propiedades fundamentales:

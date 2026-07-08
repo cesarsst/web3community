@@ -5,7 +5,7 @@
 
 ## Visión rápida
 
-Cofre de stake dirigido por proyecto. El usuario bloquea GOV en un `projectId` específico del `ProjectRegistry` y recibe `weight = amount * multiplier(lockDuration) / 1e18`. El peso alimenta el share de rewards en el `RewardDistributor`.
+Cofre de stake dirigido por proyecto. El usuario bloquea GOV en un `projectId` específico del `ProjectRegistry` y recibe `weight = amount * multiplier(lockDuration) / 1e18`. Desde el remodel 2026-07-08, el peso es el **gate de inversión**: [`ProjectFunding`](16-ProjectFunding.md) exige `getWeight(investor, projectId) > 0` para `invest` y `claim`. *(Legado: el peso alimentaba el share de rewards en el `RewardDistributor`.)*
 
 Lock mínimo 14 días, máximo aceptado ilimitado (el multiplier satura en 4x a partir de 365 días). Stake nuevo solo en proyectos `Active`. Unstake bypassea el lock si el proyecto pasó a `Removed`.
 

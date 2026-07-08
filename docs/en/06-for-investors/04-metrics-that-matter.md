@@ -5,11 +5,66 @@
 
 Metrics you can compute directly from the contracts. All on-chain, no dependency on an external indexer.
 
-## Usage metrics (protocol health)
+## 2026-07-08 remodel metrics (protocol health)
+
+Investor income is now **real revenue, not emission** — the primary metrics moved from burn/emission to GMV/distributed revenue.
+
+### Gross volume per project (GMV)
+
+**What it is**: every payment that went through `FeeRouterV2` for the project. The direct proxy for real usage — replaces burn as the primary metric.
+
+```solidity
+feeRouterV2.grossVolumeOf(projectId);
+```
+
+**How to interpret**: growing → app gaining traction (and investors' rev-share growing with it). Zero for a long time → terminal signal. For a time series, index `PaymentRouted` events (they carry the fee/rev-share/app breakdown per payment).
+
+### Revenue distributed to investors
+
+```solidity
+funding.totalRevenueDistributed(projectId);   // cumulative paid via rev-share
+funding.pendingRevenue(projectId, investor);  // investor's pending claim
+```
+
+### Realized yield per project
+
+```
+round = funding.rounds(projectId);
+cumulative_yield = totalRevenueDistributed / round.raised
+annualized_yield ~= cumulative_yield * (365 days / round_age)
+```
+
+**How to interpret**: compare against the opportunity cost (an 8% rev-share over a monthly GMV of 20% of the raise ≈ 19% p.a.). Actual yield depends 100% on the app's GMV — it is not promised.
+
+### Active rev-share and round status
+
+```solidity
+funding.revShareBpsOf(projectId);   // 0 = no Funded round; 100-3000 bps
+funding.rounds(projectId);          // { target, raised, deadline, revShareBps, status }
+```
+
+The Funded/Failed ratio across projects indicates investor confidence in the project pipeline.
+
+### PSM backing (CREDIT peg)
+
+```solidity
+psm.backingNormalized();     // USDC backing in 18 dec
+psm.mintedOutstanding();     // CREDIT in circulation minted by the PSM
+```
+
+**Invariant I-PSM1**: `backingNormalized() >= mintedOutstanding`. Anyone can verify at any time. A violation = critical bug (there is no backing-withdrawal function).
+
+### Cumulative protocol fee
+
+Index `PaymentRouted` and sum `feeToTreasury` / `feeToBuyback` / `feeToGrants`: protocol revenue (1% of GMV to the treasury), GOV buyback pressure (1% of GMV) and grants (0.5% of GMV).
+
+## Legacy rail usage metrics (burn-to-mint)
+
+> ⚠️ **LEGACY** — the burn/emission metrics below only move for historical claims; FeeRouterV2 neither burns nor emits. Useful for auditing the past, not for tracking the present.
 
 ### Burn per round
 
-**What it is**: how much CREDIT was burned in each round. Direct proxy for real app usage.
+**What it is**: how much CREDIT was burned in each round. Was the real-usage proxy in the old model.
 
 **How to read**:
 
@@ -101,7 +156,7 @@ There is no aggregate view for `lockDuration` distribution. Derived metric is `g
 credit.totalSupply();
 ```
 
-Compare with last value and with `supply + emission - burn` expected from the round. Divergence → investigate.
+In the current model, it should track `psm.mintedOutstanding()` (+ legacy residue from genesis/old emissions). Growing supply = growing rail demand; shrinking = users redeeming USDC. It is no longer a deflation metric.
 
 ### GOV supply in circulation
 
@@ -125,7 +180,7 @@ staking.totalStaked();                    // in staking
 
 Ratio `immobilized_GOV / totalSupply` indicates how "active" GOV is. High = good signal. Low = many holders idle.
 
-### Emission per round
+### Emission per round (legacy)
 
 ```solidity
 rd.getEmission(round);             // if finalized
@@ -134,7 +189,7 @@ rd.previewEmission(round);         // preview
 
 Compare with `capMax` to see if dominated by cap (emission saturated) or by burn.
 
-### Emission / burn ratio
+### Emission / burn ratio (legacy)
 
 ```
 ratio = emission_R / burn_{R-1}
@@ -192,7 +247,7 @@ gov.getVotes(account);      // current voting power
 
 Aggregate: sum of `getVotes` for known addresses. Compare with `totalSupply` for % delegated. High % delegated = vibrant governance.
 
-## Round metrics
+## Burn round metrics (legacy)
 
 ### Current round
 
@@ -222,34 +277,41 @@ for (uint r = 0; r <= rd.lastFinalizedRound(); r++) {
 
 Compute cumulative emission vs cumulative burn to see net supply balance over time.
 
-## FeeRouter operational metrics
+## FeeRouterV2 operational metrics
 
 ### Total paid volume
 
-Index `Paid(projectId, user, payer, amount, burned, toTreasury, toApp, recipient)` events.
+Index `PaymentRouted(projectId, payer, amount, feeToTreasury, feeToBuyback, feeToGrants, revShare, toApp)` events.
 
-Sum(amount) = protocol gross volume.
-Sum(burned) = cumulative deflationary pressure.
-Sum(toApp) = total cash distributed to apps.
+Sum(amount) = protocol GMV (matches Σ `grossVolumeOf`).
+Sum(revShare) = total income forwarded to investors.
+Sum(toApp) = total cash distributed to apps (~89.5-97.5% of GMV).
+Sum(fee*) = protocol revenue (2.5% of GMV: 40/40/20).
 
-### Effective split per project
+### Payment preview
 
 ```solidity
-feeRouter.getEffectiveSplit(projectId);
+feeRouterV2.previewPay(projectId, amount);  // (fee, revShare, toApp)
 ```
 
-For projects with override vs default.
+(Legacy: the V1 `feeRouter.getEffectiveSplit` and `Paid` events remain queryable for history.)
 
 ## Suggested minimal dashboard
 
-For dev/staker/operator to track:
+For dev/investor/operator to track:
 
 ```
-┌ Usage health ────────────────────────┐
-│ Total burn (last 4 rounds)            │
-│ Burn per project top-5                │
-│ N projects with burn                  │
+┌ Usage health (GMV) ──────────────────┐
+│ Total GMV (PaymentRouted, 30d)        │
+│ grossVolumeOf top-5 projects          │
+│ N projects with payments in period    │
 │ N Active projects in Registry         │
+└───────────────────────────────────────┘
+┌ Funding / rev-share ─────────────────┐
+│ Rounds Open / Funded / Failed         │
+│ totalRevenueDistributed top-5         │
+│ Annualized yield per project          │
+│ Average rev-share (bps) of Funded     │
 └───────────────────────────────────────┘
 ┌ Staking ─────────────────────────────┐
 │ Total staked (GOV)                    │
@@ -257,11 +319,11 @@ For dev/staker/operator to track:
 │ Top-5 projects by weight              │
 │ Weight / Staked ratio (avg lock)      │
 └───────────────────────────────────────┘
-┌ Supply ──────────────────────────────┐
+┌ Peg / Supply ────────────────────────┐
+│ psm.backingNormalized vs              │
+│   psm.mintedOutstanding (I-PSM1)      │
 │ CREDIT totalSupply                    │
 │ GOV totalSupply vs cap                │
-│ Delta supply last round               │
-│ emission/burn ratio                   │
 └───────────────────────────────────────┘
 ┌ Governance ──────────────────────────┐
 │ Open proposals                        │
@@ -269,9 +331,10 @@ For dev/staker/operator to track:
 │ Current quorum (4% of supply)         │
 │ Pending list in Timelock              │
 └───────────────────────────────────────┘
-┌ Treasury ────────────────────────────┐
+┌ Treasury / fee ──────────────────────┐
+│ Cumulative fee (treasury/buyback/     │
+│   grants)                             │
 │ GOV, CREDIT, other token balances     │
-│ ETH                                   │
 │ Recent outflows (Transferred event)   │
 └───────────────────────────────────────┘
 ```
@@ -280,12 +343,15 @@ All these metrics are derived from `view` calls on the contracts + event indexin
 
 ## Warning signals
 
-- Burn per round falling for > 3 consecutive rounds.
-- `totalStaked` falling rapidly (stakers unstaking after lock).
+- GMV (`PaymentRouted`) falling for > 4 consecutive weeks.
+- `backingNormalized() < mintedOutstanding` — I-PSM1 violation; critical bug, investigate immediately.
+- Funding rounds consistently `Failed` — investors do not trust the project pipeline.
+- `totalRevenueDistributed` stagnant in Funded projects with positive GMV — rev-share not flowing (investigate roles).
+- `FeeUpdated` pushing `feeBps` toward the 500 cap without clear justification.
+- `totalStaked` falling rapidly (stakers unstaking after lock — weakens the investment gate).
 - Proposal participation < 50% of minimum quorum.
-- Projects hitting `SanityCapExceeded` — sign of possible abuse.
-- `RoundClosed.earlyClose = true` with no clear proposal context.
 - Large Treasury outflows with no known corresponding proposal (investigate immediately — this would be evidence of exploit, although access control mitigates).
+- (Legacy) anomalous historical claims in the RewardDistributors.
 
 ---
 

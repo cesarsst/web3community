@@ -5,6 +5,35 @@
 
 > **Disclaimer**: the list below describes **known** risks and implemented mitigations. No protocol is immune to bugs, unforeseen attacks, or regulatory changes. Read it and make an informed decision.
 
+> **Remodel 2026-07-08**: the risk profile changed with the new model. Core risks now: **app revenue** (rev-share stops if the app does not sell), **PSM peg/backing**, and **regulatory** (rev-share approaches a security). Old-rail risks (wash-burn, emission, floor/FFP) are marked legacy.
+
+## Risks of the current model (remodel)
+
+### Risk: app revenue (the investor's main risk)
+
+**Description**: the investor's return in [ProjectFunding](../08-contracts-reference/16-ProjectFunding.md) is 100% dependent on the **app's real revenue**. If the app does not sell, the rev-share simply **stops** — there is no floor, no compensatory emission, no debt accruing in your favor. Capital invested in a Funded round is not returned: what you buy is the future rev-share stream.
+
+**Mitigation**:
+
+- All-or-nothing: a round that misses the target refunds 100% (`refund`).
+- On-chain metrics for due diligence **before** investing: `grossVolumeOf` (historical GMV), `totalRevenueDistributed` (revenue already paid), `PaymentRouted` events.
+- Staked-GOV gate: whoever invests already has long-term exposure to the project (curation with skin in the game).
+- Hard bounds: rev-share 1-30% (100-3000 bps), duration 1-90 days, minimum target `minTarget`.
+
+**Residual risk**: high by nature — it is business risk, not contract risk. A project that dies pays nothing. Size your exposure as you would in revenue-based financing.
+
+### Risk: PSM peg/backing
+
+**Description**: CREDIT is worth 1 USDC because the [CreditPSM](../08-contracts-reference/15-CreditPSM.md) guarantees 1:1 redemption against the retained backing. Vectors: (a) a PSM bug that allows draining the backing; (b) a depeg of USDC itself; (c) a `sell` larger than the available backing.
+
+**Mitigation**:
+
+- Backing 100% held in the contract, **no withdrawal function** — not even governance can move it (invariant I-PSM1: `backingNormalized() >= mintedOutstanding`, verifiable by anyone at any time).
+- PSM has no owner, no roles of its own, no adjustable parameters — zero admin surface.
+- Exact 1:1 conversion both ways, no fee; a `sell` beyond the backing reverts with `InsufficientBacking` instead of paying partially.
+
+**Residual risk**: a USDC depeg (CREDIT inherits the backing stable's risk) and contract bugs not covered by tests/audit. `mintedOutstanding` is a conservative estimate — the verifiable backing is always `backing()`.
+
 ## Protocol risks
 
 ### Risk: contract bug
@@ -62,7 +91,9 @@
 
 **Residual risk**: very low. Direct analog of governance protection, validated in tests.
 
-### Risk: wash-burn to capture share
+### Risk: wash-burn to capture share (legacy)
+
+> ⚠️ **LEGACY** — this vector belongs to the pre-remodel burn-to-mint rail. With no new emission, wash-burn lost its target. (In the current model the analog would be GMV wash-trading to inflate a funding round's metrics — mitigated by real cost: every `pay` pays the 2.5% fee + rev-share.)
 
 **Description**: a malicious project burns a lot of CREDIT it itself minted (via some external path) to capture disproportionate share of emission.
 
@@ -94,13 +125,13 @@
 
 **Residual risk**: just time — if the DAO loses engagement, funds get stuck.
 
-### Risk: CREDIT without DEX liquidity
+### Risk: CREDIT without DEX liquidity (legacy)
+
+> ⚠️ **LEGACY** — with the PSM, the primary CREDIT exit is 1:1 redemption in the contract itself, with no dependency on DEX liquidity. The conversion risk migrated to "PSM peg/backing" (above). POL and the CREDIT/USDC pool remain as CLP-pivot legacy.
 
 **Description**: user receives CREDIT as reward but cannot convert (low liquidity on external DEX).
 
-**Mitigation**: the Treasury has an on-chain **POL (Protocol Owned Liquidity, Phase 1.2)** mechanism: `addPOL`/`addPOLFromRefill` provision CREDIT/USDC liquidity (Uniswap V3, full range) with the NFT position custodied by the Treasury itself; every outflow (`removePOL`) requires a proposal with a **75% supermajority** in the Governor. In addition, the DAO can approve seeding extra liquidity (the "10% liquidity" bucket of the initial GOV distribution is intended for that).
-
-**Residual risk**: if DEXs abandon the pool, users are stuck with CREDIT. Solution depends on DAO action + external market.
+**Mitigation**: the Treasury has an on-chain **POL (Protocol Owned Liquidity, Phase 1.2)** mechanism: `addPOL`/`addPOLFromRefill` provision CREDIT/USDC liquidity (Uniswap V3, full range) with the NFT position custodied by the Treasury itself; every outflow (`removePOL`) requires a proposal with a **75% supermajority** in the Governor.
 
 ## Operational risks
 
@@ -142,23 +173,30 @@
 
 ### Regulatory risk
 
-**Description**: classification of GOV or CREDIT as security, regulated stablecoin, or another category with requirements the protocol does not meet.
+**Description**: three distinct fronts in the current model:
+
+1. **Rev-share ≈ security**: the right to a slice of a project's future revenue, bought with an expectation of profit from the effort of others, **approaches the definition of a security** (Howey test and analogs). It is the remodel's most serious regulatory risk.
+2. **CREDIT as a stablecoin**: a stable token backed 1:1 by USDC may fall under regulated-stablecoin regimes (MiCA, US legislation), with issuer/reserve requirements that an immutable protocol does not meet in the traditional way.
+3. **GOV**: classification as a security via the classic route of a governance token with buyback.
 
 **Mitigation**:
 
-- Tokens do not promise financial return.
+- **A formal legal opinion is PENDING and is a pre-mainnet blocker** — no mainnet deploy before that per-jurisdiction analysis.
+- Rev-share is bounded (1-30%), tied to real revenue (not a promise of appreciation), and investing requires active participation (staked GOV = curation).
+- PSM backing is 100% on-chain and verifiable — transparency above the standard of centralized issuers.
 - No central issuer identifiable post-governance handoff.
-- DAO can evolve terms or non-contractual aspects as regulatory frameworks consolidate.
 
-**Residual risk**: significant and not eliminable at the protocol level. Users must evaluate their own jurisdictions.
+**Residual risk**: significant and not eliminable at the protocol level. Classification may vary by jurisdiction and change over time. Users must evaluate their own jurisdictions.
 
 ### External DEX integration risk
 
-**Description**: the protocol depends on external DEX for CREDIT liquidity (and eventually GOV). If a DEX is hacked, listing is removed, pool is drained, etc., users lose access to conversion.
+**Description**: GOV depends on external DEX for liquidity. If a DEX is hacked, listing is removed, pool is drained, etc., holders lose access to conversion. (For CREDIT this risk is legacy — the primary conversion is 1:1 redemption in the PSM.)
 
 **Mitigation**: diversification of DEXs via DAO actions. Not implemented in v1.
 
-### Oracle risk (FFP buyback)
+### Oracle risk (FFP buyback) (legacy)
+
+> ⚠️ **LEGACY** — the CREDIT FFP buyback and floor defence belong to the pre-remodel CLP pivot. With CREDIT stable via the PSM, there is no floor to defend. The current buyback is for **GOV** (40% of the FeeRouterV2 fee), which does not depend on an oracle.
 
 **Description**: `executeBuyback` is **real** (CLP pivot Phase 1.1): USDC → CREDIT swap via Uniswap V3 + immediate burn of the bought CREDIT. It depends on `CreditPriceOracle` (immutable adapter: TWAP of the Uniswap V3 CREDIT/USDC pool + Chainlink USDC/USD sanity). A manipulated oracle or a shallow pool could induce a buyback at a bad price.
 
@@ -170,20 +208,22 @@
 - `minCreditOut` (slippage) is mandatory; each execution requires a DAO proposal (GOVERNANCE_ROLE = Timelock).
 - The adapter has no owner/setters — changing oracle parameters requires a new deploy + `setPriceOracle` via proposal.
 
-## Risks for stakers specifically
+## Risks for investors specifically
 
-- **Immobilization**: lock of 14-365+ days. If you need GOV before, you only exit if the project becomes `Removed`.
-- **Dependency on the chosen project**: if your project generates no burn, your reward = 0.
-- **Dependency on the ecosystem**: even staking in an exemplary project, if the aggregate ecosystem does not generate usage, emission drops.
-- **CREDIT volatility**: your reward is in CREDIT. If CREDIT has no liquidity or devalues, reward in real terms decreases.
+- **GOV immobilization**: lock of 14-365+ days. If you need GOV before, you only exit if the project becomes `Removed`.
+- **Round capital does not return**: in a Funded round, what you bought is the rev-share stream — there is no principal redemption.
+- **Dependency on the chosen project**: if your app does not sell, rev-share = 0. No floor, no compensation.
+- **Claim gate**: withdrawing rev-share requires keeping GOV staked in the project. Without stake, the value is held (it does not expire) until you re-stake.
+- **Dependency on the ecosystem**: even investing in an exemplary project, if the aggregate hub does not attract users, GMV shrinks for everyone.
 
 ## Risks for listed apps
 
 - **Locked collateral**: 10,000 GOV in the Registry. Only returns with `removeProject` without slash.
 - **Governance suspension**: punitive `Probation` blocks operation (but does not burn collateral).
 - **Slash**: if misconduct is proven, `removeProject(id, slash=true)` sends collateral to Treasury.
-- **Split dependency**: 95% of each payment is burned. You receive 5% direct + (optional, via stake) slice of emission.
-- **Low usage**: if your app does not attract users, your project's burn is low, emission share too.
+- **Rail cost**: a 2.5% fee (250 bps; hard cap 500) + the round's rev-share, if you raised (1-30%). You receive ~89.5-97.5% of every payment, immediately.
+- **Rev-share is perpetual in the MVP**: a Funded round has no rev-share end date — the slice applies to all future revenue routed through FeeRouterV2.
+- **Low usage**: if your app does not attract users, there is no revenue — and an open funding round tends to fail (refund to investors).
 
 ## Audit and bounty
 
@@ -201,15 +241,16 @@ Current status in the repository:
 
 ## Summary
 
-The protocol has multiple on-chain and off-chain safeguards. None eliminates risk totally. Exposure to GOV or CREDIT implies:
+The protocol has multiple on-chain and off-chain safeguards. None eliminates risk totally. Exposure to GOV, CREDIT, or funding rounds implies:
 
 - Contract risk (bug).
-- Economic risk (the model may not take off).
+- Revenue risk (rev-share depends 100% on the app's sales).
+- Peg/backing risk (the PSM inherits USDC's risk).
 - Governance risk (adverse changes via proposal).
-- Market risk (liquidity, volatility).
-- Regulatory risk (user's jurisdiction).
+- Market risk (GOV liquidity).
+- Regulatory risk (rev-share ≈ security; legal opinion pending pre-mainnet).
 
-Evaluate before any exposure. Start small. Understand the lock before staking.
+Evaluate before any exposure. Start small. Understand the lock and the all-or-nothing before investing.
 
 ---
 

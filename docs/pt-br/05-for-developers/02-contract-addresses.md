@@ -9,6 +9,14 @@
 
 Deploy via `npx hardhat ignition deploy ./ignition/modules/Dao.ts --parameters ignition/parameters/dev.json --network localhost`. Endereços são determinísticos conforme a ordem de deploy do Ignition, mas variam conforme o nonce do deployer. Use o output do deploy.
 
+Os contratos do remodel (CreditPSM, FeeRouterV2, ProjectFunding) + mocks dev são deployados por `scripts/deploy-remodel.ts` e ficam em:
+
+```
+ignition/deployments/chain-31337/dev_addresses.json
+```
+
+> ⚠️ **Dev only — muda a cada deploy.** O hardhat node é in-memory: cada restart zera a chain e cada redeploy gera endereços novos. Nunca hardcode; leia sempre do JSON (ou do `/config.json` servido pelo frontend). Chaves atuais: `USDC` (mock), `DevSwapPool`, `CreditPriceOracle`, `DevFaucet`, `CreditPSM`, `ProjectFunding`, `FeeRouterV2`.
+
 ### Sepolia (testnet)
 
 ```
@@ -43,15 +51,18 @@ A ordem neste índice corresponde à ordem numérica em `08-contracts-reference/
 | 06 | `BurnTracker` | `contracts/BurnTracker.sol` |
 | 07 | `RewardDistributor` | `contracts/RewardDistributor.sol` |
 | 07b | `RewardDistributorV2` | `contracts/RewardDistributorV2.sol` |
-| 08 | `FeeRouter` | `contracts/FeeRouter.sol` |
+| 08 | `FeeRouter` (legado) | `contracts/FeeRouter.sol` |
+| 08b | `FeeRouterV2` | `contracts/FeeRouterV2.sol` |
 | 09 | `CommunityTimelock` | `contracts/CommunityTimelock.sol` |
 | 10 | `CommunityGovernor` | `contracts/CommunityGovernor.sol` |
 | 11 | `TeamVesting` | `contracts/TeamVesting.sol` |
 | 12 | `UserSubsidy` | `contracts/UserSubsidy.sol` |
 | 13 | `LiquidityGauge` | `contracts/LiquidityGauge.sol` |
-| — | `CreditPriceOracle` | `contracts/CreditPriceOracle.sol` |
+| 14 | `CreditPriceOracle` | `contracts/CreditPriceOracle.sol` |
+| 15 | `CreditPSM` | `contracts/CreditPSM.sol` |
+| 16 | `ProjectFunding` | `contracts/ProjectFunding.sol` |
 
-São **15 contratos de produção** no total. Doc detalhada por contrato em [`08-contracts-reference/`](../08-contracts-reference/) (a referência dedicada do `CreditPriceOracle` ainda não foi escrita — consulte a NatSpec do próprio `.sol`).
+São **18 contratos de produção** no total (os três últimos — remodel 2026-07-08 — são o trilho vigente; `FeeRouter` V1, `BurnTracker` e `RewardDistributor` V1/V2 são legado deployado). Doc detalhada por contrato em [`08-contracts-reference/`](../08-contracts-reference/).
 
 ## Versões de dependências
 
@@ -76,6 +87,16 @@ const REWARD_DISTRIBUTOR = deployed['CommunityDAOModule#RewardDistributor'];
 const FEE_ROUTER = deployed['CommunityDAOModule#FeeRouter'];
 const TIMELOCK = deployed['CommunityDAOModule#CommunityTimelock'];
 const GOVERNOR = deployed['CommunityDAOModule#CommunityGovernor'];
+```
+
+Para os contratos do remodel em rede local (dev, muda a cada deploy):
+
+```typescript
+const dev = require('./ignition/deployments/chain-31337/dev_addresses.json');
+const PSM         = dev['CreditPSM'];
+const FEE_ROUTER_V2 = dev['FeeRouterV2'];
+const FUNDING     = dev['ProjectFunding'];
+const USDC_MOCK   = dev['USDC'];
 ```
 
 ## Contratos não deployados pelo módulo principal

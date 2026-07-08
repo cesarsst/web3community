@@ -1,5 +1,7 @@
 # BurnTracker
 
+> ⚠️ **LEGADO — sustituido por el remodel 2026-07-08.** Los pagos ya no queman CREDIT: el riel vigente es el [FeeRouterV2](08b-FeeRouterV2.md) (fee 2,5%, sin burn) y la métrica de uso es `grossVolumeOf`. Este contrato sigue on-chain solo para consulta histórica del burn pre-remodel. Esta página se mantiene como referencia.
+
 **Audiencia:** devs de apps listadas (ganan `RECORDER_ROLE`), auditores.
 **Requisitos previos:** [Burn-to-mint](../02-core-concepts/03-burn-to-mint.md).
 

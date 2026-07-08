@@ -7,6 +7,15 @@ Esta página lista cambios notables en la **documentación pública** (`/docs`).
 
 ## [Unreleased]
 
+### Added — remodel 2026-07-08
+
+- Páginas nuevas de referencia: [CreditPSM](../08-contracts-reference/15-CreditPSM.md), [FeeRouterV2](../08-contracts-reference/08b-FeeRouterV2.md), [ProjectFunding](../08-contracts-reference/16-ProjectFunding.md).
+
+### Changed — remodel 2026-07-08
+
+- Toda la doc actualizada al modelo "riel de pagos + rev-share": CREDIT estable 1:1 USDC vía PSM, fee 2,5% (split 40/40/20), rondas all-or-nothing con rev-share 1%–30%.
+- Páginas del modelo burn-to-mint marcadas con "⚠️ LEGADO": FeeRouter V1, BurnTracker, RewardDistributor V1/V2, LiquidityGauge, burn-to-mint y rewards-distribution (core concepts), claiming-rewards (for users).
+
 ### Changed
 
 - Reestructuración completa del árbol de docs en 10 secciones progresivas siguiendo patrones de Uniswap / Aave / Optimism. Las rutas antiguas `/docs/01-governancetoken` etc. ahora viven en `/docs/contracts-reference/<Contract>`.

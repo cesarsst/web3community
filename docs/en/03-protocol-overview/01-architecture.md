@@ -3,7 +3,80 @@
 **Audience:** dev seeking a complete map of dependencies between contracts.
 **Prerequisites:** [Dual-token](../02-core-concepts/01-dual-token-economy.md), [Governance](../02-core-concepts/05-governance.md).
 
-## Full map (post-CLP pivot, Phase 1)
+## The current rail (2026-07-08 remodel) — 3 new contracts
+
+Since the remodel, the active economic flow goes through **CreditPSM → FeeRouterV2 → ProjectFunding**. The burn-to-mint cycle (V1 FeeRouter, BurnTracker, RewardDistributor V1/V2, LiquidityGauge) stays deployed as legacy, outside the current flow.
+
+```
+   [ user's USDC ]
+        |
+        | buy() 1:1 (6 -> 18 dec)                    sell() 1:1 (burns CREDIT,
+        v                                            returns USDC)
+   +-----------------------------+  <---------------------------------+
+   |         CreditPSM           |                                    |
+   |  USDC backing 100% held     |   MINTER_ROLE + BURNER_ROLE        |
+   |  no withdrawal function     |   on CreditToken                   |
+   +-------------+---------------+                                    |
+                 | stable CREDIT (1:1 USDC)                           |
+                 v                                                    |
+   +-----------------------------+       +--------------------------+ |
+   |        FeeRouterV2          |       |      ProjectFunding      | |
+   |  pay(projectId, amount)     |       |  openRound (owner, 1x)   | |
+   |  fee 2.5% (hard cap 5%)     |       |  invest (requires GOV    | |
+   |    40% treasury             |       |    staked on project)    | |
+   |    40% GOV buyback          | rev-  |  all-or-nothing          | |
+   |    20% grants               | share |  claim (rev-share,       | |
+   |  grossVolumeOf[projectId]   |------>|    never expires)        | |
+   +------+---------------+-----+notify |  totalRevenueDistributed | |
+          |               |     Revenue +------------+-------------+ |
+          | isActive      |                          | getWeight     |
+          v               | toApp (~89.5-97.5%)      v               |
+   +--------------+       |                  +--------------+        |
+   | Project-     |       +----------------> | Staking      |        |
+   | Registry     |         appRecipient     | (GOV, invest |        |
+   | (whitelist)  |         instantly        |  gate)       |        |
+   +--------------+                          +--------------+        |
+                                                                     |
+   [ investor / app / treasury ] --- CREDIT redeemable at any time
+```
+
+Who calls whom (current rail):
+
+| Caller | Calls | When |
+|---|---|---|
+| `CreditPSM.buy` | `USDC.safeTransferFrom` + `CREDIT.mint(user, ..., "psm:buy")` | 1:1 purchase |
+| `CreditPSM.sell` | `CREDIT.safeTransferFrom` + `CREDIT.burnByRole(psm, ..., "psm:sell")` + `USDC.safeTransfer` | 1:1 redemption |
+| `FeeRouterV2.pay` | `REGISTRY.isActive(projectId)` | gate |
+| `FeeRouterV2.pay` | `CREDIT.safeTransferFrom(payer, router, amount)` | pulls the payment |
+| `FeeRouterV2.pay` | `CREDIT.safeTransfer` to treasury/buyback/grants | 40/40/20 fee split |
+| `FeeRouterV2.pay` | `FUNDING.revShareBpsOf(projectId)` | reads the active rev-share |
+| `FeeRouterV2.pay` | `CREDIT.safeTransfer(funding, revShare)` + `FUNDING.notifyRevenue` | credits investors |
+| `FeeRouterV2.pay` | `CREDIT.safeTransfer(appRecipient, toApp)` | pays the app instantly |
+| `ProjectFunding.openRound` | `REGISTRY.isActive` + `getProject(...).owner` | owner only, Active project |
+| `ProjectFunding.invest` / `claim` | `STAKING.getWeight(investor, projectId)` | staked-GOV gate |
+| `ProjectFunding.invest` (target hit) | `CREDIT.safeTransfer(owner, raised)` | all-or-nothing pays the owner |
+
+Current-rail roles:
+
+```
+   CreditPSM
+       |  holds MINTER_ROLE + BURNER_ROLE on CreditToken
+       |  (no AccessControl of its own — zero admin surface)
+
+   FeeRouterV2
+       |  GOVERNANCE_ROLE (Timelock): setFeeBps (cap 500), setFeeSplit, setRecipients
+       |  holds REVENUE_NOTIFIER_ROLE on ProjectFunding
+
+   ProjectFunding
+       |  GOVERNANCE_ROLE (Timelock): setMinTarget
+       |  REVENUE_NOTIFIER_ROLE granted to FeeRouterV2
+```
+
+Per-contract reference: [CreditPSM](../08-contracts-reference/15-CreditPSM.md), [FeeRouterV2](../08-contracts-reference/08b-FeeRouterV2.md), [ProjectFunding](../08-contracts-reference/16-ProjectFunding.md).
+
+## Legacy burn-to-mint rail map (pre-remodel) — remaining contracts
+
+> ⚠️ **LEGACY** — the map below describes the burn-to-mint cycle superseded by the 2026-07-08 remodel. The contracts remain deployed for historical compatibility (old claims, on-chain data), but the current economic flow is the section above. Registry, Staking, Treasury, tokens and governance (Governor/Timelock) remain active on both rails.
 
 ```
                                +-----------------------------+
@@ -74,7 +147,7 @@
    (funded by Timelock with GOV/CREDIT transferred from the Treasury)
 ```
 
-## Who calls whom
+## Who calls whom (legacy rail)
 
 | Caller | Calls | When |
 |---|---|---|
@@ -111,19 +184,21 @@
 | `CommunityGovernor._queueOperations` | `CommunityTimelock.schedule(...)` | queues execution |
 | `CommunityTimelock.execute*` | `CALLS.execute(...)` | calls the target function (Registry, Treasury, etc.) |
 
-## Post-deploy: the role graph (CLP Phase 1.4)
+## Post-deploy: the role graph
 
 ```
    CommunityTimelock (self-administered after handoff)
        |
        |  holds GOVERNANCE_ROLE on:
+       |  - FeeRouterV2 (fee, fee split, recipients)        [current]
+       |  - ProjectFunding (minTarget)                      [current]
        |  - Treasury (incl. FFP, POL, Phase 1.4 ledgers)
        |  - ProjectRegistry (incl. cancelOwnerRecipient escape hatch)
-       |  - BurnTracker
-       |  - RewardDistributor (V1 — claim-only)
-       |  - RewardDistributorV2
-       |  - FeeRouter
-       |  - LiquidityGauge
+       |  - BurnTracker                                     [legacy]
+       |  - RewardDistributor (V1 — claim-only)             [legacy]
+       |  - RewardDistributorV2                             [legacy]
+       |  - FeeRouter                                       [legacy]
+       |  - LiquidityGauge                                  [legacy]
        |  - UserSubsidy
        |
        |  holds DEFAULT_ADMIN_ROLE on all of the above
@@ -152,6 +227,16 @@
        |  holds POL_REFILL_DEPOSITOR_ROLE on Treasury
        |  holds GAUGE_FALLBACK_DEPOSITOR_ROLE on Treasury
        |  holds REWARD_NOTIFIER_ROLE on LiquidityGauge
+
+   CreditPSM
+       |
+       |  holds MINTER_ROLE + BURNER_ROLE on CreditToken (current rail;
+       |  burn always over its own balance, mint 1:1 backed)
+
+   FeeRouterV2
+       |
+       |  holds REVENUE_NOTIFIER_ROLE on ProjectFunding
+       |  (only address authorized to notifyRevenue)
 
    BurnTracker
        |
@@ -198,6 +283,12 @@ LiquidityGauge        -> OZ: IERC20, SafeERC20, IERC721, IERC721Receiver,
                           + interfaces: IUniswapV3Staker, IUniswapV3Pool
 FeeRouter             -> OZ: IERC20, SafeERC20, AccessControl, ReentrancyGuard
                           + CreditToken, BurnTracker, ProjectRegistry, Treasury
+CreditPSM             -> OZ: IERC20, IERC20Metadata, SafeERC20, ReentrancyGuard
+                          + CreditToken
+FeeRouterV2           -> OZ: IERC20, SafeERC20, AccessControl, ReentrancyGuard
+                          + ProjectRegistry, ProjectFunding
+ProjectFunding        -> OZ: IERC20, SafeERC20, AccessControl, ReentrancyGuard
+                          + ProjectRegistry, Staking
 CommunityTimelock     -> OZ: TimelockController
 CommunityGovernor     -> OZ: Governor + 5 extensions
 TeamVesting           -> OZ: IERC20, SafeERC20, Ownable, Ownable2Step
@@ -220,17 +311,18 @@ In both cases, the attacker would need to hold the position for **at least one b
 
 - All OZ 5.0.2 libs pinned.
 - GOV cap.
-- Burn shape (native ERC-20 `_burn`, decrements `totalSupply`).
-- Emission formula (`min(max(alpha*burn, floor), capMax)`) — invariant IE1 (`MAX_ALPHA = 0.99e18`).
+- **PSM backing** (I-PSM1): there is no USDC withdrawal function in the `CreditPSM` — not even for governance. Exact 1:1 conversion (I-PSM2).
+- **Hard fee cap**: `FEE_BPS_CAP = 500` (5%) in FeeRouterV2 — not even an approved proposal can exceed it.
+- **Funding bounds**: rev-share `[100, 3000]` bps and duration `[1, 90]` days are constants in ProjectFunding; all-or-nothing enforced on-chain.
 - Anti-flashloan snapshots.
-- Per-bucket bounds in V2 (`MIN_BUCKET_STAKERS_BPS = 3000`, etc.).
-- IE12 (sum of buckets == totalEmission) — defensive assert in `finalizeRound`.
-- FFP buyback floor + caps — bounds hardcoded in `_checkBounds`.
+- Legacy: burn shape (native `_burn`), emission formula (invariant IE1, `MAX_ALPHA = 0.99e18`), V2 bucket bounds, IE12, FFP floor + caps.
 
 **Trustworthy by governance** (changeable via proposal, but the change goes through every delay):
 
-- `alpha`, `capMax`, `roundDuration`, `sanityCap`, `minCollateral`, `probationDuration` values.
-- FeeRouter splits.
+- FeeRouterV2 `feeBps` (up to the 500 cap), `feeSplit` (sums 10,000) and fee recipients.
+- ProjectFunding `minTarget`.
+- `alpha`, `capMax`, `roundDuration`, `sanityCap`, `minCollateral`, `probationDuration` values (legacy).
+- FeeRouter splits (legacy).
 - V2 `bucketBps` (within per-bucket bounds).
 - FFP parameters (`floorMultiplierBps`, `triggerDurationSecs`, caps, slippage).
 - Governor parameters (voting delay, period, threshold, quorum).
