@@ -3,14 +3,14 @@ import { ethers } from "hardhat";
 import { loadFixture, mine, time } from "@nomicfoundation/hardhat-network-helpers";
 
 /**
- * CommunityGovernor — proposal types (supermajority para removePOL).
+ * CommunityGovernor — proposal types (supermajority para gestao de roles).
  *
- * Cobre a regra on-chain "propostas contendo Treasury.removePOL exigem
+ * Cobre a regra on-chain "propostas de gestao de roles no Treasury/Timelock exigem
  * supermaioria 75%" (antes apenas norma cultural, docs/governance/
  * fase1-2-pol.md §5):
  *  - Regressao: proposta normal (target != treasury) passa com maioria
  *    simples mesmo com < 75% For.
- *  - removePOL: 74% For / 26% Against -> Defeated; 76% For / 24% Against ->
+ *  - gestao de roles: 74% For / 26% Against -> Defeated; 76% For / 24% Against ->
  *    Succeeded (threshold inclusivo em 75% dos votos decisivos For/Against).
  *  - Fronteira EXATA: 75/25 -> Succeeded (>= inclusivo); 1 wei abaixo de
  *    75% -> Defeated; supermaioria na razao mas abaixo do quorum ->
@@ -19,10 +19,10 @@ import { loadFixture, mine, time } from "@nomicfoundation/hardhat-network-helper
  *  - Anti-bypass de roles: grantRole/revokeRole/renounceRole com target no
  *    Treasury OU no Timelock sao classificadas Supermajority — fecha o
  *    vetor "proposta de maioria simples concede GOVERNANCE_ROLE do
- *    Treasury a um EOA que chama removePOL direto". Fixture espelha a
+ *    Treasury a um EOA que move o cofre direto". Fixture espelha a
  *    producao (Dao.ts fase C.2/D): Timelock detem DEFAULT_ADMIN_ROLE +
  *    GOVERNANCE_ROLE do Treasury, deployer renuncia.
- *  - Batch misto (removePOL + outra call) contamina a proposta inteira ->
+ *  - Batch misto (gestao de roles + outra call) contamina a proposta inteira ->
  *    exige 75%.
  *  - Proposta para o treasury com OUTRO selector (transfer) -> maioria
  *    simples; grantRole em contrato TERCEIRO -> maioria simples.
@@ -92,7 +92,7 @@ describe("CommunityGovernor — supermajority proposal types", function () {
     await timelock.waitForDeployment();
 
     // 3. Treasury — deployado ANTES do Governor (o construtor do Governor
-    //    recebe o endereco do Treasury para o scan de removePOL). CREDIT
+    //    recebe o endereco do Treasury para o scan de gestao de roles).
     //    placeholder = GOV; USDC = zero (FFP fora de escopo aqui).
     //    Wiring de roles ESPELHA a producao (Dao.ts fase C.2 + fase D): o
     //    Timelock recebe GOVERNANCE_ROLE E DEFAULT_ADMIN_ROLE, o deployer
@@ -100,11 +100,7 @@ describe("CommunityGovernor — supermajority proposal types", function () {
     //    habilita o vetor `grantRole` via proposta, coberto nos testes de
     //    anti-bypass abaixo.
     const Treasury = await ethers.getContractFactory("Treasury");
-    const treasury = await Treasury.deploy(
-      admin.address,
-      await gov.getAddress(),
-      ethers.ZeroAddress,
-    );
+    const treasury = await Treasury.deploy(admin.address);
     await treasury.waitForDeployment();
     const TREASURY_GOV_ROLE = await treasury.GOVERNANCE_ROLE();
     const TREASURY_ADMIN_ROLE = await treasury.DEFAULT_ADMIN_ROLE();
@@ -188,9 +184,12 @@ describe("CommunityGovernor — supermajority proposal types", function () {
     };
   }
 
-  /** Calldata de Treasury.removePOL (nunca executada — so o selector importa). */
-  function removePOLCalldata(treasury: { interface: any }): string {
-    return treasury.interface.encodeFunctionData("removePOL", [1n, 0n, 0n, 2n ** 40n]);
+  /** Calldata de gestao de roles no Treasury (grantRole) — selector escaneado
+   *  pelo Governor, dispara o gate de supermaioria. Nunca executada; so o
+   *  selector + target importam para o scan de {propose}. */
+  function roleGrantCalldata(treasury: { interface: any }): string {
+    const role = ethers.id("GOVERNANCE_ROLE");
+    return treasury.interface.encodeFunctionData("grantRole", [role, ethers.ZeroAddress]);
   }
 
   /** Calldata de Treasury.transfer (outro selector, mesmo target). */
@@ -236,7 +235,7 @@ describe("CommunityGovernor — supermajority proposal types", function () {
     });
   });
 
-  describe("removePOL exige supermaioria 75%", function () {
+  describe("gestao de roles no Treasury exige supermaioria 75%", function () {
     it("74% For / 26% Against -> Defeated (abaixo do threshold de 75%)", async function () {
       const { governor, treasury, proposer, voter74, voter26 } = await loadFixture(deployFixture);
 
@@ -244,7 +243,7 @@ describe("CommunityGovernor — supermajority proposal types", function () {
         governor,
         proposer,
         [await treasury.getAddress()],
-        [removePOLCalldata(treasury)],
+        [roleGrantCalldata(treasury)],
         "supermajority: remove POL (74/26)",
       );
       expect(await governor.proposalRequiresSupermajority(pid)).to.equal(true);
@@ -266,7 +265,7 @@ describe("CommunityGovernor — supermajority proposal types", function () {
         governor,
         proposer,
         [await treasury.getAddress()],
-        [removePOLCalldata(treasury)],
+        [roleGrantCalldata(treasury)],
         "supermajority: remove POL (76/24)",
       );
       expect(await governor.proposalRequiresSupermajority(pid)).to.equal(true);
@@ -289,7 +288,7 @@ describe("CommunityGovernor — supermajority proposal types", function () {
         governor,
         proposer,
         [await treasury.getAddress()],
-        [removePOLCalldata(treasury)],
+        [roleGrantCalldata(treasury)],
         "supermajority: remove POL (75/25 exato)",
       );
       expect(await governor.proposalRequiresSupermajority(pid)).to.equal(true);
@@ -311,7 +310,7 @@ describe("CommunityGovernor — supermajority proposal types", function () {
         governor,
         proposer,
         [await treasury.getAddress()],
-        [removePOLCalldata(treasury)],
+        [roleGrantCalldata(treasury)],
         "supermajority: remove POL (75k - 1 wei)",
       );
 
@@ -332,7 +331,7 @@ describe("CommunityGovernor — supermajority proposal types", function () {
         governor,
         proposer,
         [await treasury.getAddress()],
-        [removePOLCalldata(treasury)],
+        [roleGrantCalldata(treasury)],
         "supermajority: remove POL (razao ok, quorum nao)",
       );
 
@@ -354,7 +353,7 @@ describe("CommunityGovernor — supermajority proposal types", function () {
         governor,
         proposer,
         [await treasury.getAddress()],
-        [removePOLCalldata(treasury)],
+        [roleGrantCalldata(treasury)],
         "supermajority: remove POL (so Abstain)",
       );
 
@@ -381,7 +380,7 @@ describe("CommunityGovernor — supermajority proposal types", function () {
         await loadFixture(deployFixture);
 
       // O vetor barato do finding: proposta "Standard" que re-autoriza um
-      // EOA a chamar removePOL direto. Com o scan de roles, ela e marcada
+      // EOA a mover o cofre direto. Com o scan de roles, ela e marcada
       // Supermajority e 74% For nao basta.
       const calldata = treasury.interface.encodeFunctionData("grantRole", [
         TREASURY_GOV_ROLE,
@@ -403,9 +402,10 @@ describe("CommunityGovernor — supermajority proposal types", function () {
 
       expect(await governor.state(pid)).to.equal(STATE_DEFEATED);
       expect(await treasury.hasRole(TREASURY_GOV_ROLE, attacker.address)).to.equal(false);
-      // Sem a role, o attacker segue barrado no AccessControl do removePOL.
+      // Sem a role, o attacker segue barrado no AccessControl do Treasury
+      // (transfer e onlyRole(GOVERNANCE_ROLE)).
       await expect(
-        treasury.connect(attacker).removePOL(1n, 0n, 0n, 2n ** 40n),
+        treasury.connect(attacker).transfer(ethers.ZeroAddress, attacker.address, 1n),
       ).to.be.revertedWithCustomError(treasury, "AccessControlUnauthorizedAccount");
     });
 
@@ -483,7 +483,7 @@ describe("CommunityGovernor — supermajority proposal types", function () {
     it("grantRole(PROPOSER_ROLE, attacker) no TIMELOCK e Supermajority (bypass via schedule direto)", async function () {
       const { governor, timelock, proposer, attacker, PROPOSER_ROLE } =
         await loadFixture(deployFixture);
-      // Conceder PROPOSER_ROLE do Timelock permitiria agendar removePOL fora
+      // Conceder PROPOSER_ROLE do Timelock permitiria agendar acoes do cofre fora
       // do Governor (o Timelock e quem detem GOVERNANCE_ROLE do Treasury).
       const calldata = timelock.interface.encodeFunctionData("grantRole", [
         PROPOSER_ROLE,
@@ -503,11 +503,7 @@ describe("CommunityGovernor — supermajority proposal types", function () {
       const { governor, gov, admin, proposer, attacker } = await loadFixture(deployFixture);
       // Outro Treasury qualquer, NAO wired ao Governor.
       const Treasury = await ethers.getContractFactory("Treasury");
-      const otherTreasury = await Treasury.deploy(
-        admin.address,
-        await gov.getAddress(),
-        ethers.ZeroAddress,
-      );
+      const otherTreasury = await Treasury.deploy(admin.address);
       await otherTreasury.waitForDeployment();
 
       const calldata = otherTreasury.interface.encodeFunctionData("grantRole", [
@@ -525,20 +521,20 @@ describe("CommunityGovernor — supermajority proposal types", function () {
     });
   });
 
-  describe("batch misto (removePOL + outra call) contamina a proposta inteira", function () {
-    it("74% For / 26% Against -> Defeated mesmo com removePOL fora da primeira posicao", async function () {
+  describe("batch misto (gestao de roles + outra call) contamina a proposta inteira", function () {
+    it("74% For / 26% Against -> Defeated mesmo com gestao de roles fora da primeira posicao", async function () {
       const { governor, treasury, usdc, proposer, voter74, voter26, recipient } =
         await loadFixture(deployFixture);
 
       const treasuryAddr = await treasury.getAddress();
-      // removePOL na SEGUNDA posicao — o scan cobre o batch inteiro.
+      // grantRole na SEGUNDA posicao — o scan cobre o batch inteiro.
       const pid = await propose(
         governor,
         proposer,
         [treasuryAddr, treasuryAddr],
         [
           transferCalldata(treasury, await usdc.getAddress(), recipient.address),
-          removePOLCalldata(treasury),
+          roleGrantCalldata(treasury),
         ],
         "mixed batch: transfer + remove POL (74/26)",
       );
@@ -563,7 +559,7 @@ describe("CommunityGovernor — supermajority proposal types", function () {
         [treasuryAddr, treasuryAddr],
         [
           transferCalldata(treasury, await usdc.getAddress(), recipient.address),
-          removePOLCalldata(treasury),
+          roleGrantCalldata(treasury),
         ],
         "mixed batch: transfer + remove POL (76/24)",
       );
@@ -590,7 +586,7 @@ describe("CommunityGovernor — supermajority proposal types", function () {
         [transferCalldata(treasury, await usdc.getAddress(), recipient.address)],
         "standard: treasury transfer (74/26)",
       );
-      // Mesmo target == treasury, o selector nao e removePOL -> Standard.
+      // Mesmo target == treasury, o selector nao e gestao de roles -> Standard.
       expect(await governor.proposalRequiresSupermajority(pid)).to.equal(false);
 
       await mine(VOTING_DELAY + 1);
@@ -603,12 +599,12 @@ describe("CommunityGovernor — supermajority proposal types", function () {
   });
 
   describe("evento ProposalTypeSet", function () {
-    it("emite Supermajority (1) para proposta com removePOL", async function () {
+    it("emite Supermajority (1) para proposta de gestao de roles", async function () {
       const { governor, treasury, proposer } = await loadFixture(deployFixture);
 
       const targets = [await treasury.getAddress()];
       const values = [0n];
-      const calldatas = [removePOLCalldata(treasury)];
+      const calldatas = [roleGrantCalldata(treasury)];
       const desc = "event: remove POL";
       const pid = await governor.hashProposal(targets, values, calldatas, ethers.id(desc));
 
@@ -617,7 +613,7 @@ describe("CommunityGovernor — supermajority proposal types", function () {
         .withArgs(pid, TYPE_SUPERMAJORITY);
     });
 
-    it("emite Standard (0) para proposta sem removePOL", async function () {
+    it("emite Standard (0) para proposta sem gestao de roles", async function () {
       const { governor, treasury, usdc, proposer, recipient } = await loadFixture(deployFixture);
 
       const targets = [await treasury.getAddress()];
@@ -633,12 +629,6 @@ describe("CommunityGovernor — supermajority proposal types", function () {
   });
 
   describe("wiring do selector e do treasury", function () {
-    it("REMOVE_POL_SELECTOR bate com a assinatura removePOL(uint128,uint256,uint256,uint256)", async function () {
-      const { governor } = await loadFixture(deployFixture);
-      const expected = ethers.id("removePOL(uint128,uint256,uint256,uint256)").slice(0, 10);
-      expect(await governor.REMOVE_POL_SELECTOR()).to.equal(expected); // 0x6a71d4b3
-    });
-
     it("selectors de gestao de roles batem com as assinaturas do IAccessControl", async function () {
       const { governor } = await loadFixture(deployFixture);
       expect(await governor.GRANT_ROLE_SELECTOR()).to.equal(

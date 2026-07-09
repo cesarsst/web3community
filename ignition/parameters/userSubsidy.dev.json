@@ -1,7 +1,0 @@
-{
-  "_comment": "DEV profile. Deploy UserSubsidy apos o core DAO ter rodado — substitua os placeholders abaixo pelos enderecos reais do CreditToken e do admin (deployer em dev / CommunityTimelock em prod). Exemplo de substituicao: pegue os addresses de ignition/deployments/chain-31337/deployed_addresses.json.",
-  "UserSubsidyModule": {
-    "creditAddress": "0x0000000000000000000000000000000000000000",
-    "adminAddress": "0x0000000000000000000000000000000000000000"
-  }
-}

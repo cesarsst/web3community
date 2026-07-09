@@ -59,11 +59,7 @@ describe("CommunityGovernor", function () {
     //    apenas como sentinela; o FFP nao opera porque oracle/router/feed
     //    nao serao setados.
     const Treasury = await ethers.getContractFactory("Treasury");
-    const treasury = await Treasury.deploy(
-      admin.address,
-      await gov.getAddress(),
-      ethers.ZeroAddress,
-    );
+    const treasury = await Treasury.deploy(admin.address);
     await treasury.waitForDeployment();
     const TREASURY_GOV_ROLE = await treasury.GOVERNANCE_ROLE();
     await treasury.connect(admin).grantRole(TREASURY_GOV_ROLE, await timelock.getAddress());
@@ -458,7 +454,7 @@ describe("CommunityGovernor", function () {
       // Avanca o timelock delay e executa
       await time.increase(TIMELOCK_DELAY);
       await expect(governor.execute(p.targets, p.values, p.calldatas, p.descriptionHash))
-        .to.emit(treasury, "Transferred")
+        .to.emit(treasury, "TokenTransferred")
         .withArgs(await usdc.getAddress(), recipient.address, amount);
 
       expect(await usdc.balanceOf(recipient.address)).to.equal(amount);

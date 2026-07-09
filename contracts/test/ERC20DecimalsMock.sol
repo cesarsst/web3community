@@ -8,7 +8,7 @@ import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
  * @notice Mock de ERC-20 com `decimals` configuravel no constructor (o
  *         {ERC20Mock} legado fixa 18). Inclui {mint} publico, sem controle
  *         de acesso. NAO deploy em producao.
- * @dev Usado em test/CreditPriceOracle.test.ts para simular o USDC com 6
+ * @dev Usado em test/Remodel.test.ts / test/CreditPSM para simular o USDC com 6
  *      decimais reais (a conversao 6 -> 18 dec e parte do contrato sob
  *      teste) e tokens com decimals invalidos (> 18).
  */

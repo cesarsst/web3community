@@ -1,6 +1,6 @@
 # Documentação da web3community
 
-Bem-vindo à documentação pública da DAO **web3community** — uma plataforma multi-aplicativos com economia dual-token (GOV + CREDIT), staking direcionado por projeto e ciclo econômico sustentado pelo consumo real dentro dos apps do ecossistema.
+Bem-vindo à documentação pública da DAO **web3community** — uma plataforma multi-aplicativos com moeda de pagamento estável (CREDIT, 1:1 com USDC), governança on-chain (GOV) e um motor de funding que converte uso real dos apps em receita para os desenvolvedores e rev-share para quem os financia.
 
 Esta doc é **código-primeiro**: tudo o que você lê aqui é verificável nos contratos em `contracts/`. Se a doc e o código divergirem, o código ganha — divergências são bugs da doc, não features.
 
@@ -21,7 +21,7 @@ Cada leitor tem uma entrada diferente. Use a trilha certa para o seu caso.
 2. [Ter GOV](04-for-users/02-holding-gov.md)
 3. [Staking em projetos](04-for-users/03-staking-in-projects.md)
 4. [Votar em propostas](04-for-users/04-voting.md)
-5. [Reivindicar rewards](04-for-users/05-claiming-rewards.md)
+5. [Sacar rev-share](04-for-users/05-claiming-revenue.md)
 
 ### Sou dev — quero integrar um app ao ecossistema
 
@@ -48,7 +48,7 @@ Vá direto a [`08-contracts-reference/`](08-contracts-reference/). Um arquivo po
 | Seção | Conteúdo |
 |---|---|
 | [01-getting-started](01-getting-started/) | Introdução, modelo mental, glossário |
-| [02-core-concepts](02-core-concepts/) | Dual-token, staking direcionado, burn-to-mint, rewards, governança, projetos, tesouraria |
+| [02-core-concepts](02-core-concepts/) | Dual-token, staking direcionado, trilho de pagamento, funding por rev-share, governança, projetos, tesouraria |
 | [03-protocol-overview](03-protocol-overview/) | Arquitetura, fluxos de usuário, fluxo de valor |
 | [04-for-users](04-for-users/) | Guias passo a passo para usuários finais |
 | [05-for-developers](05-for-developers/) | Integração, endereços, ambiente local |
@@ -61,14 +61,17 @@ Vá direto a [`08-contracts-reference/`](08-contracts-reference/). Um arquivo po
 ## Convenções
 
 - **Todas as páginas estão em português.**
-- **Parâmetros numéricos** citados aqui (quorum, lock mínimo, supply cap, etc.) vêm do código — constants nos `.sol`, constructors ou parâmetros de deploy Ignition. Não há chutes.
+- **Parâmetros numéricos** citados aqui (quorum, lock mínimo, supply cap, fee, etc.) vêm do código — constants nos `.sol`, constructors ou parâmetros de deploy Ignition. Não há chutes.
 - **Diagramas são ASCII**. Escolha deliberada: versionam em git, não dependem de CDN, funcionam em qualquer renderer de markdown.
 - **Links internos** são relativos à raiz de `docs/`. O renderer do hub converte para rotas web em tempo de build.
 
+## O modelo em uma frase
+
+Usuários compram CREDIT 1:1 com USDC no [CreditPSM](08-contracts-reference/03-CreditPSM.md), pagam nos apps via [FeeRouterV2](08-contracts-reference/06-FeeRouterV2.md) (fee de 2,5%; o app fica com ~89,5–97,5% na hora), e investidores que financiaram um projeto via [ProjectFunding](08-contracts-reference/07-ProjectFunding.md) recebem uma fatia da receita bruta a cada pagamento.
+
 ## Status do protocolo
 
-- **Remodel 2026-07-08 ativo**: trilho de pagamento + funding por rev-share ([CreditPSM](08-contracts-reference/15-CreditPSM.md), [FeeRouterV2](08-contracts-reference/08b-FeeRouterV2.md), [ProjectFunding](08-contracts-reference/16-ProjectFunding.md)). O ciclo burn-to-mint (FeeRouter V1, BurnTracker, RewardDistributor V1/V2, LiquidityGauge) é legado, mantido deployado por compatibilidade histórica.
-- 18 contratos (veja [08-contracts-reference](08-contracts-reference/)).
+- **11 contratos de núcleo** + 1 utilitário exclusivo de rede local (`DevFaucet`) — veja [08-contracts-reference](08-contracts-reference/).
 - Solidity 0.8.24 com `viaIR` ativado.
 - OpenZeppelin Contracts 5.0.2 pinado.
-- Pronto para deploy Sepolia pós-auditoria externa.
+- Redes: hardhat local (31337) e Sepolia (11155111). Mainnet depende de auditoria externa e de parecer jurídico sobre o rev-share (ver [Riscos e segurança](06-for-investors/03-risk-and-security.md)).

@@ -9,10 +9,11 @@ import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol
 /**
  * @title DevFaucet
  * @notice Faucet de desenvolvimento para a REDE LOCAL (hardhat): entrega em
- *         um unico claim ETH (gas) + CREDIT + USDC mock para qualquer
- *         carteira, permitindo que contas novas transacionem imediatamente
- *         (ativar apps via FeeRouter, comprar CREDIT na {DevSwapPool},
- *         pagar gas).
+ *         um unico claim ETH (gas) + USDC mock para qualquer carteira,
+ *         permitindo que contas novas transacionem imediatamente. CREDIT
+ *         nao sai daqui de proposito: compra-se 1:1 no {CreditPSM} com o
+ *         USDC do proprio faucet — assim todo CREDIT em circulacao continua
+ *         100% lastreado.
  *
  * @dev NAO DEPLOYAR EM PRODUCAO — o faucet e deliberadamente aberto:
  *      - {claimFor} e permissionless: qualquer conta ja financiada (ex.: as
@@ -23,10 +24,9 @@ import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol
  *        orcamento drenavel por carteira.
  *      - Cada perna entrega `min(drip, saldo disponivel)` em vez de
  *        reverter: o faucet continua util enquanto sobrar qualquer ativo.
- *        Reverte apenas se as tres pernas resultarem em zero.
- *      - Financiamento: ETH via {receive}; CREDIT via proposta de governanca
- *        (`Treasury.transfer(credit, faucet, X)`) no deploy-prod-sim; USDC
- *        mock mintado direto pelo script.
+ *        Reverte apenas se as duas pernas resultarem em zero.
+ *      - Financiamento: ETH via {receive}; USDC mock mintado direto pelo
+ *        script de provisionamento.
  * @custom:security-contact security@web3community.example
  */
 contract DevFaucet is Ownable, ReentrancyGuard {
@@ -36,17 +36,11 @@ contract DevFaucet is Ownable, ReentrancyGuard {
     // Immutables / storage
     // ------------------------------------------------------------------
 
-    /// @notice Token CREDIT entregue pelo faucet.
-    IERC20 public immutable CREDIT;
-
     /// @notice USDC mock entregue pelo faucet.
     IERC20 public immutable USDC;
 
     /// @notice ETH (wei) por claim.
     uint256 public dripEth;
-
-    /// @notice CREDIT (wei, 18 dec) por claim.
-    uint256 public dripCredit;
 
     /// @notice USDC (unidades minimas, 6 dec no mock) por claim.
     uint256 public dripUsdc;
@@ -63,10 +57,10 @@ contract DevFaucet is Ownable, ReentrancyGuard {
 
     /// @notice Emitido a cada claim. Quantias refletem o que foi de fato
     ///         entregue (podem ser menores que o drip se o saldo acabou).
-    event Claimed(address indexed to, address indexed caller, uint256 eth, uint256 credit, uint256 usdc);
+    event Claimed(address indexed to, address indexed caller, uint256 eth, uint256 usdc);
 
     /// @notice Emitido quando o owner atualiza os parametros de drip.
-    event DripConfigured(uint256 dripEth, uint256 dripCredit, uint256 dripUsdc, uint256 cooldown);
+    event DripConfigured(uint256 dripEth, uint256 dripUsdc, uint256 cooldown);
 
     /// @notice Emitido quando o faucet recebe ETH.
     event Funded(address indexed from, uint256 amount);
@@ -81,7 +75,7 @@ contract DevFaucet is Ownable, ReentrancyGuard {
     /// @notice Cooldown do destinatario ainda ativo.
     error CooldownActive(address to, uint256 availableAt);
 
-    /// @notice Faucet sem saldo em nenhuma das tres pernas.
+    /// @notice Faucet sem saldo em nenhuma das pernas.
     error FaucetEmpty();
 
     /// @notice Envio de ETH falhou.
@@ -92,33 +86,27 @@ contract DevFaucet is Ownable, ReentrancyGuard {
     // ------------------------------------------------------------------
 
     /**
-     * @param credit_ Endereco do CreditToken.
      * @param usdc_ Endereco do USDC mock.
      * @param owner_ Conta que ajusta drips/cooldown (deployer em dev).
      * @param dripEth_ ETH (wei) por claim.
-     * @param dripCredit_ CREDIT (wei) por claim.
      * @param dripUsdc_ USDC (unidades minimas) por claim.
      * @param cooldown_ Intervalo minimo entre claims por destinatario.
      */
     constructor(
-        address credit_,
         address usdc_,
         address owner_,
         uint256 dripEth_,
-        uint256 dripCredit_,
         uint256 dripUsdc_,
         uint256 cooldown_
     ) Ownable(owner_) {
-        if (credit_ == address(0) || usdc_ == address(0)) {
+        if (usdc_ == address(0)) {
             revert ZeroAddress();
         }
-        CREDIT = IERC20(credit_);
         USDC = IERC20(usdc_);
         dripEth = dripEth_;
-        dripCredit = dripCredit_;
         dripUsdc = dripUsdc_;
         cooldown = cooldown_;
-        emit DripConfigured(dripEth_, dripCredit_, dripUsdc_, cooldown_);
+        emit DripConfigured(dripEth_, dripUsdc_, cooldown_);
     }
 
     // ------------------------------------------------------------------
@@ -133,7 +121,7 @@ contract DevFaucet is Ownable, ReentrancyGuard {
     /**
      * @notice Executa o drip para `to`. Permissionless (ver racional no
      *         NatSpec do contrato); cooldown contado por destinatario.
-     * @param to Carteira que recebe ETH + CREDIT + USDC.
+     * @param to Carteira que recebe ETH + USDC.
      */
     function claimFor(address to) public nonReentrant {
         if (to == address(0)) {
@@ -145,17 +133,14 @@ contract DevFaucet is Ownable, ReentrancyGuard {
             revert CooldownActive(to, availableAt);
         }
 
-        (uint256 ethOut, uint256 creditOut, uint256 usdcOut) = previewClaim();
-        if (ethOut == 0 && creditOut == 0 && usdcOut == 0) {
+        (uint256 ethOut, uint256 usdcOut) = previewClaim();
+        if (ethOut == 0 && usdcOut == 0) {
             revert FaucetEmpty();
         }
 
         // solhint-disable-next-line not-rely-on-time
         lastClaimAt[to] = block.timestamp;
 
-        if (creditOut > 0) {
-            CREDIT.safeTransfer(to, creditOut);
-        }
         if (usdcOut > 0) {
             USDC.safeTransfer(to, usdcOut);
         }
@@ -166,7 +151,7 @@ contract DevFaucet is Ownable, ReentrancyGuard {
             }
         }
 
-        emit Claimed(to, msg.sender, ethOut, creditOut, usdcOut);
+        emit Claimed(to, msg.sender, ethOut, usdcOut);
     }
 
     // ------------------------------------------------------------------
@@ -177,12 +162,10 @@ contract DevFaucet is Ownable, ReentrancyGuard {
      * @notice Quantias que um claim entregaria AGORA — `min(drip, saldo)`
      *         por perna.
      */
-    function previewClaim() public view returns (uint256 ethOut, uint256 creditOut, uint256 usdcOut) {
+    function previewClaim() public view returns (uint256 ethOut, uint256 usdcOut) {
         uint256 ethBal = address(this).balance;
-        uint256 creditBal = CREDIT.balanceOf(address(this));
         uint256 usdcBal = USDC.balanceOf(address(this));
         ethOut = dripEth < ethBal ? dripEth : ethBal;
-        creditOut = dripCredit < creditBal ? dripCredit : creditBal;
         usdcOut = dripUsdc < usdcBal ? dripUsdc : usdcBal;
     }
 
@@ -204,17 +187,11 @@ contract DevFaucet is Ownable, ReentrancyGuard {
     /**
      * @notice Ajusta drips e cooldown.
      */
-    function setDrip(
-        uint256 dripEth_,
-        uint256 dripCredit_,
-        uint256 dripUsdc_,
-        uint256 cooldown_
-    ) external onlyOwner {
+    function setDrip(uint256 dripEth_, uint256 dripUsdc_, uint256 cooldown_) external onlyOwner {
         dripEth = dripEth_;
-        dripCredit = dripCredit_;
         dripUsdc = dripUsdc_;
         cooldown = cooldown_;
-        emit DripConfigured(dripEth_, dripCredit_, dripUsdc_, cooldown_);
+        emit DripConfigured(dripEth_, dripUsdc_, cooldown_);
     }
 
     /// @notice Financia o faucet com ETH.

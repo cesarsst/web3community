@@ -1,153 +1,75 @@
-# Value accrual
+# Value accrual: como o valor acumula
 
-**Para quem é:** leitor avaliando a arquitetura econômica do protocolo.
-**Pré-requisitos:** [Tokenomics](01-tokenomics.md), [Fluxo de valor](../03-protocol-overview/03-economic-flows.md).
+**Para quem é:** quem quer entender de onde vem o retorno antes de qualquer exposição.
+**Pré-requisitos:** [Dual-token economy](../02-core-concepts/01-dual-token-economy.md), [Tokenomics](01-tokenomics.md).
 
-> **Aviso**: esta página descreve **mecanismos on-chain** pelos quais valor transita no protocolo. Não é recomendação, projeção nem promessa. Exposição a GOV ou a posições de rev-share envolve riscos descritos em [Riscos e segurança](03-risk-and-security.md).
+Existem **duas** formas distintas de capturar valor no protocolo, e elas não se confundem. O CREDIT **não** é uma delas — ele é estável por construção e nunca valoriza.
 
-> **Remodel 2026-07-08**: o eixo de acúmulo de valor mudou. **CREDIT é estável (1:1 USDC via PSM) e não acumula valor** — quem acumula é o **GOV** (buyback contínuo financiado pela fee) e a **posição de rev-share** (renda de receita real via ProjectFunding). Mecanismos deflacionários de CREDIT abaixo estão marcados como legado.
+| Via | Instrumento | De onde vem o valor |
+|---|---|---|
+| **Valorização do GOV** | segurar GOV | buyback financiado pela fee (40% da fee ≈ 1% do GMV) |
+| **Renda de rev-share** | posição numa rodada financiada | % da **receita real** do app, paga a cada `pay` |
 
-## Onde o valor entra
+Ambas dependem de **uso real dos apps**. Não há emissão, não há reward inflacionário, não há rendimento que apareça do nada.
 
-A única fonte de **valor externo** no sistema é o usuário final que converte USDC em CREDIT no `CreditPSM` porque quer usar os apps do ecossistema.
+## Via 1 — GOV valoriza via buyback
 
-Se **zero** usuários comprarem CREDIT para usar os apps, nenhum mecanismo descrito abaixo produz valor. A sustentação do protocolo depende da utilidade oferecida pelos apps listados. Isso não mudou com o remodel — mudou apenas **quem captura** o valor gerado.
+Toda vez que alguém paga um app, o [`FeeRouterV2`](../08-contracts-reference/06-FeeRouterV2.md) cobra 2,5% e reparte a fee em 40% treasury / 40% buyback / 20% grants. A parcela de **buyback** (40% da fee) vai para o `buybackRecipient`, destinada a recomprar GOV no mercado.
 
-## CREDIT não acumula valor — por desenho
-
-Desde o remodel, CREDIT é meio de pagamento estável:
-
-- **Preço**: 1 CREDIT = 1 USDC, sempre, garantido pelo PSM (compra e resgate 1:1, sem taxa).
-- **Sem pressão de compra/venda a modelar**: não há pool, não há float especulativo, não há tese de apreciação.
-- **Risco de CREDIT** ≈ risco do lastro (USDC) + risco de contrato do PSM (imutável, sem função de saque — invariante I-PSM1).
-
-Quem quer exposição ao crescimento do ecossistema **não compra CREDIT** — compra GOV ou financia projetos.
-
-> **Legado (pré-remodel)**: pressão de compra via consumo/retenção/burn de 70% por pagamento, FFP buyback com queima e dinâmica `supply_R ≈ supply_{R-1} - 0.05 × burn_R` pertencem ao modelo burn-to-mint. A simulação de 52 rodadas em `scripts/simulation/` descrevia essa dinâmica.
-
-## A renda do investidor: rev-share de receita real
-
-O ativo de renda do modelo vigente é a **posição de funding** no [ProjectFunding](../08-contracts-reference/16-ProjectFunding.md):
-
-1. O investidor staka GOV no projeto (gate) e investe CREDIT na rodada (shares 1:1).
-2. A cada `FeeRouterV2.pay`, o rev-share do projeto (1-30% da receita bruta, fixado na rodada) é creditado pro-rata às shares.
-3. `claim` saca a qualquer momento (exige manter o GOV stakeado; o acumulado nunca expira).
-
-**Propriedades**:
-
-- **Renda real, não emissão**: cada CREDIT recebido veio de um pagamento de usuário. Zero inflação.
-- **Transparência total**: `grossVolumeOf` (GMV), `totalRevenueDistributed` (já pago), `pendingRevenue` (a sacar) — tudo on-chain, sem indexador.
-- **Yield ilustrativo** (não é promessa): rodada de 10.000 CREDIT a 8% de rev-share com GMV de 2.000/mês → 1.920/ano ≈ 19,2% a.a.; rodada de 50.000 a 12% com GMV de 5.000/mês → 14,4% a.a. O yield real depende 100% da receita do app.
-- **Risco**: capital não é devolvido (compra-se o fluxo, não um bond); projeto sem receita = renda zero; all-or-nothing protege só na fase de captação (refund integral se a rodada falha).
-
-## Caminhos pelos quais GOV adquire pressão de compra
-
-1. **Buyback contínuo financiado pela fee** — mecanismo **dedicado e automático de funding**: 40% da fee de cada pagamento (= 1% do GMV) vai para o `buybackRecipient` do FeeRouterV2. Pressão de compra proporcional ao uso real, pagamento a pagamento — não depende de proposta por evento.
-2. **Stakers/investidores comprando GOV** para stakar em projetos — agora obrigatório para **investir** em rodadas e sacar rev-share (gate do ProjectFunding).
-3. **Novos projetos comprando GOV** para cumprir `minCollateral` (10.000 GOV por listagem).
-4. **Programas adicionais aprovados pela DAO** via transferências do Treasury.
-
-(Legado: o `Treasury.executeBuyback` do FFP comprava e queimava **CREDIT**, não GOV — pertence ao trilho antigo.)
-
-## Caminhos pelos quais GOV sai de circulação
-
-1. **Staking**: GOV trancado em `Staking` por até 365+ dias, multiplicador de peso em função do lock.
-2. **Colateral em projetos**: GOV trancado em `ProjectRegistry` até `removeProject`.
-3. **Vesting**: GOV trancado em instâncias de `TeamVesting` até liberação gradual.
-4. **Holding simples**: GOV parado na wallet para votar.
-
-GOV **não é queimado**. O cap de 100M é a quantidade máxima que existirá.
-
-## Captura de valor por perfil de participante
-
-### Usuário final
-
-Captura o **serviço do app**. O valor está fora do protocolo — é o que o app entrega em troca do CREDIT pago. Bônus do remodel: paga com moeda estável, sem slippage nem risco de preço.
-
-### App listado
-
-- **Receita direta na hora**: ~97,5% de cada pagamento (fee 2,5%); ~89,5% se tiver rodada financiada com rev-share de 8%.
-- **Capital antecipado**: rodada all-or-nothing no ProjectFunding, custo de capital ~19% a.a. no exemplo ilustrativo — comparável a revenue-based financing (Pipe/Clearco: 15-25%) e sem diluição de equity.
-- **Hub + base de usuários + trilho pronto** (PSM + FeeRouterV2).
-
-(Legado: rebate de 10%, push de bucket apps e apreciação de CREDIT retido pertencem ao modelo antigo.)
-
-### Investidor (staker de GOV + funder de CREDIT)
-
-Captura **% da receita bruta real** do projeto financiado, a cada pagamento:
+Fazendo a conta com os parâmetros default:
 
 ```
-minha_renda_por_pagamento = amount
-       × revShareBps / 10000                  // rev-share da rodada (1-30%)
-       × (minhas_shares / total_shares)       // pro-rata do que investi
+fee            = 2,5% do pagamento
+parcela buyback = 40% da fee = 0,40 * 2,5% = 1,0% do GMV
 ```
 
-Renda em CREDIT estável (resgatável 1:1 no PSM). Requer GOV stakeado no projeto para investir e para sacar — o lock de 14-365+ dias do staking continua valendo.
+Ou seja: **~1% de todo o volume bruto processado** é pressão estrutural de compra sobre o GOV. Quanto mais os apps faturam, mais demanda por GOV — e o supply é **cap imutável de 100M**, nunca inflacionado.
 
-Importante: **o investidor assume risco real** — o retorno depende da receita futura do app; o principal não é devolvido. Ver [Riscos](03-risk-and-security.md).
+> **Estado da automação.** O buyback não é executado automaticamente pelo contrato: a parcela **acumula** no `buybackRecipient` e a **execução da recompra é feita por governança** (proposta que gasta esses fundos comprando GOV). O mecanismo de captura é a fee; o timing e o método da recompra são decisão da DAO.
 
-(Legado: a fórmula de claim por emissão/burn do `RewardDistributor` V1/V2 — com buckets 55/25/15/5 — segue documentada nas páginas dos contratos, para claims históricos.)
+O GOV não paga dividendo. A tese de valor dele é: demanda estrutural crescente (buyback proporcional ao GMV) sobre supply fixo, mais a utilidade de governança e de gate de investimento.
 
-### Holder de GOV sem stake
+## Via 2 — Rev-share paga receita real
 
-Captura direito de voto **e** o efeito do buyback contínuo: 40% da fee de todo pagamento do ecossistema (= 1% do GMV) financia recompra de GOV. Se o GMV cresce, a pressão de compra cresce junto. Se o protocolo morre, GOV perde utilidade.
+Quem financia uma rodada no [`ProjectFunding`](../08-contracts-reference/07-ProjectFunding.md) compra uma **posição de rev-share**: o direito a uma fatia (`revShareBps`, 1%–30%) da **receita bruta futura** daquele app específico.
 
-## Por que não é Ponzi
+O mecanismo é 100% on-chain e automático:
 
-Ponzi característico: emite-se token novo para pagar holders antigos sem contrapartida real. Aqui, desde o remodel, **não existe emissão nenhuma como renda**:
+1. A rodada bate o alvo → status `Funded` → `revShareBpsOf(projectId)` passa a retornar o bps prometido.
+2. A cada `FeeRouterV2.pay`, o router **desconta o rev-share antes de pagar o app** e o encaminha ao `ProjectFunding`, que atualiza um acumulador pro-rata (padrão MasterChef).
+3. O investidor saca sua parte acumulada com `claim(projectId)` — exige manter GOV stakeado no projeto (skin in the game); o valor **nunca expira**.
 
-- A renda do investidor é fatia de pagamento real de usuário (rev-share).
-- CREDIT novo só nasce 1:1 contra USDC depositado no PSM.
-- O buyback de GOV é financiado por fee sobre pagamentos reais.
-- Não há promessa de retorno: sem receita do app, o rev-share paga zero.
+Suas shares = CREDIT investido (1:1, imutável após a rodada financiar). Sua fatia da receita distribuída é `suas shares / total captado`.
 
-Se qualquer elo quebra (apps sem utilidade, usuários não existem), a renda seca **imediatamente e proporcionalmente** — não há esquema para desabar, porque não há passivo lastreado em entrada de novos participantes.
+```
+pagamento de 1.000 CREDIT, projeto com rev-share de 8%:
+  fee (2,5%)      =  25 CREDIT  -> treasury/buyback/grants
+  rev-share (8%)  =  80 CREDIT  -> investidores (pro-rata às shares)
+  app             = 895 CREDIT
+```
 
-O que **acontece** se ninguém usa:
+O retorno de uma posição de rev-share depende só de uma coisa: **quanto o app fatura**. Se ele processar muito volume, sua fatia rende; se ele não vender, você recebe pouco ou nada. Não há garantia de retorno — é participação em receita real, não renda fixa.
 
-- GMV → 0, rev-share → 0, fee → 0 (sem buyback, sem opex).
-- Investidores ficam com posições que não rendem; CREDIT continua resgatável 1:1 no PSM.
-- Protocolo fica zumbi — contratos rodando mas sem atividade.
+## Por que não é um Ponzi
 
-O que **não acontece**:
+Um Ponzi paga participantes antigos com o dinheiro de participantes novos, sem geração de valor real. O desenho aqui é o oposto em três pontos verificáveis on-chain:
 
-- Não há APY prometido nem contraparte de último recurso.
-- Não há corrida bancária no CREDIT: o lastro é 100% e o PSM não tem função de saque — o resgate 1:1 independe de "liquidez de mercado".
-- Não há confisco: `claim` acumulado nunca expira; refund é integral em rodada falha.
+1. **A renda vem de receita real, não de aporte de novos investidores.** O rev-share é uma fatia de pagamentos que usuários fazem para **usar os apps** (`FeeRouterV2.pay`). Se ninguém usar os apps, não há rev-share — o sistema desacelera em vez de exigir "mais entrantes".
 
-## Mecanismos de salvaguarda
+2. **Nenhum token é emitido como reward.** Não há emissão inflacionária de GOV nem de CREDIT como "rendimento". O GOV tem cap imutável de 100M; o CREDIT só é mintado contra USDC depositado no PSM.
 
-1. **All-or-nothing** na captação: o dono só recebe se bater o alvo; caso contrário, refund de 100% — ninguém financia pela metade um projeto inviável.
-2. **Gate de GOV stakeado** (invest + claim): investidor precisa ter pele em jogo de longo prazo no projeto; desalinha ataques de capital oportunista.
-3. **Teto duro da fee** (`FEE_BPS_CAP = 500`): nem governança consegue transformar o trilho em pedágio confiscatório.
-4. **Lastro segregado do PSM** (I-PSM1): a DAO não alcança o colateral dos usuários — gasta apenas da fee.
-5. **Bounds imutáveis do funding**: rev-share 1-30%, prazo 1-90 dias — protegem investidor e dono de termos degenerados.
+3. **O CREDIT é lastreado 1:1 e não valoriza.** Cada CREDIT em circulação mintado pelo [`CreditPSM`](../08-contracts-reference/03-CreditPSM.md) tem 1 USDC guardado, verificável em `backing()`. Não existe função de saque do lastro — nem para governança. O CREDIT é meio de pagamento, não aposta: comprar CREDIT é carregar um cartão pré-pago, não investir.
 
-(Legado: floor decay, sanity cap e probation penalty protegiam o trilho de emissão.)
+A consequência honesta disso: **tokenomics não salva produto ruim.** Se os apps não geram utilidade real, o GMV é baixo, o buyback é pequeno e o rev-share seca. O valor do protocolo é derivado, não intrínseco.
 
-## Não há garantia de valor
+## Onde medir tudo isso
 
-Nenhum mecanismo garante:
+Todas as fontes de valor são observáveis on-chain — ver [Métricas que importam](04-metrics-that-matter.md):
 
-- Que GOV vai valorizar (buyback gera pressão proporcional ao uso, não preço-alvo).
-- Que uma posição de rev-share vai se pagar (depende 100% da receita futura do app).
-- Que o uso dos apps vai crescer.
-
-O que **é** garantido por construção: o resgate 1:1 do CREDIT contra o lastro do PSM (enquanto USDC valer 1 USD) e os bounds imutáveis acima.
-
-A arquitetura alinha incentivos com uso real. Se o uso existir, o sistema opera conforme projetado. Se não existir, a renda seca. **Produto ruim não é salvo por tokenomics.**
-
-## Pontos a observar antes de qualquer exposição
-
-- GMV dos projetos (via `FeeRouterV2.grossVolumeOf` e eventos `PaymentRouted`).
-- Receita já distribuída e pendente (via `ProjectFunding.totalRevenueDistributed` / `pendingRevenue`).
-- Lastro do PSM (`backingNormalized()` vs `mintedOutstanding`).
-- Razão Funded/Failed das rodadas de captação.
-- Crescimento ou decréscimo de staking (via `Staking.totalStaked` e `getGlobalWeight`).
-- Propostas recentes no Governor (sinal de direção política).
-- Distribuição real do GOV (apenas a genesis do Treasury pós-deploy, ou já houve alocações para time / venda pública / liquidez?).
-
-Ver [Métricas que importam](04-metrics-that-matter.md).
+- `FeeRouterV2.grossVolumeOf(projectId)` — GMV por projeto (dirige buyback e rev-share).
+- `ProjectFunding.totalRevenueDistributed(projectId)` — receita real já paga aos investidores.
+- `ProjectFunding.pendingRevenue(investor, projectId)` — quanto você tem a sacar.
+- `CreditPSM.backing()` / `mintedOutstanding` — integridade do lastro.
 
 ---
 

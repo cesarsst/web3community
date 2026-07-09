@@ -22,7 +22,7 @@ import {Staking} from "./Staking.sol";
  *             rev-share oferecido (bps) e prazo.
  *          2. Investidores com GOV stakeado NO projeto ({Staking.getWeight})
  *             depositam CREDIT ate o alvo.
- *          3. Alvo batido -> {finalizeRound} paga o dono e ativa o rev-share.
+ *          3. Alvo batido -> pagamento automatico ao dono ({_fund}) e rev-share ativo.
  *             Prazo vencido sem alvo -> rodada falha, {refund} devolve 100%.
  *          4. {FeeRouterV2} chama {notifyRevenue} a cada pagamento; investidor
  *             saca com {claim} (exige manter GOV stakeado no projeto).

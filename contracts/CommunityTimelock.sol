@@ -9,8 +9,8 @@ import {TimelockController} from "@openzeppelin/contracts/governance/TimelockCon
  *         que executa, com delay, todas as decisoes aprovadas pelo
  *         {CommunityGovernor} da DAO Web3Community. Em producao e o unico
  *         portador de {GOVERNANCE_ROLE} / {DEFAULT_ADMIN_ROLE} nos contratos
- *         economicos (Treasury, ProjectRegistry, Staking, BurnTracker,
- *         RewardDistributor, FeeRouter) e o unico `owner` do {GovernanceToken}
+ *         economicos (Treasury, ProjectRegistry, Staking, CreditPSM,
+ *         ProjectFunding, FeeRouterV2) e o unico `owner` do {GovernanceToken}
  *         apos o bootstrap de producao.
  * @dev O wrapper e propositalmente sem codigo adicional — herda {TimelockController}
  *      integralmente. A motivacao e manter identidade on-chain (nome do contrato

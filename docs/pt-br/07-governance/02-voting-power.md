@@ -1,167 +1,64 @@
 # Voting power
 
-**Para quem é:** holder de GOV e qualquer pessoa querendo entender como voting power é calculado.
-**Pré-requisitos:** [Governance (conceito)](../02-core-concepts/05-governance.md).
+**Para quem é:** quem quer saber exatamente como o poder de voto é calculado e por que ele é imune a manipulação.
+**Pré-requisitos:** [Ciclo de uma proposta](01-proposal-lifecycle.md).
 
-## Voting power ≠ balance
+Voting power vem **exclusivamente do GOV**, e só conta se você **delegar**. O CREDIT não vota (ver [Dual-token economy](../02-core-concepts/01-dual-token-economy.md)). Esta página explica o mecanismo `ERC20Votes` e por que ele fecha o vetor de flash loan.
 
-Um erro comum: assumir que `balanceOf(you)` é seu voting power. Não é.
+## GOV é ERC20Votes
 
-Em ERC20Votes, você precisa **delegar** para ativar voting power. Sem delegação, seu voting power é **zero**, mesmo tendo GOV.
+O [`GovernanceToken`](../08-contracts-reference/01-GovernanceToken.md) é um ERC-20 com a extensão `ERC20Votes` (ERC-5805) da OpenZeppelin. Isso significa que o token mantém, além do saldo, um **histórico de voting units por bloco** (checkpoints). O Governor lê esse histórico, nunca o saldo atual.
 
-```solidity
-// Seu balance atual
-uint256 bal = gov.balanceOf(you);          // pode ser 10.000 GOV
+Características:
 
-// Seu voting power atual (livro de contagem)
-uint256 vp = gov.getVotes(you);             // pode ser 0 se voce nao delegou
+- Supply cap **imutável de 100M** (`CAP_SUPPLY`), enforced em `_update`. Não há inflação de GOV.
+- Voting units são movidas em todo transfer/mint/burn via o hook `_update` → `ERC20Votes._update`.
+- Clock em **número de blocos** (o token não sobrescreve `clock()`, então o Governor opera em blocos — toda a aritmética de delay/period é em blocos).
+
+## Delegação: sem ela, você não vota
+
+Ter GOV **não** dá voting power automaticamente. O `ERC20Votes` só contabiliza poder de voto para endereços que foram **delegados**. Você precisa chamar `delegate`:
+
+```ts
+// delegar a si mesmo (auto-delegação) — o caso mais comum
+await gov.delegate(minhaCarteira)
+
+// ou delegar a outro endereço, que passa a votar com o seu peso
+await gov.delegate(representante)
 ```
 
-## Delegação
+Consequência prática: **GOV parado numa carteira que nunca delegou tem 0 de voting power.** Se você quer participar da governança (ou que suas moedas contem para quorum), delegue — inclusive a si mesmo.
 
-Duas formas:
+> Delegar **não** transfere os tokens nem os trava. Você continua dono do GOV; só o direito de voto vai para o delegado. É reversível a qualquer momento com outra chamada `delegate`.
 
-### Self-delegation (você vota seu próprio GOV)
+## Snapshot: por que flash loans não funcionam
 
-```solidity
-gov.delegate(you);
-```
-
-Após isso, `getVotes(you) == balanceOf(you)`.
-
-### Delegação a terceiro
-
-```solidity
-gov.delegate(trustedDelegate);
-```
-
-Após isso, `getVotes(trustedDelegate) += balanceOf(you)` e seu voting power é zero (você cedeu).
-
-Sem custo (só gas). Pode mudar a qualquer momento.
-
-## Como `getVotes` reage a transferências
-
-O valor de `getVotes(delegate)` é atualizado automaticamente quando:
-
-- Você recebe GOV: `getVotes(yourDelegate) += amount`.
-- Você envia GOV: `getVotes(yourDelegate) -= amount`.
-- Você muda delegação: `getVotes(oldDelegate) -= yourBalance`, `getVotes(newDelegate) += yourBalance`.
-
-Implementado em `ERC20Votes._update` da OpenZeppelin.
-
-## Snapshot histórico
-
-O que importa para votar não é `getVotes` atual — é `getPastVotes` no snapshot da proposta.
-
-```solidity
-uint256 snapshotBlock = governor.proposalSnapshot(proposalId);
-uint256 vpNoSnapshot  = gov.getPastVotes(you, snapshotBlock);
-```
-
-Essa é a função que o Governor chama quando você vota. Imune a flash-loan — o snapshot é um bloco no passado.
-
-## DelegateBySig (off-chain signature)
-
-Você pode delegar via assinatura EIP-712 sem pagar gas — alguém relaya a tx:
-
-```solidity
-gov.delegateBySig(delegatee, nonce, expiry, v, r, s);
-```
-
-Útil para UX que quer "ativar voto com uma assinatura" sem on-chain interaction direta do usuário.
-
-## Mudar de delegação
-
-```solidity
-gov.delegate(newDelegatee);
-```
-
-Entra em vigor no bloco seguinte. Propostas que já tinham snapshot **antes** do bloco da mudança usam a delegação antiga (que era vigente no snapshot).
-
-## Voting power total
-
-Para saber o voting power total do sistema em um bloco:
-
-```solidity
-uint256 total = gov.getPastTotalSupply(blockNumber);
-```
-
-Usado pelo `quorum(timepoint)` do Governor para calcular quorum mínimo.
-
-## Quem ignora a delegação?
-
-**Ninguém** no caminho on-chain. Se você não delegou, seu GOV literalmente não vota — nem para você, nem para ninguém.
-
-## Por que delegação é obrigatória
-
-ERC20Votes impõe delegação para preservar a invariante de que **a soma de `getVotes(all delegates)` seja igual ao `totalSupply`** pelo menos no ponto de vista contábil. Sem delegação explícita, o voting power "fica no limbo" — e o `getVotes` do holder é 0 por design.
-
-Isso evita o padrão de "vote stealing" de implementações antigas e força a decisão consciente de "sou eu que voto ou delego?".
-
-## Propagação de balance
-
-Se você tem 10k GOV e delegou a si:
+O Governor calcula o poder de voto de cada conta com `getPastVotes(account, proposalSnapshot)` — o voting power **no bloco de abertura da votação**, não no momento do voto.
 
 ```
-você.balance  = 10.000
-você.delegates = você
-você.getVotes  = 10.000
+propose ──▶ votingDelay ──▶ [bloco de snapshot] ──▶ votação abre
+                                     ↑
+                    getPastVotes lê o poder AQUI
 ```
 
-Você recebe 5k a mais de GOV:
+Isso torna a votação **imune a flash loans** (invariante I5): tomar emprestado um monte de GOV, votar e devolver no mesmo bloco não funciona, porque o snapshot é de um bloco **anterior** ao voto. O poder de voto foi congelado antes de o atacante sequer poder agir.
 
-```
-você.balance  = 15.000
-você.delegates = você (não mudou)
-você.getVotes  = 15.000 (atualizado automaticamente)
-```
+O mesmo vale para o quorum: `quorum(timepoint)` usa `getPastTotalSupply` — o supply no snapshot, não o atual. Isso evita ataques que diluam o supply após a proposta para atingir quorum artificialmente.
 
-Você manda 3k para Bob (que delegou a Charlie):
+## Threshold de proposta
 
-```
-você.balance   = 12.000
-você.getVotes  = 12.000
-Bob.balance    = 3.000
-Bob.getVotes   = 0 (Bob nao tem delegacao)
-Charlie.getVotes += 3.000 (delegatee de Bob)
-```
+Para **criar** uma proposta, o proposer precisa ter delegado a si ao menos o `proposalThreshold` — produção: **10.000 GOV** (0,01% do cap de 100M). É baixo o suficiente para não calcificar a governança (não exige uma baleia para propor), mas > 0 para bloquear spam de propostas de contas sem skin in the game.
 
-Note que se Bob não delegou antes, seu GOV ainda vota ninguém. Bob precisa chamar `gov.delegate(...)` para ativar.
+## Resumo
 
-## Proposta em um snapshot específico
-
-Quando `governor.propose(...)` é chamado no bloco `X`:
-
-- `proposalSnapshot(id) = X + votingDelay`.
-- O snapshot fica exatamente `votingDelay` blocos à frente do bloco da proposta.
-
-Portanto, se você quer garantir que seu voto conte:
-
-- **Faça delegação antes** do bloco do snapshot.
-- Se seu delegação mudou no bloco do snapshot, não é claro qual prevalece — na dúvida, mude 1 bloco antes.
-
-## Agregar delegações de muitos holders
-
-Padrão comum em DAOs: formar "delegation pools" onde um delegate atua por muitos holders. Em web3community não há ferramentas on-chain específicas para isso no v1 — cada delegação é 1-para-1 via `delegate(target)`. Pools podem ser construídos off-chain ou por contratos do ecossistema, mas o v1 não oferece.
-
-## Edge case: delegação para endereço morto
-
-```solidity
-gov.delegate(address(0));
-```
-
-Funciona. Remove sua delegação — seu voting power vira zero (ninguém recebe). Pode ser útil se você quer "parar de votar" sem transferir GOV.
-
-## Histórico de eventos
-
-Eventos úteis para indexação:
-
-```
-event DelegateChanged(address indexed delegator, address indexed fromDelegate, address indexed toDelegate);
-event DelegateVotesChanged(address indexed delegate, uint256 previousBalance, uint256 newBalance);
-```
-
-Primeiro é emitido quando você muda delegação. Segundo é emitido cada vez que um delegate tem `getVotes` alterado (por mudança sua ou de qualquer outra pessoa que delega a ele).
+| Pergunta | Resposta |
+|---|---|
+| O que dá voto? | GOV, via `ERC20Votes` |
+| Preciso delegar? | Sim — sem `delegate`, seu poder é 0 |
+| CREDIT vota? | Não |
+| Qual bloco conta? | O snapshot (abertura da votação), via `getPastVotes` |
+| Flash loan funciona? | Não — snapshot é de bloco anterior ao voto |
+| Quanto para propor? | `proposalThreshold` (10.000 GOV em produção) |
 
 ---
 

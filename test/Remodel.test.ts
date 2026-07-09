@@ -366,5 +366,79 @@ describe("Remodel (PSM + ProjectFunding + FeeRouterV2)", function () {
       await router.connect(projOwner).setAppRecipient(1, alice.address);
       expect(await router.appRecipientOf(1)).to.equal(alice.address);
     });
+
+    it("setRecipients: governanca troca destinos; zero-address reverte", async function () {
+      const { admin, alice, bob, payer, router } = await loadFixture(deployFixture);
+      await expect(
+        router.connect(admin).setRecipients(ethers.ZeroAddress, alice.address, bob.address),
+      ).to.be.revertedWithCustomError(router, "ZeroAddress");
+      await expect(router.connect(admin).setRecipients(alice.address, bob.address, payer.address))
+        .to.emit(router, "RecipientsUpdated")
+        .withArgs(alice.address, bob.address, payer.address);
+      expect(await router.treasuryRecipient()).to.equal(alice.address);
+    });
+
+    it("pay com amount zero reverte", async function () {
+      const { payer, router } = await loadFixture(deployFixture);
+      await expect(router.connect(payer).pay(1, 0n)).to.be.revertedWithCustomError(router, "ZeroAmount");
+    });
+
+    it("setAppRecipient com zero-address reverte", async function () {
+      const { projOwner, router } = await loadFixture(deployFixture);
+      await expect(
+        router.connect(projOwner).setAppRecipient(1, ethers.ZeroAddress),
+      ).to.be.revertedWithCustomError(router, "ZeroAddress");
+    });
+  });
+
+  // ==================================================================
+  // Cobertura de branches (guards e caminhos de erro)
+  // ==================================================================
+  describe("branches — guards", function () {
+    it("CreditPSM: buy/sell com zero revertem; constructor rejeita decimals > 18", async function () {
+      const { psm, credit } = await loadFixture(deployFixture);
+      await expect(psm.buy(0n)).to.be.revertedWithCustomError(psm, "ZeroAmount");
+      await expect(psm.sell(0n)).to.be.revertedWithCustomError(psm, "ZeroAmount");
+      const Usdc = await ethers.getContractFactory("ERC20DecimalsMock");
+      const bad = await Usdc.deploy("Bad", "BAD", 19);
+      const CreditPSM = await ethers.getContractFactory("CreditPSM");
+      await expect(
+        CreditPSM.deploy(await credit.getAddress(), await bad.getAddress()),
+      ).to.be.revertedWithCustomError(psm, "InvalidDecimals");
+    });
+
+    it("ProjectFunding: invest zero, closeExpiredRound cedo, refund sem shares, setMinTarget gated", async function () {
+      const { admin, alice, projOwner, staking, funding } = await loadFixture(deployFixture);
+      await staking.connect(alice).stake(1, STAKE, MAX_LOCK);
+      await funding.connect(projOwner).openRound(1, TARGET, REV_SHARE_BPS, ROUND_DURATION);
+      await expect(funding.connect(alice).invest(1, 0n)).to.be.revertedWithCustomError(funding, "ZeroAmount");
+      await expect(funding.closeExpiredRound(1)).to.be.revertedWithCustomError(funding, "RoundStillOpen");
+      // refund exige rodada Failed
+      await expect(funding.connect(alice).refund(1)).to.be.revertedWithCustomError(funding, "RoundNotFailed");
+      // setMinTarget: só governança
+      await expect(funding.connect(alice).setMinTarget(1n)).to.be.reverted;
+      await expect(funding.connect(admin).setMinTarget(200n * E18))
+        .to.emit(funding, "MinTargetUpdated")
+        .withArgs(100n * E18, 200n * E18);
+    });
+
+    it("ProjectFunding: openRound em projeto inativo reverte; rodada duplicada reverte", async function () {
+      const { projOwner, funding } = await loadFixture(deployFixture);
+      await expect(
+        funding.connect(projOwner).openRound(99, TARGET, REV_SHARE_BPS, ROUND_DURATION),
+      ).to.be.revertedWithCustomError(funding, "ProjectNotActive");
+      await funding.connect(projOwner).openRound(1, TARGET, REV_SHARE_BPS, ROUND_DURATION);
+      await expect(
+        funding.connect(projOwner).openRound(1, TARGET, REV_SHARE_BPS, ROUND_DURATION),
+      ).to.be.revertedWithCustomError(funding, "RoundAlreadyExists");
+    });
+
+    it("FeeRouterV2.previewPay reflete fee + rev-share do projeto financiado", async function () {
+      const { router } = await loadFixture(fundedFixture);
+      const [fee, revShare, toApp] = await router.previewPay(1, 100n * E18);
+      expect(fee).to.equal((100n * E18 * FEE_BPS) / 10_000n);
+      expect(revShare).to.equal((100n * E18 * BigInt(REV_SHARE_BPS)) / 10_000n);
+      expect(toApp).to.equal(100n * E18 - fee - revShare);
+    });
   });
 });

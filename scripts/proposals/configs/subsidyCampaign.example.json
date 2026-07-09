@@ -1,8 +1,0 @@
-{
-  "_comment": "Template para uma campanha de subsidio. Um arquivo por campanha.  merkleRoot = keccak256 root da arvore de enderecos elegiveis. Leaves devem ser keccak256(bytes.concat(keccak256(abi.encode(address)))) — o padrao OZ double-hash anti-preimage. Use @openzeppelin/merkle-tree (StandardMerkleTree) off-chain pra gerar.  amountPerUserWei = CREDIT por claim (1e18). Exemplos: '100000000000000000000' = 100 CREDIT; '50000000000000000000' = 50 CREDIT.  maxClaims = int (uint32). Ex.: 10000 para os 10k primeiros usuarios. O contrato garante que apenas os primeiros `maxClaims` a chamar {claim} recebem, mesmo se a merkle tree tiver mais enderecos (cap duplo de seguranca).  deadlineUnix = timestamp Unix em segundos ate quando {claim} e aceito (inclusive). Calcule com `date -u -d '2026-11-01 00:00:00' +%s`.  appName = so identificacao na descricao da proposta. Off-chain.  Budget = amountPerUserWei * maxClaims sai transferido do Treasury automaticamente. Sanity check do script falha se Treasury tiver saldo menor.",
-  "appName": "example-app",
-  "merkleRoot": "0x0000000000000000000000000000000000000000000000000000000000000001",
-  "amountPerUserWei": "100000000000000000000",
-  "maxClaims": 10000,
-  "deadlineUnix": "1793491200"
-}

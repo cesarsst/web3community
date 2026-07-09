@@ -1,254 +1,86 @@
 # Ciclo de uma proposta
 
-**Para quem é:** qualquer pessoa querendo entender os estados pelos quais uma proposta passa.
-**Pré-requisitos:** [Governance (conceito)](../02-core-concepts/05-governance.md).
+**Para quem é:** quem quer entender como uma decisão vira mudança on-chain, do rascunho à execução.
+**Pré-requisitos:** noção de que a DAO controla os contratos econômicos ([O que é a web3community](../01-getting-started/01-what-is-web3community.md)).
 
-## Os 8 estados possíveis
+Toda mudança governável no protocolo passa por um único caminho: [`CommunityGovernor`](../08-contracts-reference/10-CommunityGovernor.md) (OpenZeppelin Governor) para votar, [`CommunityTimelock`](../08-contracts-reference/09-CommunityTimelock.md) (TimelockController) para executar com atraso. Nenhuma EOA tem poder unilateral sobre os contratos econômicos em produção.
 
-`CommunityGovernor.state(proposalId)` retorna um dos valores da enum `ProposalState` (definida em `Governor` da OZ):
-
-```
-0  Pending       - criada, aguardando votingDelay
-1  Active        - janela de votacao aberta
-2  Canceled      - cancelada pelo proposer ou cancellation governance
-3  Defeated      - votacao fechou sem atingir quorum ou com Against > For
-4  Succeeded     - quorum + For > Against; pode ser queued
-5  Queued        - enfileirada no Timelock; aguardando minDelay
-6  Expired       - queued mas nao foi executada em tempo razoavel
-7  Executed      - todas as chamadas foram executadas com sucesso
-```
-
-> **Nota — propostas `Supermajority` (75%).** No `propose`, o `CommunityGovernor` escaneia o batch: se qualquer call tem target no `Treasury` com selector de `removePOL` ou de gestão de roles (`grantRole`/`revokeRole`/`renounceRole`), ou target no Timelock com selector de gestão de roles, a proposta inteira é marcada `ProposalType.Supermajority` (evento `ProposalTypeSet`). Para essas, a transição a `Succeeded` exige `forVotes >= 3 × againstVotes` e `forVotes > 0` (For >= 75% dos votos decisivos; Abstain só conta para quorum) — não apenas `For > Against`.
-
-## Transições
+## O caminho, do início ao fim
 
 ```
-                     Alguem chama propose(...)
-                                   |
-                                   v
-                           +---------------+
-                           |    Pending    |   (votingDelay blocos)
-                           +-------+-------+
-                                   | apos votingDelay
-                                   v
-                           +---------------+
-                           |    Active     |   (votingPeriod blocos)
-                           +-------+-------+
-                                   |
-                               fim da votacao
-                                   |
-                +------------------+------------------+
-                | For > Against E  |   For <= Against |
-                | quorum atingido  |   OU sem quorum  |
-                v                  v                  v
-         +-------------+    +-------------+    +------------+
-         |  Succeeded  |    |  Defeated   |    |  Canceled  |
-         +------+------+    +-------------+    +------------+
-                |                   (alguem cancelou antes
-                | queue(...)         do periodo fechar)
-                v
-         +-------------+
-         |   Queued    |  (timelockMinDelay segundos)
-         +------+------+
-                |
-                | apos minDelay
-                |  - se nao executada em timely window: Expired
-                |  - se executada: Executed
-                v
-         +-------------+
-         |  Executed   |
-         +-------------+
+propose ──▶ [votingDelay] ──▶ votação aberta ──▶ [votingPeriod] ──▶ Succeeded
+   │           (7200 blk)         (cast votes)        (50400 blk)        │
+   │                                                                     ▼
+   │                                                                   queue
+   │                                                                     │
+   │                                                          [Timelock minDelay]
+   │                                                              (2 dias)
+   │                                                                     ▼
+   └── proposalThreshold (10.000 GOV)                                 execute
+       supermajority scan no propose                             (qualquer um chama)
 ```
 
-## Tempo total típico em produção
+## Estados da proposta
 
-Com os parâmetros de produção:
+O `state(proposalId)` do Governor percorre:
 
-| Fase | Duração |
+| Estado | Significado |
 |---|---|
-| Pending (`votingDelay`) | 7200 blocos (~1 dia) |
-| Active (`votingPeriod`) | 50400 blocos (~7 dias) |
-| Queued (`timelockMinDelay`) | 172800 segundos (2 dias) |
-| **Total (felicidade)** | **~10 dias** |
+| `Pending` | criada, aguardando o `votingDelay` para abrir a votação |
+| `Active` | janela de votação aberta — `castVote` aceito |
+| `Defeated` | não passou (quorum não atingido, ou regra de sucesso falhou) |
+| `Succeeded` | passou — pronta para `queue` |
+| `Queued` | enfileirada no Timelock, cumprindo o `minDelay` |
+| `Executed` | executada — a mudança está on-chain |
+| `Canceled` | cancelada (pelo proposer ou via governança) |
+| `Expired` | passou do prazo de execução no Timelock sem ser executada |
 
-Propor uma proposta hoje e vê-la executada demora pelo menos 10 dias. Este é o **preço intencional** da segurança.
+## 1. Propor
 
-## Como propor
+`propose(targets, values, calldatas, description)` cria a proposta. Uma proposta é uma lista de chamadas que o Timelock executará se ela passar — por exemplo, "chame `FeeRouterV2.setFeeBps(300)`".
 
-```solidity
-governor.propose(
-    address[] memory targets,       // contratos alvo
-    uint256[] memory values,         // ETH a enviar em cada chamada (tipicamente zero)
-    bytes[] memory calldatas,        // calldatas das chamadas
-    string memory description        // texto em markdown
-);
-```
+- **Threshold.** O proposer precisa ter, delegado a si, ao menos o `proposalThreshold` de voting power (produção: `10.000 GOV`, 0,01% do cap). Baixo o suficiente para não calcificar a governança, mas > 0 para bloquear spam de contas sem skin in the game.
+- **Classificação automática de tipo.** No `propose`, o Governor **escaneia** os targets e calldatas. Se qualquer chamada for gestão de roles (`grantRole`/`revokeRole`/`renounceRole`) no **Treasury** ou no **próprio Timelock**, a proposta inteira é marcada como `Supermajority` (ver [Ciclo de uma proposta → supermaioria](#supermaioria-para-gestão-de-roles)). Emite `ProposalTypeSet` sempre — o frontend sinaliza o requisito de 75% antes da votação abrir.
 
-Retorna `proposalId` (hash dos 4 parâmetros).
+## 2. Delay + votação
 
-**Pré-requisitos**:
+Depois de `propose`, há o `votingDelay` (produção: 7200 blocos, ~1 dia) antes de a votação abrir — janela para o ecossistema analisar a proposta. Aberta a votação, ela dura `votingPeriod` (produção: 50400 blocos, ~7 dias).
 
-- `msg.sender` tem voting power >= `proposalThreshold` (10.000 GOV em produção, via `getVotes(msg.sender)`).
-- Arrays têm mesmo tamanho.
-- Descrição não vazia.
+O voto usa **snapshot** de voting power no bloco de abertura (`getPastVotes`) — imune a flash loans (ver [Voting power](02-voting-power.md)). Opções: `For`, `Against`, `Abstain` (contagem `GovernorCountingSimple`).
 
-**Erros comuns**:
+## 3. Sucesso: quorum + regra de contagem
 
-- `GovernorInsufficientProposerVotes` — voting power insuficiente.
-- `GovernorInvalidProposalLength` — arrays com tamanhos diferentes.
+Para uma proposta `Succeeded`:
 
-## Votar
+- **Quorum.** A soma dos votos precisa atingir a fração de quorum sobre o supply no snapshot — produção: **4%** (`GovernorVotesQuorumFraction`). Abstain conta para quorum.
+- **Regra de sucesso:**
+  - **Standard:** `For > Against` (maioria simples).
+  - **Supermajority:** `For >= 3 * Against` **e** `For > 0` — equivalente a For ≥ 75% dos votos decisivos (Abstain fora da razão).
 
-Durante `Active`:
+## 4. Queue + delay do Timelock
 
-```solidity
-governor.castVote(proposalId, support);
-// support: 0 = Against, 1 = For, 2 = Abstain
-```
+Uma proposta `Succeeded` é enfileirada com `queue`. A partir daí, o [`CommunityTimelock`](../08-contracts-reference/09-CommunityTimelock.md) impõe o `minDelay` (produção: **2 dias**, `172800s`) antes que a execução seja permitida. Esse atraso é a última linha de defesa: dá tempo de reação caso uma proposta maliciosa passe.
 
-Variantes (com razão, com assinatura off-chain para gasless):
+## 5. Executar
 
-- `castVoteWithReason(proposalId, support, reason)`
-- `castVoteBySig(proposalId, support, v, r, s)`
-- `castVoteWithReasonAndParamsBySig(...)`
+Após o `minDelay`, **qualquer um** pode chamar `execute` — o Timelock foi deployado com `executors = [address(0)]`, ou seja, execução pública pós-delay. Não é preciso um executor privilegiado: os targets e calldatas já são imutáveis desde o `queue` (o hash de operação cobre tudo), e o delay já expirou. Exigir um executor dedicado só adicionaria fricção, sem ganho de segurança.
 
-Seu voting power é `gov.getPastVotes(you, proposalSnapshot)`. Se zero no snapshot, você não vota efetivamente (emite evento mas não conta).
+O Timelock executa **exatamente** os calldatas registrados. Não há como injetar uma chamada que não estava na proposta aprovada.
 
-## Queue
+## Cancelamento
 
-Após `Succeeded`:
+O `CANCELLER_ROLE` fica só com o Governor (usado por `GovernorTimelockControl._cancel` quando uma proposta é cancelada via fluxo de governança). **Ninguém mais** recebe essa role — nem um guardian multisig no v1. Motivo: um cancelador externo poderia fazer DoS de propostas válidas, violando o princípio "o voto é a fonte de verdade".
 
-```solidity
-governor.queue(proposalId);
-```
+## Supermaioria para gestão de roles
 
-Qualquer um pode chamar. Agenda a execução no Timelock.
+Alterar quem detém roles no Treasury ou no Timelock muda **quem pode movimentar o cofre da DAO** — o vetor clássico de captura. Por isso qualquer proposta que contenha gestão de roles nesses dois contratos exige `For >= 75%`, não maioria simples.
 
-## Execute
+Anti-bypass (por que empacotar a chamada sensível não contorna a regra):
 
-Após `Queued` e passado `timelockMinDelay`:
+- **Batch misto contamina a proposta inteira.** Uma proposta que mistura gestão de roles do Treasury/Timelock com outras chamadas populares vira `Supermajority` por completo — não dá para diluir o requisito de 75% escondendo a chamada sensível entre outras.
+- **Chamadas aninhadas falham no AccessControl.** Um contrato intermediário chamado pela proposta nunca é o Timelock, então a indireção não satisfaz o gate de role.
 
-```solidity
-governor.execute(proposalId);
-// ou variante com targets/values/calldatas/descriptionHash
-```
-
-Qualquer um pode chamar. Executa as chamadas contra os targets via Timelock.
-
-No `CommunityTimelock`, `EXECUTOR_ROLE` é `address(0)` — qualquer address pode executar, porque o delay já foi o gate real.
-
-## Cancelar
-
-### Pelo proposer (sua própria)
-
-```solidity
-governor.cancel(targets, values, calldatas, descriptionHash);
-```
-
-Funciona durante `Pending` ou `Active`. Após `Succeeded`, o proposer **não** pode cancelar diretamente — precisaria proposta contrária.
-
-### Pela governança
-
-Um cancel via proposta pode ser submetido. Executa via Timelock chamando `_cancel` no Governor / `cancel` no Timelock.
-
-## Propostas batch
-
-Uma única proposta pode incluir **N chamadas**. Útil quando ações são relacionadas e devem ser atômicas. Exemplo:
-
-```
-targets   = [registry, registry, burnTracker]
-calldatas = [
-    registry.registerProject.encode(ownerAddr, "ipfs://...", 10_000e18),
-    registry.activateProject.encode(nextId),
-    burnTracker.grantRole.encode(RECORDER_ROLE, appContract)
-]
-```
-
-As 3 chamadas ou são todas executadas ou nenhuma (se qualquer uma reverter, a tx inteira reverte).
-
-## Eventos
-
-```
-event ProposalCreated(
-    uint256 proposalId,
-    address proposer,
-    address[] targets,
-    uint256[] values,
-    string[] signatures,
-    bytes[] calldatas,
-    uint256 voteStart,
-    uint256 voteEnd,
-    string description
-);
-
-event VoteCast(address indexed voter, uint256 proposalId, uint8 support, uint256 weight, string reason);
-event ProposalQueued(uint256 proposalId, uint256 etaSeconds);
-event ProposalExecuted(uint256 proposalId);
-event ProposalCanceled(uint256 proposalId);
-```
-
-Para UI/indexer, todos esses eventos têm `proposalId` como campo chave.
-
-## Fluxo completo de exemplo
-
-```
-1. Alice (com >= 10k GOV delegados) chama governor.propose(...)
-   -> evento ProposalCreated
-   -> state = Pending
-
-2. Apos 7200 blocos (~1 dia):
-   -> state = Active
-
-3. Holders votam durante 50400 blocos (~7 dias):
-   governor.castVote(id, 1)  // For
-   governor.castVote(id, 0)  // Against
-   ...
-   -> eventos VoteCast
-
-4. Apos 50400 blocos:
-   Se For > Against && quorum atingido:
-     -> state = Succeeded
-   Senao:
-     -> state = Defeated (terminal)
-
-5. Qualquer um chama governor.queue(id)
-   -> Timelock.schedule(...)
-   -> evento ProposalQueued com etaSeconds
-   -> state = Queued
-
-6. Apos 172800 segundos (2 dias):
-   Qualquer um chama governor.execute(id)
-   -> Timelock.executeBatch(...)
-   -> chamadas alvo sao executadas
-   -> evento ProposalExecuted
-   -> state = Executed (terminal)
-```
-
-## Edge cases
-
-### `Succeeded` mas sem alguém para chamar `queue`
-
-A proposta **não vira** `Expired` automaticamente no estado `Succeeded` — expira só depois de `Queued`. Permanece `Succeeded` esperando queue. Qualquer holder pode chamar.
-
-### Operação pendente no Timelock expira
-
-Se alguém chama `queue` mas ninguém chama `execute` dentro de `GRACE_PERIOD` (default do TimelockController OZ), a operação fica expirada. O Governor reflete com `state = Expired`.
-
-### `queue` chamado duas vezes
-
-A segunda chamada reverte — a operação já está no Timelock.
-
-### Proposta com `targets = []`
-
-Reverte com `GovernorInvalidProposalLength`. Propostas sem chamadas não fazem sentido.
-
-## Como fiscalizar uma proposta antes de votar
-
-1. Leia o `description` (texto humano).
-2. Decodifique cada `calldatas[i]` contra a ABI do `targets[i]`. Confirme que os parâmetros são o que a descrição diz.
-3. Confirme que `values[i] == 0` (quase sempre; se não for, descubra por que gastar ETH).
-4. Se altera parâmetro: está dentro dos bounds? Ver [Parâmetros](03-parameters.md).
-5. Se move fundos: quanto? para onde? há justificativa?
+Detalhes de parâmetros em [Parâmetros](03-parameters.md).
 
 ---
 

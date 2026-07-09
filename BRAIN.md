@@ -23,25 +23,26 @@ Redes: hardhat 31337 (dev, **in-memory — restart zera chain**), Sepolia 111551
 
 ## 2. Estado atual do protocolo
 
-**REMODEL 2026-07-08 ativo** (motivado por `audit/economist/2026-07-08-feerouter-bypass.md`): payment rail + rev-share substitui modelo econômico antigo (burn 80%).
+**REMODEL 2026-07-08 — modelo ÚNICO** (motivado por `audit/economist/2026-07-08-feerouter-bypass.md`): payment rail + rev-share. O modelo econômico antigo (burn-to-mint, emissão, buckets, gauge) foi **removido do código** — contratos deletados, não apenas aposentados.
 
-- `CreditPSM.sol` — CREDIT ↔ USDC 1:1 (`buy`, `sell`, `backing`).
-- `FeeRouterV2.sol` — `pay(projectId, amount)` com fee 2,5% (cap 5%), split 40/40/20 treasury/buyback/grants.
-- `ProjectFunding.sol` — rounds de investimento all-or-nothing com rev-share 1%–30%, duração ≤90 dias.
-- FeeRouter V1 (burn/treasury/rebate) e README §1–§6 = **referência histórica**.
-- Rewards V1 aposentado no frontend (`/app/rewards` → redirect `rewards-v2`).
-- Status qualidade: 872 testes passando; slither sem high/medium.
-- Frontend: último commit `387b3f3` = backup pré-remodelagem; refatoração de UI do remodel em andamento.
+- `CreditPSM.sol` — CREDIT ↔ USDC 1:1 (`buy`, `sell`, `backing`), lastro integral sem saque. Único minter/burner do CREDIT.
+- `FeeRouterV2.sol` — `pay(projectId, amount)` com fee 2,5% (cap 5%), split 40/40/20 treasury/buyback/grants, rev-share descontado, evento `PaymentRouted`.
+- `ProjectFunding.sol` — rounds all-or-nothing, rev-share 1%–30%, duração 1–90 dias, gate de GOV stakeado.
+- `Treasury.sol` — reescrito como cofre simples (transfer/transferETH gated GOVERNANCE_ROLE; sem POL/oracle/buyback/FFP).
+- `CommunityGovernor.sol` — supermajority 75% agora dispara em gestão de roles do Treasury/Timelock (não há mais removePOL).
+- SDK `@cesarsst/web3community-sdk` v0.2.0 (FeeRouterV2-only). cloud-terminal migrado.
 
-Pendências pré-mainnet: auditoria externa + distribuição inicial (README §7).
+Pendências pré-mainnet: parecer jurídico do rev-share (≈ security) = BLOQUEADOR; buyback automatizado de GOV não implementado (fundos acumulam no recipient); auditoria externa + distribuição inicial.
 
 ## 3. Mapa de contratos (superfície pública)
 
-Core: `GovernanceToken` (GOV) · `CreditToken` (CREDIT) · `CommunityGovernor` + `CommunityTimelock` · `ProjectRegistry` (whitelist, timelock owner-recipient 48h) · `Treasury` (FFP buyback, POL, MA 90d, Chainlink staleness 6h) · `Staking` (lock 14d–365d, mult máx 4x) · `BurnTracker` · `RewardDistributor` V1/`RewardDistributorV2` (bucket-aware/CLP) · `FeeRouter` V1 · `LiquidityGauge` (UniswapV3Staker) · `TeamVesting` · `UserSubsidy` · `CreditPriceOracle` (Chainlink USDC/USD, fallback 1:1).
-Remodel: `CreditPSM` · `FeeRouterV2` · `ProjectFunding`.
-Dev/mocks: `contracts/dev/` (DevFaucet, DevSwapPool), `contracts/test/`.
+Core: `GovernanceToken` (GOV, cap 100M) · `CreditToken` (CREDIT) · `CommunityGovernor` + `CommunityTimelock` · `ProjectRegistry` (whitelist, colateral GOV) · `Treasury` (cofre simples) · `Staking` (lock 14d–365d, mult máx 4x; gate de investimento) · `TeamVesting`.
+Remodel (motor econômico): `CreditPSM` · `FeeRouterV2` · `ProjectFunding`.
+Dev-only (rede local): `DevFaucet` (ETH+USDC) · `ERC20DecimalsMock` (USDC).
+**Deletados no remodel** (não referenciar): BurnTracker, RewardDistributor(V2), LiquidityGauge, FeeRouter V1, CreditPriceOracle, UserSubsidy, DevSwapPool + interfaces/mocks Uniswap/Chainlink.
+Dev/mocks: `contracts/dev/` (DevFaucet), `contracts/test/` (ERC20DecimalsMock, ERC20Mock, ReentrantStakingERC20Mock).
 
-Roles: `MINTER_ROLE`, `BURNER_ROLE`, `RECORDER_ROLE`, `GOVERNANCE_ROLE`, `PROPOSER_ROLE`, `CANCELLER_ROLE`, `DEFAULT_ADMIN_ROLE` (fiação em `ignition/modules/Dao.ts` — atenção ao comentário BUG FIX ~L465 sobre ordem de renúncia de roles).
+Roles: `MINTER_ROLE`, `BURNER_ROLE` (CREDIT → PSM), `REVENUE_NOTIFIER_ROLE` (ProjectFunding → FeeRouterV2), `GOVERNANCE_ROLE`, `PROPOSER_ROLE`, `CANCELLER_ROLE`, `DEFAULT_ADMIN_ROLE` (fiação em `ignition/modules/Dao.ts`, fases A–D; deployer renuncia tudo, Timelock por último).
 
 Digest auto-gerado de constantes/immutables/params: `.claude/protocol-state.md` (backend).
 
@@ -55,7 +56,7 @@ contratos (backend) ──deploy Ignition──▶ ignition/deployments/
         │        └─ frontend: src/runtime.ts carrega ANTES do mount
         │
         ├─ frontend: npm run sync:contracts  ──▶ src/contracts/abis.ts + addresses.ts (AUTOGERADOS, nunca editar)
-        ├─ frontend: npm run sync:docs       ──▶ src/content/docs/{pt-br,en,es}/ (fonte: backend docs/)
+        ├─ frontend: npm run sync:docs       ──▶ src/content/docs/pt-br/ (fonte: backend docs/)
         └─ SDK: scripts/sync-abis.mjs        ──▶ ABIs do @cesarsst/web3community-sdk
 ```
 
@@ -63,13 +64,14 @@ contratos (backend) ──deploy Ignition──▶ ignition/deployments/
 
 ## 5. Frontend — mapa rápido
 
-- Rotas: `/` landing · `/docs/:locale/:slug*` (pt-br|en|es) · `/app/*` (guard `requiresWallet` → ConnectModal): overview, tokens, swap, faucet, staking, invest, rewards-v2, gauge, governance(/new/:id), treasury, registry, rounds, dev (só chain 31337).
-- 11 Pinia stores (setup): wallet, tokens, staking, governance, rewardsV2, gauge, funding, treasury, registry, rounds, market.
+- Rotas: `/` landing · `/docs/:locale/:slug*` (pt-br) · `/app/*` (guard `requiresWallet` → ConnectModal): overview, tokens, swap (PSM), faucet, staking, invest (ProjectFunding), governance(/new/:id), treasury, registry, dev (só chain 31337).
+- Pinia stores (setup): wallet, tokens, staking, governance, funding, treasury, registry, market.
 - Composables-chave: `useViemClients` (publicClient singleton), `useTx` (simula antes de assinar p/ decodificar revert), `useContract`, `useAutoRefresh` (watchBlocks 4s), `useToasts`.
 - Wallets: EIP-6963 injected + WalletConnect + Coinbase SDK.
-- i18n: docs por árvore de arquivos (pt-br fonte de verdade, paridade 52/52/52); UI do hub é PT-BR hardcoded (decisão: vue-i18n = overkill, `DocsView.vue` ~L82).
+- i18n: docs só pt-br no momento (en/es removidas no remodel — tradução posterior); UI do hub é PT-BR hardcoded.
 - Reverts traduzidos p/ PT em `src/utils/errors.ts`.
 - Fórum Flarum externo: `VITE_FORUM_URL` ou `hostname:5191`.
+- Landing seção "Um exemplo de verdade" (`#exemplo`): cards trocados por diorama 3D `components/landing/PaymentFlow3D.vue` (CSS 3D puro, zero dep — cofre abastecido → app/investidores/DAO, linhas SVG com dash animado; versão mobile vertical simplificada; respeita `prefers-reduced-motion`).
 
 ## 6. Comandos essenciais
 
@@ -77,10 +79,8 @@ Backend (`/home/ubuntu/web3community`):
 ```bash
 npm run compile | test | coverage | lint | typecheck
 npm run node                 # hardhat node local
-npm run deploy:local         # Ignition dev.json
-npm run deploy:prod-sim:sync # full CLP + sync frontend
-npm run sim                  # simulação econômica → scripts/simulation/output/
-npx hardhat run scripts/deploy-remodel.ts   # PSM/FeeRouterV2/ProjectFunding
+npm run deploy:local         # Ignition dev.json (DEPLOY_USDC_MOCK=true)
+npm run deploy:prod-sim:sync # seeds dev + sync frontend
 ```
 
 Frontend (`/home/ubuntu/web3community-frontend`):
@@ -95,16 +95,16 @@ Deploy prod: push na branch `production` (ambos os repos) → GitHub Actions SSH
 ## 7. Convenções e regras do projeto
 
 - Solidity: pipeline do agente `dao-dev` (backend `.claude/agents/`): impl → test → NatSpec → slither → coverage ≥90%; invariantes I1–I7. Agentes irmãos: `dao-economist`, `dao-docs`.
-- Docs: pt-br é fonte de verdade; en/es devem manter paridade estrita de arquivos.
+- Docs: só pt-br no momento (en/es removidas no remodel; retradução é tarefa futura).
 - Frontend: componentes UI próprios em `components/ui/` com tokens em `styles/tokens.css`; não introduzir vue-ui/wagmi/axios sem decisão registrada aqui.
 - `src/contracts/abis.ts` e `addresses.ts`: autogerados, nunca editar à mão.
-- Envs backend: `.env.example` (SEPOLIA_RPC_URL, DEPLOYER_PRIVATE_KEY sem 0x, ETHERSCAN_API_KEY, COINMARKETCAP_API_KEY, REPORT_GAS) + flags de deploy (`DEPLOY_TEAM_VESTING`, `DEPLOY_USER_SUBSIDY`, `DEPLOY_CLP_PHASE1`, `DEPLOY_CLP_ORACLE`).
+- Envs backend: `.env.example` (SEPOLIA_RPC_URL, DEPLOYER_PRIVATE_KEY sem 0x, ETHERSCAN_API_KEY, COINMARKETCAP_API_KEY, REPORT_GAS) + flags de deploy (`DEPLOY_USDC_MOCK` p/ dev, `DEPLOY_TEAM_VESTING`).
 - Envs frontend: `VITE_CHAIN_ID`, `VITE_RPC_URL`, `VITE_WC_PROJECT_ID`, `VITE_APP_NAME/DESCRIPTION/URL`, `VITE_FORUM_URL` (sobrescritos por `/config.json` em prod).
 
 ## 8. Referências
 
-- README backend (37KB, aviso do remodel no topo) · `CHANGELOG.md` (126KB, `[Unreleased]` = remodel + pivot CLP).
-- `docs/` trilíngue (10 seções × 3 locales).
+- README backend (37KB, aviso do remodel no topo) · `CHANGELOG.md` (126KB, `[Unreleased]` = remodel).
+- `docs/pt-br/` (10 seções; en/es removidas no remodel).
 - `audit/slither/` · `audit/economist/` (pareceres; `2026-07-08-feerouter-bypass.md` = origem do remodel).
 - `.claude/protocol-state.md` (digest de estado do protocolo).
 - SDK: `/home/ubuntu/utils/packages/web3community-sdk/src/` (config.ts, activation.ts, walletLink.ts).
@@ -123,5 +123,7 @@ Deploy prod: push na branch `production` (ambos os repos) → GitHub Actions SSH
 
 > Adicione no TOPO. Formato: `- **YYYY-MM-DD** — o quê / onde / impacto.`
 
+- **2026-07-09** — **Legado REMOVIDO do código** (não só aposentado): deletados BurnTracker, RewardDistributor(V2), LiquidityGauge, FeeRouter V1, CreditPriceOracle, UserSubsidy, DevSwapPool + interfaces/mocks e testes. Treasury/Governor/DevFaucet/CreditToken/Staking/ProjectRegistry com NatSpec reescrito; Ignition `Dao.ts` = 11 contratos do modelo novo (sem genesis; USDC mock via `DEPLOY_USDC_MOCK`); `deploy-prod-sim`/`boot-node.sh`/`export-runtime-config` reescritos; boot do container auto-provisiona. Suite **365 passing**; slither sem high/medium (divide-before-multiply no FeeRouterV2 é intencional). SDK 0.2.0 (FeeRouterV2-only) + cloud-terminal migrado. Frontend: views/stores/copy legadas removidas, Overview reescrito, vue-tsc verde. **Docs pt-br reconstruídas do zero (35 páginas), en/es/governance/apresentacao removidas** (tradução posterior).
+- **2026-07-09** — Landing: seção "Um exemplo de verdade" (`#exemplo`) trocou os 4 cards estáticos por diorama 3D animado `components/landing/PaymentFlow3D.vue` (CSS 3D puro, zero dep — mantém regra viem-puro/UI hand-rolled). Fluxo: cofre abastecido → 3 destinos (app 89,5% / investidores 8% / DAO 2,5%) ligados por linhas SVG com dash animado ditando direção. Mobile ≤760px = pilha vertical simplificada. Split bars mantidos abaixo. Verificado desktop+mobile via Playwright.
 - **2026-07-08** — Remodel implementado ponta a ponta: contratos `CreditPSM`/`ProjectFunding`/`FeeRouterV2` (+14 testes, 872 total; slither limpo pós-CEI no `invest`), deploy local com roles via Timelock, hub com SwapView (PSM) + InvestView, landing e docs pt-br/en/es sincronizadas (fee 2,5% 40/40/20, rev-share 1-30%, CREDIT estável). Legado (FeeRouter V1, BurnTracker, RewardDistributorV2, Gauge) segue deployado, marcado ⚠️ LEGADO nas docs. Parecer que motivou: `audit/economist/2026-07-08-feerouter-bypass.md`.
 - **2026-07-08** — BRAIN.md criado; CLAUDE.md dos dois repos passam a importá-lo. Estado capturado: remodel deployável via `scripts/deploy-remodel.ts`, frontend em refatoração pós-backup `387b3f3`.

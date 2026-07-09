@@ -11,8 +11,8 @@ import {AccessControl} from "@openzeppelin/contracts/access/AccessControl.sol";
  *         unica da verdade para: quem e owner de cada projeto, quanto GOV foi
  *         lockado como colateral (skin in the game), qual o status do projeto
  *         (Pending -> Active -> Probation -> Removed) e qual a metadata off-chain
- *         (IPFS/Arweave URI). Consumido por `Staking`, `BurnTracker` e
- *         `RewardDistributor` nas fases seguintes.
+ *         (IPFS/Arweave URI). Consumido por `Staking`, `ProjectFunding` e
+ *         `FeeRouterV2`.
  * @dev Invariantes atendidas nesta unidade:
  *      - I7: Projetos sao adicionados/alterados/removidos apenas pelo
  *        `TimelockController` (portador de `GOVERNANCE_ROLE` em producao).
@@ -25,8 +25,8 @@ import {AccessControl} from "@openzeppelin/contracts/access/AccessControl.sol";
  *       - Probation por TEMPO (view {isInProbation}): true enquanto
  *         `block.timestamp < probationEndsAt` e `status == Active`.
  *         Probation inicial automatica aplicada a todo projeto recem-ativado
- *         durante `probationDuration`; reduz o peso de rewards (enforcement
- *         fica no `RewardDistributor`).
+ *         durante `probationDuration`; sinaliza projeto recem-ativado (o
+ *         consumo desse sinal fica a cargo de consumidores externos).
  *       - Probation PUNITIVA (status `Probation` do enum): governanca move
  *         manualmente um projeto Active para Probation por ma conduta;
  *         {isInProbation} retorna false nesse caso (porque status != Active),
@@ -124,14 +124,13 @@ contract ProjectRegistry is AccessControl {
     mapping(uint256 => address) private _pendingOwners;
 
     // ------------------------------------------------------------------
-    // Storage adicionado na Fase 1.4 do pivot CLP — ownerRecipient timelocked
+    // ownerRecipient timelocked — endereco canonico de recebimento por projeto,
     // ------------------------------------------------------------------
     //
-    // Motivacao (red flag E.3 #1 do parecer 2026-04-24-clp-pivot.md): com a
-    // introducao do bucket "apps" em `RewardDistributorV2.finalizeRound`, o
-    // distributor mint CREDIT direto para `ownerRecipient(projectId)`. Se o
+    // Motivacao: um consumidor externo (ex.: distribuicao de valor por
+    // projeto) pode pagar direto para `ownerRecipient(projectId)`. Se o
     // setter fosse imediato, o owner do projeto poderia hot-swap o recipient
-    // entre `finalizeRound` e o instante em que a tx e indexada off-chain,
+    // entre o pagamento e o instante em que a tx e indexada off-chain,
     // desviando rewards para outro endereco. A mitigacao e um timelock
     // operacional de 48h: setter so propoe a mudanca; aplicacao e separada e
     // qualquer um pode trigger apos `effectiveAt`.
@@ -152,7 +151,7 @@ contract ProjectRegistry is AccessControl {
     /// @notice Recipient ativo por projeto. Default `address(0)` significa
     ///         "use `owner` como fallback" (ver {ownerRecipient(uint256)}).
     ///         Quando setado via {applyOwnerRecipient}, vira o destino canonico
-    ///         dos rewards do bucket "apps" da Fase 1.4.
+    ///         de valor por projeto (consumidor externo).
     mapping(uint256 projectId => address recipient) private _ownerRecipient;
 
     /// @notice Proposta pendente por projectId. Apenas uma proposta ativa por
@@ -215,7 +214,7 @@ contract ProjectRegistry is AccessControl {
     event ProbationDurationUpdated(uint64 oldDuration, uint64 newDuration);
 
     // ------------------------------------------------------------------
-    // Events — ownerRecipient timelock (Fase 1.4)
+    // Events — ownerRecipient timelock
     // ------------------------------------------------------------------
 
     /// @notice Emitido quando uma proposta de mudanca do ownerRecipient e
@@ -364,7 +363,7 @@ contract ProjectRegistry is AccessControl {
      * @notice `true` se o projeto esta em status `Active` (inclui janela de
      *         probation automatica).
      * @dev Retorna `false` para projetos inexistentes em vez de reverter —
-     *      permite uso em callers (Staking/RewardDistributor) sem try/catch.
+     *      permite uso em callers (Staking, FeeRouterV2) sem try/catch.
      */
     function isActive(uint256 projectId) external view returns (bool) {
         if (!_exists(projectId)) {
@@ -683,16 +682,16 @@ contract ProjectRegistry is AccessControl {
     }
 
     // ------------------------------------------------------------------
-    // ownerRecipient timelock — Fase 1.4 (red flag E.3 #1)
+    // ownerRecipient timelock (anti hot-swap de recebedor)
     // ------------------------------------------------------------------
 
     /**
-     * @notice Endereco canonico para receber rewards do bucket "apps" da
-     *         Fase 1.4. Consultado pelo `RewardDistributorV2` em cada
-     *         `finalizeRound`.
+     * @notice Endereco canonico de recebimento de valor por projeto,
+     *         Endereco canonico de recebimento por projeto. Consultavel por
+     *         qualquer consumidor externo.
      * @dev Quando nunca foi setado para o projectId, retorna o `owner` atual
      *      do projeto como fallback — preserva compatibilidade com o modelo
-     *      anterior (rewards iam para o owner via `payRebates` do Treasury).
+     *      simples: sem override explicito, paga o proprio owner.
      *      Para projetos que jamais existiram, retorna `address(0)`.
      * @param projectId ID do projeto.
      * @return recipient Endereco canonico (nunca `address(0)` para projetos
@@ -717,13 +716,11 @@ contract ProjectRegistry is AccessControl {
      *      previa — o relogio reinicia. Reverte se projeto Removed (recipient
      *      fica congelado, simetrico a {updateMetadata}).
      *
-     *      Justificativa do timelock (E.3 #1 do parecer
-     *      2026-04-24-clp-pivot.md): com a Fase 1.4, `RewardDistributorV2`
-     *      mint CREDIT direto para `ownerRecipient` na finalizacao da rodada.
-     *      Sem janela de espera, owner poderia hot-swap entre `finalizeRound`
-     *      e o instante observavel off-chain, desviando rewards. 48h e
-     *      compativel com o ciclo operacional da DAO (proposta + execucao
-     *      do Timelock principal levam ~2d).
+     *      Justificativa do timelock: um consumidor externo pode pagar valor
+     *      direto para `ownerRecipient`. Sem janela de espera, o owner poderia
+     *      hot-swap o recipient entre o pagamento e o instante observavel
+     *      off-chain, desviando fundos. 48h e compativel com o ciclo
+     *      operacional da DAO (proposta + execucao do Timelock levam ~2d).
      * @param projectId ID do projeto.
      * @param newRecipient Endereco proposto. `address(0)` reseta para o
      *                     fallback (= owner atual do projeto).

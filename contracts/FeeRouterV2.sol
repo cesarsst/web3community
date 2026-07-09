@@ -11,9 +11,8 @@ import {ProjectFunding} from "./ProjectFunding.sol";
 
 /**
  * @title  FeeRouterV2
- * @notice Trilho de pagamento do remodel 2026-07-08. Substitui o modelo
- *         burn-to-mint (FeeRouter V1, split 70/20/10) por taxa competitiva
- *         com processadores de pagamento:
+ * @notice Trilho de pagamento da Web3Community: taxa competitiva com
+ *         processadores de pagamento e investimento por fatia de receita.
  *
  *          pay(projectId, 100 CREDIT):
  *            - fee do protocolo (default 2,5%) ->
@@ -22,18 +21,18 @@ import {ProjectFunding} from "./ProjectFunding.sol";
  *              projeto nunca captou) -> investidores, via notifyRevenue
  *            - resto -> appRecipient do projeto
  *
- *         Sem burn, sem emissao: CREDIT e trilho estavel (ver CreditPSM).
+ *         CREDIT e trilho de pagamento estavel (mint/redeem 1:1 no CreditPSM).
  *         A renda do investidor vem de receita real; o valor do GOV vem do
  *         buyback financiado pela fee.
  *
- * @dev - I4 (governanca via Timelock): setters economicos sao GOVERNANCE_ROLE.
- *      - I7 (projetos via Registry): {pay} exige projeto Active.
+ * @dev - Governanca via Timelock: setters economicos sao GOVERNANCE_ROLE.
+ *      - {pay} exige projeto Active no Registry.
  *      - feeBps tem teto duro FEE_BPS_CAP (5%) — mesmo governanca nao passa.
  *      - Recipients do split (treasury/buyback/grants) sao enderecos
  *        configuraveis; os eventos carregam o detalhamento por parcela para
  *        transparencia contabil on-chain mesmo quando apontam pro mesmo
  *        endereco (MVP dev: os tres = Treasury).
- *      - {setAppRecipient} e owner-gated (rotacao operacional, como no V1).
+ *      - {setAppRecipient} e owner-gated (rotacao operacional do recipient).
  */
 contract FeeRouterV2 is AccessControl, ReentrancyGuard {
     using SafeERC20 for IERC20;

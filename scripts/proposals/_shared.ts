@@ -53,7 +53,7 @@ export async function loadCoreAddresses(): Promise<CoreAddresses> {
 }
 
 /**
- * Le o endereco de um modulo Ignition standalone (UserSubsidy,
+ * Le o endereco de um modulo Ignition standalone (TeamVesting,
  * TeamVesting). Retorna `undefined` se o deploy ainda nao existir.
  */
 export function loadModuleAddress(

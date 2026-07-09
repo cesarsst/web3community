@@ -25,12 +25,16 @@ for i in $(seq 1 60); do
   sleep 1
 done
 
-# 3) deploy fresh (sempre)
-echo "[boot] deployando Ignition (dev.json)…"
+# 3) deploy fresh (sempre) — stack completa do remodel, com USDC mock local
+echo "[boot] deployando Ignition (dev.json, USDC mock)…"
 rm -rf ignition/deployments
-npx hardhat ignition deploy ./ignition/modules/Dao.ts \
+DEPLOY_USDC_MOCK=true npx hardhat ignition deploy ./ignition/modules/Dao.ts \
   --parameters ignition/parameters/dev.json \
   --network localhost
+
+# 3b) seeds de dev (projetos demo, faucet ETH+USDC, rodada de captação)
+echo "[boot] provisionando seeds de dev (deploy-prod-sim)…"
+npx hardhat run scripts/deploy-prod-sim.ts --network localhost
 
 # 4) exporta config.json pra o volume compartilhado
 echo "[boot] exportando /shared/config.json…"

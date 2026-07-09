@@ -1,164 +1,120 @@
 # Staking
 
-**Para quem é:** devs lendo peso de stakers, auditores, usuários curiosos.
-**Pré-requisitos:** [Directed staking](../02-core-concepts/02-directed-staking.md).
+**Para quem é:** devs/auditores.
 
-## Visão rápida
+Contrato: `contracts/Staking.sol` · Solidity 0.8.24 · OpenZeppelin 5.
 
-Cofre de stake direcionado por projeto. Usuário lockeia GOV em um `projectId` específico do `ProjectRegistry` e recebe `weight = amount * multiplier(lockDuration) / 1e18`. Peso alimenta share de rewards no `RewardDistributor`.
+## Papel
 
-Lock mínimo 14 dias, máximo aceito ilimitado (multiplier satura em 4x a partir de 365 dias). Stake novo só em projetos `Active`. Unstake bypassa lock se projeto virou `Removed`.
+Cofre de stake de GOV **direcionado por projeto**. O usuário lockeia GOV em um `projectId` do [ProjectRegistry](04-ProjectRegistry.md) e recebe `weight` proporcional ao amount e à duração do lock.
 
-## Herança
+No modelo vigente o peso cumpre dois papéis:
 
-```
-ReentrancyGuard (OZ)
-```
+- **Gate de investimento:** [ProjectFunding](07-ProjectFunding.md) exige `getWeight(investor, projectId) > 0` para investir e para sacar rev-share — só quem tem GOV em stake no projeto participa da captação e da redistribuição.
+- **Curadoria:** o peso agregado por projeto (`getTotalWeight` / `getTotalWeightAt`, com checkpoints por bloco) é um sinal on-chain de convicção da comunidade em cada projeto.
 
-Usa `SafeERC20`, `Checkpoints.Trace208`, `SafeCast`.
+Sem `AccessControl`: nenhuma função é privilegiada por role — o gating é lógica de negócio (ownership da posição, status do projeto, expiração do lock).
 
-## Parâmetros e storage
+Herança: `ReentrancyGuard`. Usa `SafeERC20`, `Checkpoints.Trace208`, `SafeCast`.
 
-| Nome | Tipo | Valor | Descrição |
-|---|---|---|---|
-| `MIN_LOCK` | `uint256` constant | `14 days` | Lock mínimo |
-| `MAX_LOCK` | `uint256` constant | `365 days` | Saturação do multiplier |
-| `MULTIPLIER_PRECISION` | `uint256` constant | `1e18` | Precisão FP |
-| `MAX_MULTIPLIER` | `uint256` constant | `4e18` | 4x |
-| `GOV_TOKEN` | `IERC20` immutable | GOV | Token stakado |
-| `REGISTRY` | `ProjectRegistry` immutable | Registry | Para gating |
-| `positions` | mapping | `user → projectId → StakePosition` | Posições |
-| `totalStakedByProject` | mapping | `projectId → uint256` | GOV agregado |
-| `totalStaked` | `uint256` | — | Global |
-| `_userWeight` | mapping | `user → projectId → Trace208` | Checkpoints |
-| `_projectWeight` | mapping | `projectId → Trace208` | Checkpoints |
-| `_globalWeightCheckpoints` | `Trace208` | — | Global |
+## Interface pública
 
-### Struct `StakePosition`
+### Constantes
+
+| Nome | Valor | Descrição |
+|---|---|---|
+| `MIN_LOCK` | `14 days` | Lock mínimo. Abaixo reverte `LockTooShort`. |
+| `MAX_LOCK` | `365 days` | Duração em que o multiplicador satura. |
+| `MULTIPLIER_PRECISION` | `1e18` | `1e18` = 1,0x. |
+| `MAX_MULTIPLIER` | `4e18` | Multiplicador máximo (4x) em `MAX_LOCK`. |
+
+Curva do multiplicador: linear de **1x (14d) a 4x (365d)**; locks acima de `MAX_LOCK` são aceitos (multiplicador satura em 4x, mas o tempo real de lock é respeitado no unstake). Peso = `amount * multiplier(lockDuration)`.
+
+### Tipo / storage
 
 ```solidity
 struct StakePosition {
-    uint256 amount;
-    uint64 lockStartAt;
-    uint64 lockDuration;
+    uint256 amount;       // GOV lockado (0 = posição inexistente)
+    uint64  lockStartAt;  // início do lock atual
+    uint64  lockDuration; // duração absoluta desde lockStartAt
 }
 ```
 
-## Roles e permissões
+| Nome | Tipo | Descrição |
+|---|---|---|
+| `GOV_TOKEN` | `IERC20 immutable` | Token GOV lockado. |
+| `REGISTRY` | `ProjectRegistry immutable` | Consultado p/ `isActive` (stake) e status `Removed` (bypass de lock). |
+| `positions` | `mapping(address => mapping(uint256 => StakePosition)) public` | Posição por (user, projectId). |
+| `totalStakedByProject` | `mapping(uint256 => uint256) public` | Soma de `amount` por projeto. |
+| `totalStaked` | `uint256 public` | Total global lockado. |
 
-**Sem roles.** Staking não é privilegiado — toda função é lógica de negócio (ownership da posição, status do projeto, expiração do lock). Não usa `AccessControl`.
+### Constructor
 
-## Funções externas
-
-### State-changing
-
-#### `stake(uint256 projectId, uint256 amount, uint64 lockDuration)`
-
-Abre ou consolida posição. Se já existe posição: `newAmount = old + amount`, `newLockDuration = max(remaining, lockDuration)`, `lockStartAt = now` (**reset**).
-
-- **Reverte**: `ZeroAmount`, `LockTooShort`, `ProjectNotActive`, erros do ERC-20.
-- **Eventos**: `Staked(user, projectId, amount, lockDuration, lockStartAt, weight)`.
-- **ReentrancyGuard**: sim.
-
-#### `increaseStake(uint256 projectId, uint256 amount)`
-
-Aumenta `amount` **preservando** `lockStartAt` e `lockDuration`.
-
-- **Reverte**: `ZeroAmount`, `PositionNotFound`, `ProjectNotActive`.
-- **Eventos**: `StakeIncreased(user, projectId, amountAdded, newAmount, newWeight)`.
-
-#### `extendLock(uint256 projectId, uint64 newLockDuration)`
-
-Estende `lockDuration`. Sempre estritamente maior que o atual.
-
-- **Reverte**: `PositionNotFound`, `CannotShortenLock`.
-- **Eventos**: `LockExtended(user, projectId, newLockDuration, newWeight)`.
-
-#### `unstake(uint256 projectId, uint256 amount)`
-
-Remove `amount`. Se `projectRemoved`, bypassa lock; caso contrário exige lock expirado.
-
-- **Reverte**: `ZeroAmount`, `PositionNotFound`, `InsufficientStake`, `LockNotExpired`.
-- **Eventos**: `Unstaked(user, projectId, amount, remaining, newWeight)` + (se bypass) `EarlyUnstakeAllowed(user, projectId, amount)`.
-
-#### `unstakeAll(uint256 projectId)`
-
-Atalho para `unstake` com `amount = position.amount`.
-
-- **Eventos**: idem `unstake`.
+```solidity
+constructor(address govToken_, address registry_)   // reverte ZeroAddress
+```
 
 ### Views
 
-- `getPosition(user, projectId) → StakePosition`.
-- `getWeight(user, projectId) → uint256`.
-- `getTotalWeight(projectId) → uint256`.
-- `getWeightAt(user, projectId, blockNumber) → uint256` — snapshot.
-- `getTotalWeightAt(projectId, blockNumber) → uint256` — snapshot.
-- `getGlobalWeight() → uint256`.
-- `getGlobalWeightAt(blockNumber) → uint256`.
-- `getLockEnd(user, projectId) → uint64` — timestamp expiração.
-- `isUnlocked(user, projectId) → bool`.
-- `multiplier(lockDuration) → uint256` — pure, calcula multiplier.
+```solidity
+function getPosition(address user, uint256 projectId) external view returns (StakePosition memory)
+function getWeight(address user, uint256 projectId) external view returns (uint256)     // 0 se sem posição
+function getTotalWeight(uint256 projectId) external view returns (uint256)
+function getWeightAt(address user, uint256 projectId, uint256 blockNumber) external view returns (uint256)
+function getTotalWeightAt(uint256 projectId, uint256 blockNumber) external view returns (uint256)
+function getGlobalWeight() external view returns (uint256)
+function getGlobalWeightAt(uint256 blockNumber) external view returns (uint256)
+function getLockEnd(address user, uint256 projectId) external view returns (uint64)     // 0 se sem posição
+function isUnlocked(address user, uint256 projectId) external view returns (bool)
+function multiplier(uint64 lockDuration) external pure returns (uint256)                // reverte LockTooShort < MIN_LOCK
+```
+
+As views `*At` usam `upperLookupRecent` (checkpoint com chave `<= blockNumber`) e só são confiáveis para `blockNumber < block.number`.
+
+### Mutações (todas `nonReentrant`)
+
+```solidity
+function stake(uint256 projectId, uint256 amount, uint64 lockDuration) external
+```
+Abre ou **consolida** posição (Opção B): se já existe, `amount` soma, `lockDuration = max(remaining, novo)` e `lockStartAt` reseta para `now`. Exige projeto `Active`. Reverte `ZeroAmount`, `LockTooShort`, `ProjectNotActive`. Emite `Staked`.
+
+```solidity
+function increaseStake(uint256 projectId, uint256 amount) external
+```
+Aumenta `amount` **preservando** `lockStartAt`/`lockDuration` (não reabre lock expirado). Exige posição existente e projeto `Active`. Reverte `ZeroAmount`, `PositionNotFound`, `ProjectNotActive`. Emite `StakeIncreased`.
+
+```solidity
+function extendLock(uint256 projectId, uint64 newLockDuration) external
+```
+Estende a duração (nunca encurta), sem alterar `lockStartAt`. Reverte `PositionNotFound`, `CannotShortenLock` (novo `<=` atual). Emite `LockExtended`.
+
+```solidity
+function unstake(uint256 projectId, uint256 amount) external
+function unstakeAll(uint256 projectId) external
+```
+Remove `amount` (ou tudo). Exige lock expirado **ou** projeto em `Removed` (bypass — a DAO removeu o projeto, não pune o staker). Probation não bypassa. Reverte `ZeroAmount`, `PositionNotFound`, `InsufficientStake`, `LockNotExpired`. Emite `Unstaked` (sempre) e `EarlyUnstakeAllowed` (se bypass por `Removed`).
 
 ## Eventos
 
-| Evento | Emitido em | Parâmetros indexados |
-|---|---|---|
-| `Staked(user, projectId, amount, lockDuration, lockStartAt, weight)` | `stake` | `user`, `projectId` |
-| `StakeIncreased(user, projectId, amountAdded, newAmount, newWeight)` | `increaseStake` | `user`, `projectId` |
-| `LockExtended(user, projectId, newLockDuration, newWeight)` | `extendLock` | `user`, `projectId` |
-| `Unstaked(user, projectId, amount, remaining, newWeight)` | `unstake`/`unstakeAll` | `user`, `projectId` |
-| `EarlyUnstakeAllowed(user, projectId, amount)` | `unstake` com bypass (projeto Removed) | `user`, `projectId` |
+`Staked(user, projectId, amount, lockDuration, lockStartAt, weight)`, `StakeIncreased(user, projectId, amount, newAmount, newWeight)`, `LockExtended(user, projectId, newLockDuration, newWeight)`, `Unstaked(...)`, `EarlyUnstakeAllowed(user, projectId, amount)`. Todos com `user` e `projectId` indexados.
 
-## Erros customizados
+## Erros
 
-| Erro | Quando ocorre |
-|---|---|
-| `ZeroAddress()` | Construtor com endereço zero |
-| `ZeroAmount()` | `amount == 0` |
-| `ProjectNotActive(projectId)` | Status ≠ Active em stake/increase |
-| `LockTooShort(provided, minimum)` | `lockDuration < 14 days` |
-| `LockNotExpired(unlockAt, nowTs)` | Tentativa de unstake antes do fim do lock, projeto não-Removed |
-| `CannotShortenLock(current, provided)` | `newLockDuration <= lockDuration` em extend |
-| `PositionNotFound(user, projectId)` | Posição inexistente |
-| `InsufficientStake(requested, available)` | `amount > position.amount` |
+`ZeroAddress`, `ZeroAmount`, `ProjectNotActive(projectId)`, `LockTooShort(provided, minimum)`, `LockNotExpired(unlockAt, nowTs)`, `CannotShortenLock(current, provided)`, `PositionNotFound(user, projectId)`, `InsufficientStake(requested, available)`.
+
+## Roles
+
+Nenhuma. O contrato não é privilegiado na governança.
 
 ## Invariantes
 
-- **I5 (Anti-flashloan de peso)**: `getWeightAt` / `getTotalWeightAt` / `getGlobalWeightAt` via `Checkpoints.Trace208`, consultáveis em `blockNumber < block.number`. `RewardDistributor` usa no `snapshotBlock` da rodada.
-- **I6 (Lock mínimo)**: `MIN_LOCK = 14 days`, enforçado em stake e extend.
-- **Conservação**: `totalStaked == SUM(totalStakedByProject[i])` sempre. `globalWeight == SUM(projectWeight[i])` sempre.
-- **Bypass só por `Removed`**: probation (inicial ou punitiva) **não** bypassa lock.
-- **CEI + ReentrancyGuard**: effects antes de `safeTransfer`, guard ativo em todas as funções que movem GOV.
+- **I6 (lock mínimo 14d):** `stake`/`extendLock` reforçam `>= MIN_LOCK`; `unstake` reverte `LockNotExpired` enquanto o lock vige, exceto projeto `Removed`.
+- **Unstake nunca preso por governança:** Probation/Removed bloqueiam stake novo, mas nunca bloqueiam unstake; `Removed` libera imediatamente (bypass do lock).
+- **Consolidação (Opção B):** novo `stake` reseta `lockStartAt` sobre toda a posição, impedindo esticar peso via micro-stakes sem re-commitar o amount antigo.
+- **Peso via snapshot:** `getWeightAt`/`getTotalWeightAt`/`getGlobalWeightAt` usam `Checkpoints.Trace208` (chave = `block.number`) — consumo por bloco ancorado é imune a flash-stake no bloco corrente.
+- **Overflow:** peso máximo teórico por (user, projeto) = `100M * 1e18 * 4 = 4e26`, cabe em `uint208`. Chave cabe em `uint48`.
+- **CEI + `nonReentrant`** em todas as funções que movem GOV.
 
-## Observações importantes
+## Ver também
 
-### Três trilhos de checkpoint
-
-O contrato mantém **três** tracks de peso — por usuário-projeto, por projeto, global. O agregado por projeto é atualizado em O(1) em cada update via diff `newUserWeight - oldUserWeight`. Global idem. Evita iteração sobre N stakers.
-
-### Multiplier formula
-
-```
-multiplier(d) = 1e18                                   se d == 14d
-multiplier(d) = 1e18 + (d-14d) * (4e18-1e18)/(365d-14d) se 14d < d < 365d
-multiplier(d) = 4e18                                   se d >= 365d
-```
-
-Pure, sem storage.
-
-### Locks > `MAX_LOCK`
-
-São aceitos literalmente. O multiplier satura em 4x mas o tempo real é respeitado. Ou seja, você pode stakar com `lockDuration = 2 anos` — recebe peso 4x × amount, mas não pode unstake antes dos 2 anos.
-
-### Consolidação `stake` resetando `lockStartAt`
-
-Intencional. Impede que micro-stakes prolonguem peso indefinidamente sem re-commit do amount antigo. Se você quer aumentar amount sem resetar lock, use `increaseStake`.
-
-### Chave `uint48` do Checkpoints
-
-Tick = `block.number` cabe em `uint48` por ~8920 anos em 1s block time. Valor = peso cabe em `uint208` com folga (peso máximo teórico: 100M GOV × 4x = 4e26, bem abaixo de 2^208 ~ 4.11e62).
-
----
-
-**Ver também**: [RewardDistributor](07-RewardDistributor.md), [ProjectRegistry](03-ProjectRegistry.md).
+[ProjectRegistry](04-ProjectRegistry.md) · [ProjectFunding](07-ProjectFunding.md) · [GovernanceToken](01-GovernanceToken.md)

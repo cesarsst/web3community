@@ -1,165 +1,104 @@
 # TeamVesting
 
-**Para quem é:** auditores, beneficiários, equipe operacional do protocolo.
-**Pré-requisitos:** [Tokenomics](../06-for-investors/01-tokenomics.md).
+**Para quem é:** devs/auditores.
 
-## Visão rápida
+Contrato: `contracts/TeamVesting.sol` · Solidity 0.8.24 · OpenZeppelin 5.
 
-Cofre de vesting linear com cliff para distribuir GOV a **um único beneficiário**. Padrão: uma instância por membro do time (ou grupo custodiado por multi-sig). Simplifica contabilidade off-chain e isola revogação — se alguém sai, a DAO revoga somente aquela instância.
+## Papel
 
-Formula OZ padrão: `vested(t) = total * (t - start) / duration`, zero antes do cliff, "hockey stick" no cliff (libera `cliff/duration` de uma vez).
+Cofre de **vesting linear com cliff** para distribuir GOV a um único beneficiário do time. Padrão de deploy: uma instância por membro (ou grupo custodiado por multi-sig) — simplifica contabilidade e isola revogação (a DAO revoga só aquela instância).
 
-## Herança
+Convenções: `start` = início do vesting (normalmente TGE); `cliff` = offset em segundos a partir de `start` (antes de `start + cliff`, releasable = 0); `duration` = duração total em segundos (inclui o cliff). No cliff, libera-se `cliff / duration` da alocação de uma vez (padrão "hockey stick"); depois de `start + duration`, tudo está vested.
 
-```
-Ownable2Step (OZ)
-```
+A alocação é dinâmica: `totalAllocation() = balanceOf(this) + released`. O owner (Timelock) funda o contrato transferindo GOV após o deploy.
 
-Usa `SafeERC20`.
+Herança: `Ownable2Step`. Usa `SafeERC20`.
 
-## Parâmetros (via constructor, immutable)
+## Interface pública
 
-| Nome | Tipo | Descrição |
-|---|---|---|
-| `token` | IERC20 | Token sendo vested (produção: GOV) |
-| `beneficiary` | address | Quem recebe os releases |
-| `start` | uint64 | Timestamp início do cronograma |
-| `cliff` | uint64 | Offset em segundos a partir de `start`. Antes do cliff, releasable = 0 |
-| `duration` | uint64 | Duração TOTAL em segundos (inclui cliff) |
-
-### Storage mutável
+### Immutables
 
 | Nome | Tipo | Descrição |
 |---|---|---|
-| `released` | uint256 | Total já sacado |
-| `revoked` | bool | true após primeira chamada a `revoke` |
-| `revokedAt` | uint64 | timestamp do revoke |
-| `totalAllocatedAtRevoke` | uint256 | Fronteira congelada pós-revoke |
+| `token` | `IERC20 immutable public` | Token em vesting (GOV). |
+| `beneficiary` | `address immutable public` | Recebe os releases. |
+| `start` | `uint64 immutable public` | Início do cronograma (unix seconds). |
+| `cliff` | `uint64 immutable public` | Offset do cliff a partir de `start`. |
+| `duration` | `uint64 immutable public` | Duração total (inclui o cliff). |
 
-### Exemplo de parâmetros (proposta típica)
+### Storage
 
+| Nome | Tipo | Descrição |
+|---|---|---|
+| `released` | `uint256 public` | Total já sacado via `release`. |
+| `revoked` | `bool public` | `true` após `revoke`. |
+| `revokedAt` | `uint64 public` | Timestamp do revoke (0 se não revogado). |
+| `totalAllocatedAtRevoke` | `uint256 public` | Fronteira de vesting travada no revoke. |
+
+### Constructor
+
+```solidity
+constructor(address token_, address beneficiary_, uint64 start_, uint64 cliff_, uint64 duration_, address owner_)
 ```
-start    = TGE timestamp
-cliff    = 365 days
-duration = 4 * 365 days  (12m cliff + 36m linear = 48m total)
-```
-
-No `start + 12m`, libera 25% de uma vez. Depois pinga linearmente até `start + 48m`.
-
-## Roles e permissões
-
-- `owner` — em produção: `CommunityTimelock`. Único que pode `revoke`.
-- `beneficiary` — imutável. Sempre recebe os tokens em `release`.
-
-## Funções externas
-
-### `release()`
-
-Saca tudo que está `releasable` para o `beneficiary`.
-
-- **Quem chama**: qualquer um (o pagamento vai para `beneficiary` independentemente).
-- **Reverte**: `NothingToRelease` se `releasable() == 0`.
-- **Eventos**: `Released(beneficiary, amount)`.
-
-### `revoke(address returnTo)`
-
-Revoga o vesting. **One-shot** — segunda chamada reverte.
-
-- **Quem chama**: `owner` (Timelock via proposta em produção).
-- **Reverte**: `AlreadyRevoked`, `ZeroAddress` (returnTo).
-- **Eventos**: `Revoked(returnTo, unvestedReturned, frozenVested)`.
-
-Efeitos:
-
-1. `revoked = true`, `revokedAt = now`, `totalAllocatedAtRevoke = vestedAmount(now)`.
-2. Transfere `unvested` para `returnTo` (tipicamente Treasury).
-3. `vestedAmount` futuro retorna sempre `totalAllocatedAtRevoke`.
-
-Beneficiário continua podendo chamar `release` para sacar vested-but-unreleased existente.
+Reverte `ZeroAddress`, `ZeroDuration` (`duration_ == 0`), `CliffExceedsDuration` (`cliff_ > duration_`). Não valida que `start` é futuro (permite reconhecer serviço anterior ao TGE).
 
 ### Views
 
-- `vestedAmount(uint64 timestamp) → uint256` — total vested em `timestamp`. Pós-revoke retorna `totalAllocatedAtRevoke`.
-- `releasable() → uint256` — `vestedAmount(now) - released`.
-- `totalAllocation() → uint256` — alocação total reconhecida. Antes de revoke: `balanceOf(this) + released`. Após revoke: `totalAllocatedAtRevoke`.
+```solidity
+function vestedAmount(uint64 timestamp) public view returns (uint256)  // após revoke: totalAllocatedAtRevoke
+function releasable() public view returns (uint256)                    // vested(now) - released
+function totalAllocation() public view returns (uint256)               // balanceOf+released, ou fronteira travada
+```
+
+### Mutações
+
+```solidity
+function release() external
+```
+Saca tudo que está releasable para `beneficiary` (pull-based: qualquer um chama, mas os tokens sempre vão para o beneficiário). Reverte `NothingToRelease`. Emite `Released`. CEI: `released += amount` antes do `safeTransfer`.
+
+```solidity
+function revoke(address returnTo) external onlyOwner
+```
+Revoga o vesting (one-shot). Congela `vestedAmount` em `vestedAmount(now)` e devolve o saldo não-vested a `returnTo` (Treasury). **Não** transfere o vested-but-unreleased ao beneficiário — este deve chamar `release`. Reverte `AlreadyRevoked`, `ZeroAddress`. Emite `Revoked`.
 
 ### Herdadas (Ownable2Step)
 
-- `transferOwnership(newOwner)`.
-- `acceptOwnership()`.
-- `owner() → address`.
-- `pendingOwner() → address`.
+`transferOwnership(newOwner)`, `acceptOwnership()`, `owner()`, `pendingOwner()`.
 
 ## Eventos
 
-| Evento | Indexados |
-|---|---|
-| `Released(beneficiary, amount)` | `beneficiary` |
-| `Revoked(returnTo, unvestedReturned, frozenVested)` | `returnTo` |
-| `OwnershipTransferStarted(previousOwner, newOwner)` | `previousOwner`, `newOwner` |
-| `OwnershipTransferred(previousOwner, newOwner)` | `previousOwner`, `newOwner` |
+| Evento | Emitido em | Indexados |
+|---|---|---|
+| `Released(address beneficiary, uint256 amount)` | `release` | `beneficiary` |
+| `Revoked(address returnedTo, uint256 unvestedReturned, uint256 frozenVested)` | `revoke` | `returnedTo` |
+| `OwnershipTransferStarted` / `OwnershipTransferred` | herdados | conforme OZ |
 
-## Erros customizados
+## Erros
 
 | Erro | Quando ocorre |
 |---|---|
-| `ZeroAddress()` | `token`, `beneficiary` ou `returnTo` zero |
-| `ZeroDuration()` | `duration == 0` (divisão por zero) |
-| `CliffExceedsDuration()` | `cliff > duration` |
-| `NothingToRelease()` | `releasable() == 0` |
-| `AlreadyRevoked()` | Segunda chamada a `revoke` |
+| `ZeroAddress()` | `token_`/`beneficiary_`/`returnTo` é `address(0)` |
+| `ZeroDuration()` | `duration_ == 0` |
+| `CliffExceedsDuration()` | `cliff_ > duration_` |
+| `NothingToRelease()` | `release` sem valor releasable |
+| `AlreadyRevoked()` | segunda chamada a `revoke` |
+
+## Roles
+
+Sem `AccessControl`. Usa `Ownable2Step`:
+
+- `owner` — pode `revoke`. Produção: `CommunityTimelock` (via proposta).
+- `beneficiary` — imutável; destino fixo dos releases.
 
 ## Invariantes
 
-- **Allocation capturada dinamicamente**: `totalAllocation() = balanceOf(this) + released` (pre-revoke). Transferências adicionais pós-deploy aumentam alocação.
-- **Revoke congela fronteira**: após revoke, `vestedAmount` retorna sempre `totalAllocatedAtRevoke`. Transferências pós-revoke **não** aumentam vested.
-- **Pull-based release**: qualquer um chama, tokens sempre vão para `beneficiary`.
-- **CEI em `release`**: `released += amount` antes de `safeTransfer`.
-- **Revoke one-shot**: flag `revoked` bloqueia re-execução.
+- **Fórmula linear (padrão OZ):** `vested(t) = 0` antes de `start+cliff`; `= total` após `start+duration`; senão `total * (t - start) / duration`.
+- **Revoke one-shot e imutável:** após `revoke`, `vestedAmount` fica travado em `totalAllocatedAtRevoke` — o cronograma não retoma mesmo que mais tokens sejam enviados.
+- **`released` preservado no revoke:** `released <= totalAllocatedAtRevoke` sempre (qualquer saque passado teve `released <= vestedAmount(t) <= vestedAmount(now)`).
+- **Pull-based:** `release` transfere sempre para `beneficiary`; `revoke` não faz push surpresa ao beneficiário.
+- **Não pausável:** para "pausar", a DAO aprova um `revoke` (semanticamente mais honesto).
 
-## Observações importantes
+## Ver também
 
-### Por que Ownable2Step em vez de AccessControl
-
-A autoridade sobre revogação é inerentemente singular (DAO via Timelock) e o 2-step protege contra transferência de propriedade para endereço errado durante migração. AccessControl seria overkill.
-
-### Por que `start` pode ser no passado
-
-A DAO pode deliberadamente iniciar o cronograma no passado — ex.: reconhecimento de serviço anterior ao TGE. Se beneficiário chama `release` logo após deploy e o passado é suficiente, primeiro saque é imediato. Comportamento intencional.
-
-### Nenhum auto-compound / auto-transfer de vested no revoke
-
-`revoke` **não** transfere o vested-but-unreleased para o beneficiário automaticamente. Beneficiário deve chamar `release` para coletar. Essa separação:
-
-- Mantém UX "pull".
-- Evita transferência surpresa para `beneficiary` (que pode ser multisig offline no momento da proposta).
-
-### Instância por membro
-
-Padrão de deploy: um `TeamVesting` **por** membro do time. Razões:
-
-- **Isolamento**: revogar um não afeta os outros.
-- **Contabilidade**: 1 instância = 1 cronograma, fácil de auditar.
-- **Parâmetros individuais**: cliff/duration podem variar por pessoa.
-
-### Sem pause
-
-Mesma racional do Treasury. Se necessário "pausar", a DAO aprova `revoke` — semanticamente mais honesto.
-
-### Formula detalhada
-
-```
-vested(t) = 0                                 se t < start + cliff
-vested(t) = total                             se t >= start + duration
-vested(t) = total * (t - start) / duration    caso contrario
-```
-
-`total = balanceOf(this) + released` (pre-revoke) ou `totalAllocatedAtRevoke` (pós-revoke).
-
-### Cuidado com transferências adicionais
-
-Se a DAO (via Treasury) transfere mais GOV para a instância após o start, o `totalAllocation` sobe automaticamente. Isso raramente é desejável — evite enviar transferências posteriores à funded.
-
----
-
-**Ver também**: [GovernanceToken](01-GovernanceToken.md), [Treasury](04-Treasury.md).
+[GovernanceToken](01-GovernanceToken.md) · [Treasury](08-Treasury.md) · [CommunityTimelock](09-CommunityTimelock.md)

@@ -7,75 +7,82 @@ import {
   time,
 } from "@nomicfoundation/hardhat-network-helpers";
 
-import CommunityDAOModule from "../../ignition/modules/Dao";
-
 /**
- * E2E — ProjectLifecycle
+ * E2E — ProjectLifecycle (remodel 2026-07-08)
  *
- * Cobertura: ciclo de vida completo de um projeto no ProjectRegistry e o impacto
- * nos contratos dependentes (Staking, FeeRouter, BurnTracker, RewardDistributor).
- * Complementa `FullLifecycle.test.ts` (que foca no happy path do ciclo economico)
- * explorando os 4 estados do enum Status e suas transicoes.
+ * Cobertura: ciclo de vida completo de um projeto no {ProjectRegistry} e o
+ * impacto nos dependentes do modelo vigente (Staking, FeeRouterV2,
+ * ProjectFunding). Complementa `FullLifecycle.test.ts` explorando os 4 estados
+ * do enum Status e suas transicoes.
  *
  * Cenarios cobertos:
- *   1. Pending -> Active: stake/pay bloqueados em Pending, desbloqueados apos activate.
- *   2. Probation inicial por tempo: isInProbation true ate probationEndsAt; pay
- *      funciona mas share de reward e reduzido a 25% (probation penalty).
- *   3. Probation punitiva (status Probation): stake novo e pay bloqueados; unstake
- *      ainda exige lock expirado (bypass so se projeto for Removed, nao Probation).
- *   4. Removed (slash): colateral vai pro treasury; staker consegue unstake cedo
- *      (bypass de lock ativado por status Removed).
+ *   1. Pending -> Active: stake/pay bloqueados em Pending, liberados apos activate.
+ *   2. Probation inicial por tempo: pay funciona normalmente; isInProbation
+ *      transita de true para false apos a janela (sem penalidade de reward — o
+ *      modelo de emissao foi removido).
+ *   3. Probation punitiva (status Probation): stake novo e pay bloqueados;
+ *      unstake ainda exige lock expirado (bypass so em Removed).
+ *   4. Removed (slash): colateral vai pro treasury; staker consegue unstake cedo.
  *   5. Removed (clean): colateral volta pro owner original.
- *   6. Burns registrados antes de remocao permanecem validos no accounting da rodada —
- *      historia e historia. Claims subsequentes respeitam o burn registrado mesmo
- *      que o projeto ja esteja Removed no momento do claim.
+ *   6. Rev-share acruado antes da remocao permanece sacavel — historia e
+ *      historia. Enquanto o investidor mantem GOV stakeado, o claim honra a
+ *      receita ja notificada mesmo com o projeto Removed.
+ *   7. Ownership 2-step do projeto: transfer + accept; o pagamento (appRecipient
+ *      dinamico via Registry.owner) segue o novo dono.
  *
- * Todos os cenarios usam `impersonateAccount(timelock)` para execucoes privilegiadas
- * (registry/burnTracker) em vez de propostas completas do Governor, conforme padrao
- * documentado no `FullLifecycle.test.ts`. Proposta real e2e fica em
- * `governanceFlow.e2e.test.ts`.
+ * Todos usam `impersonateAccount(timelock)` para execucoes privilegiadas
+ * (registry) em vez de propostas completas do Governor, conforme padrao do
+ * `FullLifecycle.test.ts`. Proposta real e2e fica em `governanceFlow.e2e.test.ts`.
+ *
+ * Nota USDC: a fixture seta `DEPLOY_USDC_MOCK=true` (PSM reverte sem lastro).
  */
 describe("E2E: ProjectLifecycle — estados do projeto e impacto nos dependentes", function () {
-  // Multi-stage flows — extra timeout pra CI lenta.
   this.timeout(180_000);
 
-  const DEV_ROUND_DURATION = 86_400n; // 1d
+  const E18 = 10n ** 18n;
+  const E6 = 10n ** 6n;
+
   const DEV_PROBATION_DURATION = 86_400n; // 1d
   const MIN_LOCK = 14n * 86_400n; // 14d
+  const MAX_LOCK = 365n * 86_400n;
 
-  const ALICE_GOV = 50_000n * 10n ** 18n;
-  const BOB_GOV = 30_000n * 10n ** 18n;
-  const PROJECT_COLLATERAL = 5_000n * 10n ** 18n;
-  const CHARLIE_CREDIT = 5_000n * 10n ** 18n;
+  const ALICE_GOV = 50_000n * E18;
+  const BOB_GOV = 30_000n * E18;
+  const PROJECT_COLLATERAL = 5_000n * E18;
+
+  const FEE_BPS = 250n; // 2,5%
 
   async function deployLifecycleFixture() {
-    const deployed = await hre.ignition.deploy(CommunityDAOModule);
+    const original = process.env.DEPLOY_USDC_MOCK;
+    process.env.DEPLOY_USDC_MOCK = "true";
+    let deployed;
+    try {
+      const path = require.resolve("../../ignition/modules/Dao");
+      delete require.cache[path];
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      const mod = require("../../ignition/modules/Dao");
+      deployed = await hre.ignition.deploy(mod.default);
+    } finally {
+      if (original === undefined) delete process.env.DEPLOY_USDC_MOCK;
+      else process.env.DEPLOY_USDC_MOCK = original;
+    }
 
     const [deployer, alice, bob, charlie, projectOwnerA, projectOwnerB] = await ethers.getSigners();
 
-    const [
-      gov,
-      credit,
-      timelock,
-      registry,
-      treasury,
-      staking,
-      burnTracker,
-      distributor,
-      feeRouter,
-    ] = await Promise.all([
-      ethers.getContractAt("GovernanceToken", await deployed.gov.getAddress()),
-      ethers.getContractAt("CreditToken", await deployed.credit.getAddress()),
-      ethers.getContractAt("CommunityTimelock", await deployed.timelock.getAddress()),
-      ethers.getContractAt("ProjectRegistry", await deployed.registry.getAddress()),
-      ethers.getContractAt("Treasury", await deployed.treasury.getAddress()),
-      ethers.getContractAt("Staking", await deployed.staking.getAddress()),
-      ethers.getContractAt("BurnTracker", await deployed.burnTracker.getAddress()),
-      ethers.getContractAt("RewardDistributor", await deployed.distributor.getAddress()),
-      ethers.getContractAt("FeeRouter", await deployed.feeRouter.getAddress()),
-    ]);
+    const [gov, credit, timelock, registry, treasury, staking, usdc, psm, funding, feeRouterV2] =
+      await Promise.all([
+        ethers.getContractAt("GovernanceToken", await deployed.gov.getAddress()),
+        ethers.getContractAt("CreditToken", await deployed.credit.getAddress()),
+        ethers.getContractAt("CommunityTimelock", await deployed.timelock.getAddress()),
+        ethers.getContractAt("ProjectRegistry", await deployed.registry.getAddress()),
+        ethers.getContractAt("Treasury", await deployed.treasury.getAddress()),
+        ethers.getContractAt("Staking", await deployed.staking.getAddress()),
+        ethers.getContractAt("ERC20DecimalsMock", await deployed.usdc.getAddress()),
+        ethers.getContractAt("CreditPSM", await deployed.psm.getAddress()),
+        ethers.getContractAt("ProjectFunding", await deployed.funding.getAddress()),
+        ethers.getContractAt("FeeRouterV2", await deployed.feeRouterV2.getAddress()),
+      ]);
 
-    // Impersonate Timelock (unico admin/owner apos deploy).
     const tlAddr = await timelock.getAddress();
     await impersonateAccount(tlAddr);
     const tlSigner = await ethers.getSigner(tlAddr);
@@ -93,10 +100,11 @@ describe("E2E: ProjectLifecycle — estados do projeto e impacto nos dependentes
       .connect(tlSigner)
       .mint(projectOwnerB.address, PROJECT_COLLATERAL, "e2e:projB:collateral");
 
-    // Distribui CREDIT pro Charlie usar em pagamentos.
-    await treasury
-      .connect(tlSigner)
-      .transfer(await credit.getAddress(), charlie.address, CHARLIE_CREDIT);
+    // Semeia USDC para os atores comprarem CREDIT no PSM.
+    for (const s of [alice, charlie]) {
+      await usdc.mint(s.address, 1_000_000n * E6);
+      await usdc.connect(s).approve(await psm.getAddress(), ethers.MaxUint256);
+    }
 
     // Owners aprovam Registry para transferFrom do colateral.
     await gov.connect(projectOwnerA).approve(await registry.getAddress(), PROJECT_COLLATERAL);
@@ -109,9 +117,10 @@ describe("E2E: ProjectLifecycle — estados do projeto e impacto nos dependentes
       registry,
       treasury,
       staking,
-      burnTracker,
-      distributor,
-      feeRouter,
+      usdc,
+      psm,
+      funding,
+      feeRouterV2,
       deployer,
       alice,
       bob,
@@ -123,7 +132,7 @@ describe("E2E: ProjectLifecycle — estados do projeto e impacto nos dependentes
   }
 
   it("Pending -> Active: stake e pay bloqueiam em Pending; liberam apos activate", async () => {
-    const { gov, credit, registry, staking, feeRouter, alice, charlie, projectOwnerA, tlSigner } =
+    const { gov, credit, registry, staking, psm, feeRouterV2, alice, charlie, projectOwnerA, tlSigner } =
       await loadFixture(deployLifecycleFixture);
 
     // Register project mas NAO activate.
@@ -132,105 +141,85 @@ describe("E2E: ProjectLifecycle — estados do projeto e impacto nos dependentes
       .registerProject(projectOwnerA.address, "ipfs://projA", PROJECT_COLLATERAL);
     const projectId = 1n;
 
-    // Projeto registrado mas Pending — nao isActive.
     expect(await registry.isActive(projectId)).to.be.false;
-    const pendingProject = await registry.getProject(projectId);
-    expect(pendingProject.status).to.equal(0); // Status.Pending
+    expect((await registry.getProject(projectId)).status).to.equal(0); // Pending
 
     // Stake reverte com ProjectNotActive.
     await gov.connect(alice).approve(await staking.getAddress(), ALICE_GOV);
-    await expect(staking.connect(alice).stake(projectId, 10_000n * 10n ** 18n, MIN_LOCK))
+    await expect(staking.connect(alice).stake(projectId, 10_000n * E18, MIN_LOCK))
       .to.be.revertedWithCustomError(staking, "ProjectNotActive")
       .withArgs(projectId);
 
-    // Pay reverte com ProjectNotActive (FeeRouter faz a checagem antes do transferFrom).
-    await credit.connect(charlie).approve(await feeRouter.getAddress(), 1_000n * 10n ** 18n);
-    await expect(feeRouter.connect(charlie).pay(projectId, charlie.address, 1_000n * 10n ** 18n))
-      .to.be.revertedWithCustomError(feeRouter, "ProjectNotActive")
-      .withArgs(projectId);
+    // Charlie compra CREDIT e aprova o router.
+    await psm.connect(charlie).buy(1_000n * E6);
+    await credit.connect(charlie).approve(await feeRouterV2.getAddress(), ethers.MaxUint256);
+
+    // Pay reverte com ProjectNotActive (FeeRouterV2 checa antes do transferFrom).
+    await expect(
+      feeRouterV2.connect(charlie).pay(projectId, 1_000n * E18),
+    ).to.be.revertedWithCustomError(feeRouterV2, "ProjectNotActive");
 
     // Activate — agora tudo desbloqueia.
     await registry.connect(tlSigner).activateProject(projectId);
     expect(await registry.isActive(projectId)).to.be.true;
 
-    await staking.connect(alice).stake(projectId, 10_000n * 10n ** 18n, MIN_LOCK);
-    const position = await staking.getPosition(alice.address, projectId);
-    expect(position.amount).to.equal(10_000n * 10n ** 18n);
+    await staking.connect(alice).stake(projectId, 10_000n * E18, MIN_LOCK);
+    expect((await staking.getPosition(alice.address, projectId)).amount).to.equal(10_000n * E18);
 
-    await expect(feeRouter.connect(charlie).pay(projectId, charlie.address, 1_000n * 10n ** 18n)).to
-      .not.be.reverted;
+    await expect(feeRouterV2.connect(charlie).pay(projectId, 1_000n * E18)).to.not.be.reverted;
   });
 
-  it("Probation inicial por tempo: pay funciona, share de reward reduzido a 25%", async () => {
-    const {
-      gov,
-      credit,
-      timelock,
-      registry,
-      staking,
-      burnTracker,
-      distributor,
-      feeRouter,
-      alice,
-      charlie,
-      projectOwnerA,
-      tlSigner,
-    } = await loadFixture(deployLifecycleFixture);
+  it("Probation inicial por tempo: pay funciona; isInProbation transita para false", async () => {
+    const { gov, credit, registry, staking, psm, feeRouterV2, alice, charlie, projectOwnerA, tlSigner } =
+      await loadFixture(deployLifecycleFixture);
 
-    // Register + activate.
     await registry
       .connect(tlSigner)
       .registerProject(projectOwnerA.address, "ipfs://projA", PROJECT_COLLATERAL);
     const projectId = 1n;
     await registry.connect(tlSigner).activateProject(projectId);
 
-    // Logo apos activate: isInProbation = true (dentro da janela automatica).
+    // Logo apos activate: isInProbation = true (janela automatica), status Active.
     expect(await registry.isInProbation(projectId)).to.be.true;
-    expect(await registry.isActive(projectId)).to.be.true; // probation inicial NAO muda status
+    expect(await registry.isActive(projectId)).to.be.true;
 
-    // Stake e pagamento dentro da janela de probation.
+    // Stake e pagamento dentro da janela de probation funcionam normalmente
+    // (no modelo vigente nao ha penalidade de reward — a emissao foi removida).
     await gov.connect(alice).approve(await staking.getAddress(), ALICE_GOV);
-    await staking.connect(alice).stake(projectId, 10_000n * 10n ** 18n, MIN_LOCK);
+    await staking.connect(alice).stake(projectId, 10_000n * E18, MIN_LOCK);
 
-    await credit.connect(charlie).approve(await feeRouter.getAddress(), 1_000n * 10n ** 18n);
-    await feeRouter.connect(charlie).pay(projectId, charlie.address, 1_000n * 10n ** 18n);
+    await psm.connect(charlie).buy(2_000n * E6); // 2000 CREDIT (paga duas vezes)
+    await credit.connect(charlie).approve(await feeRouterV2.getAddress(), ethers.MaxUint256);
 
-    // Burn registrado (70% do pagamento — split default 70/20/10 da Fase 0).
-    expect(await burnTracker.getBurnForProjectInRound(0, projectId)).to.equal(700n * 10n ** 18n);
+    const ownerBefore = await credit.balanceOf(projectOwnerA.address);
+    const amount = 1_000n * E18;
+    await feeRouterV2.connect(charlie).pay(projectId, amount);
+    // Sem rodada de funding -> app recebe 97,5% (fee 2,5%).
+    expect((await credit.balanceOf(projectOwnerA.address)) - ownerBefore).to.equal(
+      (amount * (10_000n - FEE_BPS)) / 10_000n,
+    );
 
-    // Avanca tempo menos que probationDuration — ainda em probation.
+    // Ainda dentro da janela.
     await time.increase(DEV_PROBATION_DURATION / 2n);
     expect(await registry.isInProbation(projectId)).to.be.true;
 
-    // Fecha rodada 0 e finaliza rodada 0 (burn da rodada 0 ainda nao reflete).
-    await time.increase(DEV_ROUND_DURATION);
-    await burnTracker.connect(tlSigner).closeRound();
-    await distributor.connect(alice).finalizeRound(0);
-
-    // Fecha rodada 1 + finalize rodada 1 (usa burn da rodada 0). Rodada 1
-    // ja deve ter ultrapassado probationDuration pois avancamos
-    // ~0.5d + 1d = 1.5d desde activate, ainda dentro de probation inicial (1d?). Sim:
-    // probation = 1d, ja passaram ~1.5d total. Ainda assim o _projectShare
-    // do distributor le isInProbation NO MOMENTO DO CLAIM, que sera depois.
-    await time.increase(DEV_ROUND_DURATION + 1n);
-    await burnTracker.connect(tlSigner).closeRound();
-    await distributor.connect(alice).finalizeRound(1);
-
-    // Nesse ponto ja se passaram ~2.5d desde activate — probation inicial
-    // (1d) JA EXPIROU. Claim sera com share cheio (sem penalty).
+    // Apos a janela (probation = 1d), isInProbation vira false; projeto segue Active.
+    await time.increase(DEV_PROBATION_DURATION);
     expect(await registry.isInProbation(projectId)).to.be.false;
-    const alicePreview = await distributor.previewClaim(alice.address, 1, projectId);
-    expect(alicePreview).to.be.gt(0n);
+    expect(await registry.isActive(projectId)).to.be.true;
 
-    // Timelock ainda e admin — sanity check silencioso.
-    void timelock;
+    // Pagamento pos-probation continua funcionando igual.
+    const ownerBefore2 = await credit.balanceOf(projectOwnerA.address);
+    await feeRouterV2.connect(charlie).pay(projectId, amount);
+    expect((await credit.balanceOf(projectOwnerA.address)) - ownerBefore2).to.equal(
+      (amount * (10_000n - FEE_BPS)) / 10_000n,
+    );
   });
 
   it("Probation punitiva (status Probation): stake novo e pay bloqueados; unstake exige lock", async () => {
-    const { gov, credit, registry, staking, feeRouter, alice, charlie, projectOwnerA, tlSigner } =
+    const { gov, credit, registry, staking, psm, feeRouterV2, alice, charlie, projectOwnerA, tlSigner } =
       await loadFixture(deployLifecycleFixture);
 
-    // Register + activate + stake inicial.
     await registry
       .connect(tlSigner)
       .registerProject(projectOwnerA.address, "ipfs://projA", PROJECT_COLLATERAL);
@@ -238,33 +227,31 @@ describe("E2E: ProjectLifecycle — estados do projeto e impacto nos dependentes
     await registry.connect(tlSigner).activateProject(projectId);
 
     await gov.connect(alice).approve(await staking.getAddress(), ALICE_GOV);
-    await staking.connect(alice).stake(projectId, 10_000n * 10n ** 18n, MIN_LOCK);
+    await staking.connect(alice).stake(projectId, 10_000n * E18, MIN_LOCK);
 
     // Move para Probation punitiva.
     await registry.connect(tlSigner).setProbation(projectId);
-    const afterProbation = await registry.getProject(projectId);
-    expect(afterProbation.status).to.equal(2); // Status.Probation (punitiva)
+    expect((await registry.getProject(projectId)).status).to.equal(2); // Probation
     expect(await registry.isActive(projectId)).to.be.false;
-    // isInProbation (inicial por tempo) retorna false em status != Active, por design.
     expect(await registry.isInProbation(projectId)).to.be.false;
 
     // Stake novo reverte (projeto nao Active).
-    await expect(staking.connect(alice).stake(projectId, 1_000n * 10n ** 18n, MIN_LOCK))
+    await expect(staking.connect(alice).stake(projectId, 1_000n * E18, MIN_LOCK))
       .to.be.revertedWithCustomError(staking, "ProjectNotActive")
       .withArgs(projectId);
 
-    // increaseStake tambem reverte.
-    await expect(staking.connect(alice).increaseStake(projectId, 1_000n * 10n ** 18n))
+    await expect(staking.connect(alice).increaseStake(projectId, 1_000n * E18))
       .to.be.revertedWithCustomError(staking, "ProjectNotActive")
       .withArgs(projectId);
 
     // Pay reverte.
-    await credit.connect(charlie).approve(await feeRouter.getAddress(), 100n * 10n ** 18n);
-    await expect(feeRouter.connect(charlie).pay(projectId, charlie.address, 100n * 10n ** 18n))
-      .to.be.revertedWithCustomError(feeRouter, "ProjectNotActive")
-      .withArgs(projectId);
+    await psm.connect(charlie).buy(1_000n * E6);
+    await credit.connect(charlie).approve(await feeRouterV2.getAddress(), ethers.MaxUint256);
+    await expect(
+      feeRouterV2.connect(charlie).pay(projectId, 100n * E18),
+    ).to.be.revertedWithCustomError(feeRouterV2, "ProjectNotActive");
 
-    // Unstake antes do lock: reverte com LockNotExpired (Probation NAO bypassa lock).
+    // Unstake antes do lock: reverte (Probation NAO bypassa lock).
     await expect(staking.connect(alice).unstakeAll(projectId)).to.be.revertedWithCustomError(
       staking,
       "LockNotExpired",
@@ -274,17 +261,15 @@ describe("E2E: ProjectLifecycle — estados do projeto e impacto nos dependentes
     await time.increase(MIN_LOCK + 1n);
     const aliceGovBefore = await gov.balanceOf(alice.address);
     await staking.connect(alice).unstakeAll(projectId);
-    expect((await gov.balanceOf(alice.address)) - aliceGovBefore).to.equal(10_000n * 10n ** 18n);
+    expect((await gov.balanceOf(alice.address)) - aliceGovBefore).to.equal(10_000n * E18);
 
     // Reactivate.
     await registry.connect(tlSigner).reactivate(projectId);
     expect(await registry.isActive(projectId)).to.be.true;
 
-    // Stake novo funciona apos reactivate (precisa reaprovar porque anterior foi consumido).
-    await gov.connect(alice).approve(await staking.getAddress(), 5_000n * 10n ** 18n);
-    await staking.connect(alice).stake(projectId, 5_000n * 10n ** 18n, MIN_LOCK);
-    const pos = await staking.getPosition(alice.address, projectId);
-    expect(pos.amount).to.equal(5_000n * 10n ** 18n);
+    await gov.connect(alice).approve(await staking.getAddress(), 5_000n * E18);
+    await staking.connect(alice).stake(projectId, 5_000n * E18, MIN_LOCK);
+    expect((await staking.getPosition(alice.address, projectId)).amount).to.equal(5_000n * E18);
   });
 
   it("Removed (slash): colateral vai pro treasury; staker bypass de lock", async () => {
@@ -297,35 +282,29 @@ describe("E2E: ProjectLifecycle — estados do projeto e impacto nos dependentes
     const projectId = 1n;
     await registry.connect(tlSigner).activateProject(projectId);
 
-    // Alice stake com lock longo (90d > MIN_LOCK).
     await gov.connect(alice).approve(await staking.getAddress(), ALICE_GOV);
-    const aliceStake = 20_000n * 10n ** 18n;
+    const aliceStake = 20_000n * E18;
     await staking.connect(alice).stake(projectId, aliceStake, 90n * 86_400n);
 
-    // Treasury nao tem GOV ainda (colateral esta no Registry).
     const treasuryGovBefore = await gov.balanceOf(await treasury.getAddress());
     expect(await gov.balanceOf(await registry.getAddress())).to.equal(PROJECT_COLLATERAL);
 
-    // Remove com slash = true, destino = treasury.
     await expect(
       registry.connect(tlSigner).removeProject(projectId, true, await treasury.getAddress()),
     )
       .to.emit(registry, "ProjectRemoved")
       .withArgs(projectId, true, PROJECT_COLLATERAL);
 
-    // Colateral moveu pro treasury.
     expect(await gov.balanceOf(await registry.getAddress())).to.equal(0n);
     expect((await gov.balanceOf(await treasury.getAddress())) - treasuryGovBefore).to.equal(
       PROJECT_COLLATERAL,
     );
 
-    // Projeto Removed.
     const removedProject = await registry.getProject(projectId);
-    expect(removedProject.status).to.equal(3); // Status.Removed
+    expect(removedProject.status).to.equal(3); // Removed
     expect(removedProject.collateral).to.equal(0n);
 
-    // Alice consegue unstake IMEDIATAMENTE mesmo com lock 90d vigente
-    // (bypass ativado por Removed).
+    // Alice consegue unstake IMEDIATAMENTE mesmo com lock 90d vigente.
     const aliceGovBefore = await gov.balanceOf(alice.address);
     await expect(staking.connect(alice).unstakeAll(projectId))
       .to.emit(staking, "EarlyUnstakeAllowed")
@@ -344,7 +323,6 @@ describe("E2E: ProjectLifecycle — estados do projeto e impacto nos dependentes
 
     const ownerGovBefore = await gov.balanceOf(projectOwnerA.address);
 
-    // Remove com slash = false, treasury = address(0) (ignorado quando nao slash).
     await registry.connect(tlSigner).removeProject(projectId, false, ethers.ZeroAddress);
 
     expect((await gov.balanceOf(projectOwnerA.address)) - ownerGovBefore).to.equal(
@@ -352,89 +330,77 @@ describe("E2E: ProjectLifecycle — estados do projeto e impacto nos dependentes
     );
     expect(await gov.balanceOf(await registry.getAddress())).to.equal(0n);
 
-    // Nao da pra re-remover.
     await expect(registry.connect(tlSigner).removeProject(projectId, false, ethers.ZeroAddress))
       .to.be.revertedWithCustomError(registry, "ProjectAlreadyRemoved")
       .withArgs(projectId);
 
-    // Update metadata reverte apos remocao (URI congelada).
     await expect(registry.connect(projectOwnerA).updateMetadata(projectId, "ipfs://post-removed"))
       .to.be.revertedWithCustomError(registry, "ProjectAlreadyRemoved")
       .withArgs(projectId);
   });
 
-  it("Burns pre-remocao permanecem validos: claim ainda funciona com burn historico", async () => {
+  it("Rev-share acruado antes da remocao permanece sacavel: claim honra receita historica", async () => {
     const {
       gov,
       credit,
       registry,
       staking,
-      burnTracker,
-      distributor,
-      feeRouter,
       treasury,
+      psm,
+      funding,
+      feeRouterV2,
       alice,
       charlie,
       projectOwnerA,
       tlSigner,
     } = await loadFixture(deployLifecycleFixture);
 
-    // Register + activate projeto.
     await registry
       .connect(tlSigner)
       .registerProject(projectOwnerA.address, "ipfs://projA", PROJECT_COLLATERAL);
     const projectId = 1n;
     await registry.connect(tlSigner).activateProject(projectId);
 
-    // Alice stake.
+    // Alice stakeia (necessario pra investir e pra sacar rev-share depois).
     await gov.connect(alice).approve(await staking.getAddress(), ALICE_GOV);
-    await staking.connect(alice).stake(projectId, 10_000n * 10n ** 18n, MIN_LOCK);
+    await staking.connect(alice).stake(projectId, 10_000n * E18, MAX_LOCK);
 
-    // Charlie paga no projeto — burn registrado no round 0.
-    await credit.connect(charlie).approve(await feeRouter.getAddress(), 1_000n * 10n ** 18n);
-    await feeRouter.connect(charlie).pay(projectId, charlie.address, 1_000n * 10n ** 18n);
+    // Alice compra CREDIT e financia INTEGRALMENTE a rodada (alvo minimo 100).
+    const target = 1_000n * E18;
+    const revShareBps = 1000n; // 10%
+    await psm.connect(alice).buy(2_000n * E6); // 2000 CREDIT
+    await funding.connect(projectOwnerA).openRound(projectId, target, revShareBps, 30n * 86_400n);
+    await credit.connect(alice).approve(await funding.getAddress(), ethers.MaxUint256);
+    await funding.connect(alice).invest(projectId, target); // completa -> Funded
+    expect((await funding.rounds(projectId)).status).to.equal(2n); // Funded
 
-    const burnRound0 = await burnTracker.getBurnForProjectInRound(0, projectId);
-    expect(burnRound0).to.equal(700n * 10n ** 18n);
+    // Charlie paga no projeto ainda ativo -> rev-share notificado.
+    await psm.connect(charlie).buy(1_000n * E6);
+    await credit.connect(charlie).approve(await feeRouterV2.getAddress(), ethers.MaxUint256);
+    const payment = 1_000n * E18;
+    await feeRouterV2.connect(charlie).pay(projectId, payment);
 
-    // Avanca tempo e fecha rodada 0. Finaliza.
-    await time.increase(DEV_ROUND_DURATION + 1n);
-    await burnTracker.connect(tlSigner).closeRound();
-    await distributor.connect(alice).finalizeRound(0);
+    const expectedPending = (payment * revShareBps) / 10_000n; // 100 (Alice detem 100% das shares)
+    expect(await funding.pendingRevenue(projectId, alice.address)).to.equal(expectedPending);
 
-    // Agora REMOVE o projeto (slash). Burn da rodada 0 deve permanecer intacto.
+    // Agora REMOVE o projeto (slash). O rev-share ja acruado deve sobreviver.
     await registry.connect(tlSigner).removeProject(projectId, true, await treasury.getAddress());
-    expect((await registry.getProject(projectId)).status).to.equal(3);
+    expect((await registry.getProject(projectId)).status).to.equal(3); // Removed
 
-    // Avanca e fecha rodada 1 (que acopla com burn do round 0).
-    await time.increase(DEV_ROUND_DURATION + 1n);
-    await burnTracker.connect(tlSigner).closeRound();
-    await distributor.connect(alice).finalizeRound(1);
-
-    const round1Data = await distributor.roundData(1);
-    expect(round1Data.totalBurnAtFinalize).to.equal(700n * 10n ** 18n);
-
-    // O burn por projeto no round 0 permanece gravado:
-    expect(await burnTracker.getBurnForProjectInRound(0, projectId)).to.equal(700n * 10n ** 18n);
-
-    // Claim: mesmo com projeto Removed no momento do claim, o share e calculado
-    // com base no burn historico do round 0 — historia e historia.
-    const alicePreview = await distributor.previewClaim(alice.address, 1, projectId);
-    expect(alicePreview).to.be.gt(0n);
-
-    const aliceBeforeClaim = await credit.balanceOf(alice.address);
-    await distributor.connect(alice).claim(1, projectId);
-    expect((await credit.balanceOf(alice.address)) - aliceBeforeClaim).to.equal(alicePreview);
+    // Alice ainda tem GOV stakeado (nao fez unstake) -> claim honra o historico.
+    expect(await funding.pendingRevenue(projectId, alice.address)).to.equal(expectedPending);
+    const aliceBefore = await credit.balanceOf(alice.address);
+    await funding.connect(alice).claim(projectId);
+    expect((await credit.balanceOf(alice.address)) - aliceBefore).to.equal(expectedPending);
 
     // Novos pays no projeto Removed revertem.
-    await credit.connect(charlie).approve(await feeRouter.getAddress(), 100n * 10n ** 18n);
-    await expect(feeRouter.connect(charlie).pay(projectId, charlie.address, 100n * 10n ** 18n))
-      .to.be.revertedWithCustomError(feeRouter, "ProjectNotActive")
-      .withArgs(projectId);
+    await expect(
+      feeRouterV2.connect(charlie).pay(projectId, 100n * E18),
+    ).to.be.revertedWithCustomError(feeRouterV2, "ProjectNotActive");
   });
 
-  it("Ownership 2-step do projeto: transfer + accept, appRecipient segue owner", async () => {
-    const { credit, registry, feeRouter, charlie, projectOwnerA, projectOwnerB, tlSigner } =
+  it("Ownership 2-step do projeto: transfer + accept; appRecipient dinamico segue o dono", async () => {
+    const { credit, registry, psm, feeRouterV2, charlie, projectOwnerA, projectOwnerB, tlSigner } =
       await loadFixture(deployLifecycleFixture);
 
     await registry
@@ -443,38 +409,33 @@ describe("E2E: ProjectLifecycle — estados do projeto e impacto nos dependentes
     const projectId = 1n;
     await registry.connect(tlSigner).activateProject(projectId);
 
-    // Sem override de appRecipient — lookup dinamico via Registry.owner.
-    expect(await feeRouter.getEffectiveRecipient(projectId)).to.equal(projectOwnerA.address);
+    // Sem override de appRecipient — pay resolve dinamicamente via Registry.owner.
+    expect(await feeRouterV2.appRecipientOf(projectId)).to.equal(ethers.ZeroAddress);
+
+    // Charlie compra CREDIT e aprova o router.
+    await psm.connect(charlie).buy(1_000n * E6);
+    await credit.connect(charlie).approve(await feeRouterV2.getAddress(), ethers.MaxUint256);
+    const amount = 100n * E18;
+    const toApp = (amount * (10_000n - FEE_BPS)) / 10_000n; // 97,5
 
     // Inicia transferencia de ownership.
-    await registry
-      .connect(projectOwnerA)
-      .transferProjectOwnership(projectId, projectOwnerB.address);
+    await registry.connect(projectOwnerA).transferProjectOwnership(projectId, projectOwnerB.address);
     expect(await registry.pendingOwner(projectId)).to.equal(projectOwnerB.address);
 
-    // Antes do accept, owner ainda e A — pay ainda vai pra A.
-    await credit.connect(charlie).approve(await feeRouter.getAddress(), 100n * 10n ** 18n);
+    // Antes do accept, owner ainda e A — pay vai pra A (sem rodada de funding).
     const ownerABefore = await credit.balanceOf(projectOwnerA.address);
-    await feeRouter.connect(charlie).pay(projectId, charlie.address, 100n * 10n ** 18n);
-    // Rebate 10% = 10 CREDIT (split default 70/20/10 da Fase 0).
-    expect((await credit.balanceOf(projectOwnerA.address)) - ownerABefore).to.equal(
-      10n * 10n ** 18n,
-    );
+    await feeRouterV2.connect(charlie).pay(projectId, amount);
+    expect((await credit.balanceOf(projectOwnerA.address)) - ownerABefore).to.equal(toApp);
 
     // B aceita ownership.
     await registry.connect(projectOwnerB).acceptProjectOwnership(projectId);
     expect((await registry.getProject(projectId)).owner).to.equal(projectOwnerB.address);
     expect(await registry.pendingOwner(projectId)).to.equal(ethers.ZeroAddress);
 
-    // Agora o rebate segue o novo owner (lookup dinamico).
-    expect(await feeRouter.getEffectiveRecipient(projectId)).to.equal(projectOwnerB.address);
-
+    // Agora o pagamento segue o novo owner (lookup dinamico via Registry).
     const ownerBBefore = await credit.balanceOf(projectOwnerB.address);
-    await credit.connect(charlie).approve(await feeRouter.getAddress(), 100n * 10n ** 18n);
-    await feeRouter.connect(charlie).pay(projectId, charlie.address, 100n * 10n ** 18n);
-    expect((await credit.balanceOf(projectOwnerB.address)) - ownerBBefore).to.equal(
-      10n * 10n ** 18n,
-    );
+    await feeRouterV2.connect(charlie).pay(projectId, amount);
+    expect((await credit.balanceOf(projectOwnerB.address)) - ownerBBefore).to.equal(toApp);
 
     // A antigo owner nao consegue mais updateMetadata.
     await expect(registry.connect(projectOwnerA).updateMetadata(projectId, "ipfs://hijack"))
