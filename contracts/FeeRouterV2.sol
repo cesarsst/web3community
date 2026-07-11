@@ -96,13 +96,31 @@ contract FeeRouterV2 is AccessControl, ReentrancyGuard {
     mapping(uint256 projectId => address) public appRecipientOf;
 
     /// @notice Volume bruto acumulado por projeto (metrica on-chain p/ investidores).
+    /// @dev So conta pagamentos qualificados (nao-self). Ver {pay} (guarda D1) e
+    ///      o parecer audit/economist/2026-07-10-wash-signal-integrity.md.
     mapping(uint256 projectId => uint256) public grossVolumeOf;
+
+    /// @notice Numero de pagadores DISTINTOS por projeto (metrica de sinal honesto).
+    /// @dev So conta pagadores nao-self. E este o numero que a UI e qualquer
+    ///      automacao devem ler no lugar da soma bruta grossVolumeOf, pois um
+    ///      loop de dois enderecos (wash) nao o move. Ver parecer 2026-07-10.
+    mapping(uint256 projectId => uint256) public uniquePayersOf;
+
+    /// @notice Marca se um endereco ja pagou (qualificado) um projeto.
+    /// @dev Usado p/ incrementar uniquePayersOf so na primeira vez do pagador.
+    mapping(uint256 projectId => mapping(address payer => bool)) public hasPaid;
 
     // ------------------------------------------------------------------
     // Events
     // ------------------------------------------------------------------
 
     /// @notice Pagamento processado, com detalhamento completo.
+    /// @dev `selfPayment` = o pagador e o owner OU o appRecipient do projeto.
+    ///      Nesse caso o split de valor ocorre normalmente (conservacao intacta),
+    ///      mas os contadores de sinal (grossVolumeOf, uniquePayersOf) NAO sao
+    ///      creditados — pagar a si mesmo nao e sinal de tracao. Campo adicionado
+    ///      no FIM p/ nao mexer na ordem/posicao dos parametros indexados
+    ///      existentes. Ver audit/economist/2026-07-10-wash-signal-integrity.md.
     event PaymentRouted(
         uint256 indexed projectId,
         address indexed payer,
@@ -111,7 +129,8 @@ contract FeeRouterV2 is AccessControl, ReentrancyGuard {
         uint256 feeToBuyback,
         uint256 feeToGrants,
         uint256 revShare,
-        uint256 toApp
+        uint256 toApp,
+        bool selfPayment
     );
     event FeeUpdated(uint16 previousBps, uint16 currentBps);
     event FeeSplitUpdated(uint16 treasuryBps, uint16 buybackBps, uint16 grantsBps);
@@ -166,6 +185,19 @@ contract FeeRouterV2 is AccessControl, ReentrancyGuard {
      * @dev Ordem: fee -> rev-share -> app. Tudo atomico. O rev-share e
      *      transferido ao ProjectFunding ANTES do notifyRevenue (o funding
      *      contrato so contabiliza, nao puxa).
+     *
+     *      Guarda anti-self-payment (D1): quando o pagador e o proprio
+     *      appRecipient OU o owner do projeto, o pagamento e marcado como
+     *      self-payment. O split de valor (fee/rev-share/app) ocorre
+     *      NORMALMENTE — conservacao intacta, nada e revertido, pois um app
+     *      pode ter motivo legitimo raro de consumir a si mesmo — mas os
+     *      CONTADORES DE SINAL (grossVolumeOf, uniquePayersOf) NAO sao
+     *      creditados: pagar a si mesmo nao e prova de tracao e, se contado,
+     *      falsificaria GMV/pagadores por 2,5%/ciclo (wash-payment). Escolha de
+     *      desenho: ignorar (nao reverter) em vez de bloquear; o custo e apenas
+     *      um app com fluxo proprio legitimo perder aquele registro de sinal —
+     *      aceitavel, pois self-payment nunca deveria contar como sinal.
+     *      Ver audit/economist/2026-07-10-wash-signal-integrity.md (D1/D2).
      */
     function pay(uint256 projectId, uint256 amount) external nonReentrant {
         if (amount == 0) {
@@ -174,6 +206,18 @@ contract FeeRouterV2 is AccessControl, ReentrancyGuard {
         if (!REGISTRY.isActive(projectId)) {
             revert ProjectNotActive(projectId);
         }
+
+        // ---- resolve o appRecipient e o owner ANTES da reparticao (guarda D1).
+        //      appRecipient tem fallback para o owner do Registry.
+        address projectOwner = REGISTRY.getProject(projectId).owner;
+        address appRecipient = appRecipientOf[projectId];
+        if (appRecipient == address(0)) {
+            appRecipient = projectOwner;
+        }
+
+        // ---- self-payment: pagador coincide com o destino do proprio app.
+        //      So afeta os contadores de sinal; o split de valor e igual.
+        bool selfPayment = (msg.sender == appRecipient || msg.sender == projectOwner);
 
         CREDIT.safeTransferFrom(msg.sender, address(this), amount);
 
@@ -197,15 +241,21 @@ contract FeeRouterV2 is AccessControl, ReentrancyGuard {
             FUNDING.notifyRevenue(projectId, revShare);
         }
 
-        address appRecipient = appRecipientOf[projectId];
-        if (appRecipient == address(0)) {
-            appRecipient = REGISTRY.getProject(projectId).owner;
-        }
         CREDIT.safeTransfer(appRecipient, toApp);
 
-        grossVolumeOf[projectId] += amount;
+        // ---- contadores de sinal: so pagamentos qualificados (nao-self) contam.
+        if (!selfPayment) {
+            grossVolumeOf[projectId] += amount;
+            // pagador unico (D2): incrementa so na primeira vez daquele endereco.
+            if (!hasPaid[projectId][msg.sender]) {
+                hasPaid[projectId][msg.sender] = true;
+                uniquePayersOf[projectId] += 1;
+            }
+        }
 
-        emit PaymentRouted(projectId, msg.sender, amount, toTreasury, toBuyback, toGrants, revShare, toApp);
+        emit PaymentRouted(
+            projectId, msg.sender, amount, toTreasury, toBuyback, toGrants, revShare, toApp, selfPayment
+        );
     }
 
     // ------------------------------------------------------------------

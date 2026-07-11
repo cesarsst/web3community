@@ -9,6 +9,23 @@ de segurança (invariantes, access control, static analysis) ficam em `Security`
 
 ## [Unreleased]
 
+### Security
+
+- **Integridade de sinal no `FeeRouterV2` — mitigações D1+D2 (wash-payment).**
+  Parecer `audit/economist/2026-07-10-wash-signal-integrity.md`: o modelo era
+  a prova de roubo, mas os sinais derivados (GMV, rev-share, pressao de buyback)
+  eram falsificaveis por `pay()` circular a 2,5%/ciclo. **D1 — guarda
+  anti-self-payment:** quando `msg.sender` e o owner ou o `appRecipient` do
+  projeto, o split de valor ocorre normalmente (conservacao intacta) mas o
+  pagamento e marcado `selfPayment` e NAO credita os contadores de sinal. **D2 —
+  `uniquePayersOf`:** novo contador de pagadores DISTINTOS por projeto (+ mapping
+  `hasPaid`) — e este o numero que a UI/automacao deve ler no lugar da soma bruta
+  `grossVolumeOf`, pois um loop de dois enderecos nao o move. Evento
+  `PaymentRouted` ganhou o campo `bool selfPayment` no fim (ABI mudou — resync
+  frontend/SDK no merge). Correcao D3 (decaimento/janela no GMV) segue pendente e
+  e pre-requisito duro de qualquer automacao indexada a volume. 377 testes
+  passando; slither sem findings high/medium novos.
+
 ### Changed
 
 - **REMODEL 2026-07-08 — payment rail + funding por rev-share.** O protocolo

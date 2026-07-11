@@ -1,6 +1,7 @@
 import { expect } from "chai";
 import { ethers } from "hardhat";
 import { loadFixture, time } from "@nomicfoundation/hardhat-network-helpers";
+import { anyValue } from "@nomicfoundation/hardhat-chai-matchers/withArgs";
 
 /**
  * Remodel 2026-07-08 — payment rail + funding por rev-share.
@@ -316,13 +317,15 @@ describe("Remodel (PSM + ProjectFunding + FeeRouterV2)", function () {
       const ownerBefore = await credit.balanceOf(projOwner.address);
       await expect(router.connect(payer).pay(1, amount))
         .to.emit(router, "PaymentRouted")
-        .withArgs(1, payer.address, amount, toTreasury, toBuyback, toGrants, revShare, toApp);
+        .withArgs(1, payer.address, amount, toTreasury, toBuyback, toGrants, revShare, toApp, false);
 
       expect(await credit.balanceOf(treasuryEoa.address)).to.equal(toTreasury);
       expect(await credit.balanceOf(buybackEoa.address)).to.equal(toBuyback);
       expect(await credit.balanceOf(grantsEoa.address)).to.equal(toGrants);
       expect(await credit.balanceOf(projOwner.address)).to.equal(ownerBefore + toApp);
       expect(await router.grossVolumeOf(1)).to.equal(amount);
+      // pagamento de terceiro (payer != owner/appRecipient): conta como sinal.
+      expect(await router.uniquePayersOf(1)).to.equal(1n);
 
       const [pFee, pRev, pApp] = await router.previewPay(1, amount);
       expect(pFee).to.equal(fee);
@@ -345,6 +348,159 @@ describe("Remodel (PSM + ProjectFunding + FeeRouterV2)", function () {
         router,
         "ProjectNotActive",
       );
+    });
+
+    // ---------------------------------------------------------------
+    // D1 — guarda anti-self-payment + D2 — pagadores unicos
+    // (parecer 2026-07-10-wash-signal-integrity.md §6)
+    // ---------------------------------------------------------------
+
+    it("self-payment (owner paga o proprio app): split intacto, sinal NAO conta", async function () {
+      // projOwner e o appRecipient default (fallback do Registry). Ele mesmo paga.
+      const { projOwner, treasuryEoa, buybackEoa, grantsEoa, gov, usdc, staking, psm, credit, funding, router } =
+        await loadFixture(deployFixture);
+
+      // projOwner precisa de USDC (o fixture so semeia alice/bob/payer) p/ comprar CREDIT.
+      await usdc.mint(projOwner.address, 1_000_000n * E6);
+      await usdc.connect(projOwner).approve(await psm.getAddress(), ethers.MaxUint256);
+
+      // Abre e financia a rodada com o proprio owner p/ ativar rev-share (8%).
+      await gov.mint(projOwner.address, SEED_GOV, "self");
+      await gov.connect(projOwner).approve(await staking.getAddress(), ethers.MaxUint256);
+      await staking.connect(projOwner).stake(1, STAKE, MAX_LOCK);
+      await funding.connect(projOwner).openRound(1, TARGET, REV_SHARE_BPS, ROUND_DURATION);
+      await psm.connect(projOwner).buy(200_000n * E6); // USDC->CREDIT p/ investir e pagar
+      await credit.connect(projOwner).approve(await funding.getAddress(), ethers.MaxUint256);
+      await funding.connect(projOwner).invest(1, TARGET); // completa -> Funded, devolve raised ao owner
+      expect(await funding.revShareBpsOf(1)).to.equal(REV_SHARE_BPS);
+
+      await credit.connect(projOwner).approve(await router.getAddress(), ethers.MaxUint256);
+
+      const amount = 100n * E18;
+      const fee = (amount * FEE_BPS) / 10_000n;
+      const toTreasury = (fee * 4000n) / 10_000n;
+      const toBuyback = (fee * 4000n) / 10_000n;
+      const toGrants = fee - toTreasury - toBuyback;
+      const revShare = (amount * BigInt(REV_SHARE_BPS)) / 10_000n;
+      const toApp = amount - fee - revShare;
+
+      const tBefore = await credit.balanceOf(treasuryEoa.address);
+      const bBefore = await credit.balanceOf(buybackEoa.address);
+      const gBefore = await credit.balanceOf(grantsEoa.address);
+      const ownerBefore = await credit.balanceOf(projOwner.address);
+      const fundingBefore = await credit.balanceOf(await funding.getAddress());
+
+      // selfPayment = true no evento.
+      await expect(router.connect(projOwner).pay(1, amount))
+        .to.emit(router, "PaymentRouted")
+        .withArgs(1, projOwner.address, amount, toTreasury, toBuyback, toGrants, revShare, toApp, true);
+
+      // Split de VALOR ocorre normalmente (conservacao intacta).
+      expect((await credit.balanceOf(treasuryEoa.address)) - tBefore).to.equal(toTreasury);
+      expect((await credit.balanceOf(buybackEoa.address)) - bBefore).to.equal(toBuyback);
+      expect((await credit.balanceOf(grantsEoa.address)) - gBefore).to.equal(toGrants);
+      expect((await credit.balanceOf(await funding.getAddress())) - fundingBefore).to.equal(revShare);
+      // owner e o appRecipient: paga `amount` e recebe `toApp` de volta.
+      expect(ownerBefore - (await credit.balanceOf(projOwner.address))).to.equal(amount - toApp);
+
+      // Conservacao: as parcelas somam o amount.
+      expect(toTreasury + toBuyback + toGrants + revShare + toApp).to.equal(amount);
+
+      // Mas os CONTADORES DE SINAL nao se movem.
+      expect(await router.grossVolumeOf(1)).to.equal(0n);
+      expect(await router.uniquePayersOf(1)).to.equal(0n);
+      expect(await router.hasPaid(1, projOwner.address)).to.equal(false);
+    });
+
+    it("self-payment via appRecipient rotacionado: sinal NAO conta", async function () {
+      // owner aponta o recipient p/ `alice`; quando ALICE paga, e self-payment.
+      const { projOwner, alice, usdc, psm, credit, router } = await loadFixture(deployFixture);
+      await router.connect(projOwner).setAppRecipient(1, alice.address);
+
+      await psm.connect(alice).buy(1_000n * E6);
+      await credit.connect(alice).approve(await router.getAddress(), ethers.MaxUint256);
+
+      await expect(router.connect(alice).pay(1, 100n * E18))
+        .to.emit(router, "PaymentRouted")
+        .withArgs(1, alice.address, 100n * E18, anyValue, anyValue, anyValue, anyValue, anyValue, true);
+
+      expect(await router.grossVolumeOf(1)).to.equal(0n);
+      expect(await router.uniquePayersOf(1)).to.equal(0n);
+
+      // owner tambem continua sendo self-payment mesmo apos rotacionar o recipient.
+      await usdc.mint(projOwner.address, 1_000_000n * E6);
+      await usdc.connect(projOwner).approve(await psm.getAddress(), ethers.MaxUint256);
+      await psm.connect(projOwner).buy(1_000n * E6);
+      await credit.connect(projOwner).approve(await router.getAddress(), ethers.MaxUint256);
+      await expect(router.connect(projOwner).pay(1, 50n * E18))
+        .to.emit(router, "PaymentRouted")
+        .withArgs(1, projOwner.address, 50n * E18, anyValue, anyValue, anyValue, anyValue, anyValue, true);
+      expect(await router.uniquePayersOf(1)).to.equal(0n);
+    });
+
+    it("D2: segundo pagamento do MESMO terceiro soma GMV mas nao move uniquePayers", async function () {
+      const { payer, psm, credit, router } = await loadFixture(deployFixture);
+      await psm.connect(payer).buy(1_000n * E6);
+      await credit.connect(payer).approve(await router.getAddress(), ethers.MaxUint256);
+
+      await router.connect(payer).pay(1, 100n * E18);
+      expect(await router.grossVolumeOf(1)).to.equal(100n * E18);
+      expect(await router.uniquePayersOf(1)).to.equal(1n);
+      expect(await router.hasPaid(1, payer.address)).to.equal(true);
+
+      // segundo pagamento do mesmo pagador: GMV soma, pagadores unicos NAO.
+      await router.connect(payer).pay(1, 40n * E18);
+      expect(await router.grossVolumeOf(1)).to.equal(140n * E18);
+      expect(await router.uniquePayersOf(1)).to.equal(1n);
+    });
+
+    it("D2: dois terceiros distintos -> uniquePayersOf == 2", async function () {
+      const { alice, bob, psm, credit, router } = await loadFixture(deployFixture);
+      // alice/bob nao sao owner nem appRecipient do projeto #1 -> terceiros.
+      for (const s of [alice, bob]) {
+        await psm.connect(s).buy(1_000n * E6);
+        await credit.connect(s).approve(await router.getAddress(), ethers.MaxUint256);
+      }
+      await router.connect(alice).pay(1, 100n * E18);
+      await router.connect(bob).pay(1, 100n * E18);
+
+      expect(await router.uniquePayersOf(1)).to.equal(2n);
+      expect(await router.grossVolumeOf(1)).to.equal(200n * E18);
+    });
+
+    it("conservacao: soma das transferencias == amount (pagamento de terceiro)", async function () {
+      const { projOwner, treasuryEoa, buybackEoa, grantsEoa, payer, psm, credit, funding, router } =
+        await loadFixture(fundedFixture);
+      await psm.connect(payer).buy(1_000n * E6);
+      await credit.connect(payer).approve(await router.getAddress(), ethers.MaxUint256);
+
+      const amount = 100n * E18;
+      const routerAddr = await router.getAddress();
+      const fundingAddr = await funding.getAddress();
+
+      const before = {
+        t: await credit.balanceOf(treasuryEoa.address),
+        b: await credit.balanceOf(buybackEoa.address),
+        g: await credit.balanceOf(grantsEoa.address),
+        f: await credit.balanceOf(fundingAddr),
+        o: await credit.balanceOf(projOwner.address),
+        payer: await credit.balanceOf(payer.address),
+        router: await credit.balanceOf(routerAddr),
+      };
+
+      await router.connect(payer).pay(1, amount);
+
+      const dT = (await credit.balanceOf(treasuryEoa.address)) - before.t;
+      const dB = (await credit.balanceOf(buybackEoa.address)) - before.b;
+      const dG = (await credit.balanceOf(grantsEoa.address)) - before.g;
+      const dF = (await credit.balanceOf(fundingAddr)) - before.f;
+      const dO = (await credit.balanceOf(projOwner.address)) - before.o;
+      const dPayer = before.payer - (await credit.balanceOf(payer.address));
+
+      // tudo que saiu do pagador foi redistribuido, sem sobra no router.
+      expect(dPayer).to.equal(amount);
+      expect(dT + dB + dG + dF + dO).to.equal(amount);
+      expect(await credit.balanceOf(routerAddr)).to.equal(before.router); // router nao retem
     });
 
     it("setFeeBps respeita teto duro; setFeeSplit valida soma; appRecipient owner-gated", async function () {

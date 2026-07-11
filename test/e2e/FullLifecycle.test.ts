@@ -250,7 +250,7 @@ describe("E2E: FullLifecycle — ciclo economico completo (payment rail + fundin
 
     await expect(feeRouterV2.connect(payer).pay(chatAppId, PAYER_PAYMENT))
       .to.emit(feeRouterV2, "PaymentRouted")
-      .withArgs(chatAppId, payer.address, PAYER_PAYMENT, toTreasury, toBuyback, toGrants, revShare, toApp);
+      .withArgs(chatAppId, payer.address, PAYER_PAYMENT, toTreasury, toBuyback, toGrants, revShare, toApp, false);
 
     // Treasury recebeu as 3 parcelas da fee (todas apontam pro cofre).
     expect((await credit.balanceOf(treasuryAddr)) - treasuryCreditBeforePay).to.equal(fee);
