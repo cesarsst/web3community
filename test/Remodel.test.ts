@@ -203,15 +203,16 @@ describe("Remodel (PSM + ProjectFunding + FeeRouterV2)", function () {
       ).to.be.revertedWithCustomError(funding, "RoundAlreadyExists");
     });
 
-    it("invest: exige GOV stakeado no projeto e respeita o alvo", async function () {
+    it("invest: exige peso de stake >= minInvestWeight no projeto e respeita o alvo", async function () {
       const { projOwner, alice, staking, psm, credit, funding } = await loadFixture(deployFixture);
       await funding.connect(projOwner).openRound(1, TARGET, REV_SHARE_BPS, ROUND_DURATION);
       await psm.connect(alice).buy(100_000n * E6);
       await credit.connect(alice).approve(await funding.getAddress(), ethers.MaxUint256);
 
+      // sem stake -> peso 0 < minInvestWeight -> InsufficientStakeWeight (D3)
       await expect(funding.connect(alice).invest(1, 1_000n * E18)).to.be.revertedWithCustomError(
         funding,
-        "NoGovStaked",
+        "InsufficientStakeWeight",
       );
       await staking.connect(alice).stake(1, STAKE, MAX_LOCK);
       await expect(funding.connect(alice).invest(1, TARGET + 1n)).to.be.revertedWithCustomError(
@@ -220,6 +221,89 @@ describe("Remodel (PSM + ProjectFunding + FeeRouterV2)", function () {
       );
       await funding.connect(alice).invest(1, 1_000n * E18);
       expect(await funding.sharesOf(1, alice.address)).to.equal(1_000n * E18);
+    });
+
+    it("D3: invest com peso ABAIXO/EXATO/ACIMA do piso minInvestWeight", async function () {
+      const { projOwner, alice, staking, psm, credit, funding } = await loadFixture(deployFixture);
+      await funding.connect(projOwner).openRound(1, TARGET, REV_SHARE_BPS, ROUND_DURATION);
+      await psm.connect(alice).buy(100_000n * E6);
+      await credit.connect(alice).approve(await funding.getAddress(), ethers.MaxUint256);
+
+      // Piso default = 100e18 (100 GOV no lock minimo, multiplier 1x).
+      const minWeight = await funding.minInvestWeight();
+      expect(minWeight).to.equal(100n * E18);
+
+      // MIN_LOCK do Staking = multiplier 1x -> peso == amount stakeado.
+      const MIN_LOCK = await staking.MIN_LOCK();
+
+      // (a) ABAIXO do piso: stake 99 GOV no lock minimo -> peso 99e18 < 100e18.
+      await staking.connect(alice).stake(1, 99n * E18, MIN_LOCK);
+      expect(await staking.getWeight(alice.address, 1)).to.equal(99n * E18);
+      await expect(funding.connect(alice).invest(1, 1_000n * E18))
+        .to.be.revertedWithCustomError(funding, "InsufficientStakeWeight")
+        .withArgs(1, alice.address, 99n * E18, 100n * E18);
+
+      // (b) EXATAMENTE no piso: acrescenta 1 GOV -> peso 100e18 == piso -> passa.
+      await staking.connect(alice).increaseStake(1, 1n * E18);
+      expect(await staking.getWeight(alice.address, 1)).to.equal(100n * E18);
+      await funding.connect(alice).invest(1, 1_000n * E18);
+      expect(await funding.sharesOf(1, alice.address)).to.equal(1_000n * E18);
+
+      // (c) ACIMA do piso: mais stake -> peso > piso -> passa.
+      await staking.connect(alice).increaseStake(1, 500n * E18);
+      expect(await staking.getWeight(alice.address, 1)).to.be.greaterThan(100n * E18);
+      await funding.connect(alice).invest(1, 1_000n * E18);
+      expect(await funding.sharesOf(1, alice.address)).to.equal(2_000n * E18);
+    });
+
+    it("D3: claim NAO recebe o piso — investidor que reduziu stake (mas > 0) ainda saca", async function () {
+      // Prova a decisao de desenho: minInvestWeight e barreira de ENTRADA,
+      // nao de saida. Investidor entra com peso >= piso, depois reduz o stake
+      // abaixo do piso (mas mantem algum) e continua podendo claim.
+      const { governance, admin, projOwner, alice, bob, payer, staking, psm, credit, funding, router } =
+        await loadFixture(deployFixture);
+
+      // Sobe o piso p/ um valor alto o suficiente p/ que uma reducao caia abaixo.
+      // Piso = 3_000e18. Alice stakea 1_000 GOV no lock maximo (4x) -> peso 4_000e18.
+      await funding.connect(admin).setMinInvestWeight(3_000n * E18);
+
+      await staking.connect(alice).stake(1, STAKE, MAX_LOCK); // peso 4_000e18 >= 3_000e18
+      await staking.connect(bob).stake(1, STAKE, MAX_LOCK);
+      await psm.connect(alice).buy(100_000n * E6);
+      await psm.connect(bob).buy(100_000n * E6);
+
+      await funding.connect(projOwner).openRound(1, TARGET, REV_SHARE_BPS, ROUND_DURATION);
+      await credit.connect(alice).approve(await funding.getAddress(), ethers.MaxUint256);
+      await credit.connect(bob).approve(await funding.getAddress(), ethers.MaxUint256);
+      await funding.connect(alice).invest(1, (TARGET * 60n) / 100n);
+      await funding.connect(bob).invest(1, (TARGET * 40n) / 100n); // -> Funded
+
+      // gera rev-share
+      await psm.connect(payer).buy(10_000n * E6);
+      await credit.connect(payer).approve(await router.getAddress(), ethers.MaxUint256);
+      await router.connect(payer).pay(1, 10_000n * E18);
+
+      // Alice reduz o stake: desfaz o lock e re-stakea POUCO no lock minimo,
+      // ficando com peso 100e18 (> 0, mas << piso 3_000e18).
+      await time.increase(Number(MAX_LOCK) + 1);
+      await staking.connect(alice).unstakeAll(1);
+      const MIN_LOCK = await staking.MIN_LOCK();
+      await staking.connect(alice).stake(1, 100n * E18, MIN_LOCK);
+      const aliceWeight = await staking.getWeight(alice.address, 1);
+      expect(aliceWeight).to.equal(100n * E18);
+      expect(aliceWeight).to.be.lessThan(await funding.minInvestWeight());
+
+      // Com peso < piso, um NOVO invest reverteria...
+      await expect(funding.connect(alice).invest(1, 1n * E18)).to.be.revertedWithCustomError(
+        funding,
+        "RoundNotOpen", // rodada ja Funded; mas o ponto e que o gate de peso nao barra o claim
+      );
+
+      // ...mas o claim do que ela JA conquistou passa normalmente (gate peso > 0).
+      const expectedPool = (10_000n * E18 * BigInt(REV_SHARE_BPS)) / 10_000n;
+      const before = await credit.balanceOf(alice.address);
+      await funding.connect(alice).claim(1);
+      expect(await credit.balanceOf(alice.address)).to.equal(before + (expectedPool * 60n) / 100n);
     });
 
     it("alvo batido -> Funded, dono recebe o captado, revShareBpsOf ativa", async function () {
@@ -576,6 +660,17 @@ describe("Remodel (PSM + ProjectFunding + FeeRouterV2)", function () {
       await expect(funding.connect(admin).setMinTarget(200n * E18))
         .to.emit(funding, "MinTargetUpdated")
         .withArgs(100n * E18, 200n * E18);
+    });
+
+    it("D3: setMinInvestWeight só GOVERNANCE_ROLE, emite MinInvestWeightUpdated", async function () {
+      const { admin, alice, funding } = await loadFixture(deployFixture);
+      // não-autorizado reverte
+      await expect(funding.connect(alice).setMinInvestWeight(1n)).to.be.reverted;
+      // governança ajusta e emite (previous == default 100e18)
+      await expect(funding.connect(admin).setMinInvestWeight(500n * E18))
+        .to.emit(funding, "MinInvestWeightUpdated")
+        .withArgs(100n * E18, 500n * E18);
+      expect(await funding.minInvestWeight()).to.equal(500n * E18);
     });
 
     it("ProjectFunding: openRound em projeto inativo reverte; rodada duplicada reverte", async function () {

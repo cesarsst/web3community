@@ -22,9 +22,17 @@ de segurança (invariantes, access control, static analysis) ficam em `Security`
   `hasPaid`) — e este o numero que a UI/automacao deve ler no lugar da soma bruta
   `grossVolumeOf`, pois um loop de dois enderecos nao o move. Evento
   `PaymentRouted` ganhou o campo `bool selfPayment` no fim (ABI mudou — resync
-  frontend/SDK no merge). Correcao D3 (decaimento/janela no GMV) segue pendente e
-  e pre-requisito duro de qualquer automacao indexada a volume. 377 testes
-  passando; slither sem findings high/medium novos.
+  frontend/SDK no merge). **D3 — piso de stake para investir:** o gate de
+  `ProjectFunding.invest` passa de `getWeight > 0` para
+  `getWeight >= minInvestWeight` (novo storage governavel, default `100e18` = ~100
+  GOV no lock minimo; setter `setMinInvestWeight` gated GOVERNANCE_ROLE; novo error
+  `InsufficientStakeWeight`). Gate ASSIMETRICO: o `claim` mantem `> 0` — o piso e
+  barreira de ENTRADA (anti-sybil ao investir), nao trava de saida, para nao punir
+  quem investiu e depois reduziu o stake. E o D3 que força o atacante a imobilizar
+  GOV real por carteira, encarecendo o sybil (ver `audit/economist/sim/sybil-cost-sim.js`).
+  Correcao D4 (decaimento/janela no GMV) segue pendente e e pre-requisito duro de
+  qualquer automacao indexada a volume. 380 testes passando; slither sem findings
+  high/medium novos.
 
 ### Changed
 

@@ -20,8 +20,9 @@ import {Staking} from "./Staking.sol";
  *         Ciclo:
  *          1. Dono do projeto (Registry) abre rodada: alvo em CREDIT,
  *             rev-share oferecido (bps) e prazo.
- *          2. Investidores com GOV stakeado NO projeto ({Staking.getWeight})
- *             depositam CREDIT ate o alvo.
+ *          2. Investidores com peso de GOV stakeado NO projeto
+ *             ({Staking.getWeight}) >= {minInvestWeight} depositam CREDIT ate o
+ *             alvo (piso anti-sybil de entrada, D3).
  *          3. Alvo batido -> pagamento automatico ao dono ({_fund}) e rev-share ativo.
  *             Prazo vencido sem alvo -> rodada falha, {refund} devolve 100%.
  *          4. {FeeRouterV2} chama {notifyRevenue} a cada pagamento; investidor
@@ -34,10 +35,17 @@ import {Staking} from "./Staking.sol";
  *      - Shares = CREDIT investido (1:1, imutavel apos finalize).
  *      - Distribuicao usa acumulador `accRevenuePerShare` (padrao MasterChef,
  *        1e18 de precisao) — O(1) por pagamento, O(1) por claim.
- *      - {claim} exige `STAKING.getWeight(msg.sender, projectId) > 0`:
- *        materializa o requisito "quem tem GOV em stake recebe a
- *        redistribuicao". Sem stake o valor NAO e perdido — fica acruado
- *        ate o investidor voltar a stakear.
+ *      - Gates de stake ASSIMETRICOS (D3, parecer
+ *        `audit/economist/2026-07-10-wash-signal-integrity.md` §6):
+ *          * {invest} exige peso >= {minInvestWeight} (piso ajustavel > 0) —
+ *            barreira de ENTRADA anti-sybil: fabricar N "investidores" fake
+ *            passa a exigir capital real (GOV) travado por carteira.
+ *          * {claim} mantem o gate ORIGINAL peso > 0 — o piso NAO se aplica na
+ *            SAIDA: quem ja investiu e reduziu o stake (mas mantem algum) nao
+ *            pode ser barrado de sacar rev-share ja conquistado (evita punir
+ *            retroativamente e travar fundos).
+ *        Sem stake o valor NAO e perdido — fica acruado ate o investidor
+ *        voltar a stakear.
  *      - All-or-nothing: rodada so paga o dono se bater o alvo. Protege o
  *        investidor de financiar pela metade um projeto inviavel.
  */
@@ -61,6 +69,7 @@ contract ProjectFunding is AccessControl, ReentrancyGuard {
     error TargetOutOfBounds(uint256 provided, uint256 min);
     error DurationOutOfBounds(uint64 provided, uint64 min, uint64 max);
     error NoGovStaked(uint256 projectId, address investor);
+    error InsufficientStakeWeight(uint256 projectId, address investor, uint256 have, uint256 required);
     error ExceedsTarget(uint256 requested, uint256 remaining);
     error NothingToRefund(uint256 projectId, address investor);
     error NothingToClaim(uint256 projectId, address investor);
@@ -115,6 +124,19 @@ contract ProjectFunding is AccessControl, ReentrancyGuard {
     /// @notice Alvo minimo de rodada (anti-spam). Ajustavel por governanca.
     uint256 public minTarget = 100e18;
 
+    /// @notice Piso de peso de stake (unidades de {Staking.getWeight}, i.e.
+    ///         `amount * multiplier / 1e18`) exigido para {invest}. Barreira
+    ///         anti-sybil na ENTRADA da rodada (mitigacao D3 do parecer
+    ///         `audit/economist/2026-07-10-wash-signal-integrity.md` §6): forca
+    ///         o atacante a imobilizar CAPITAL REAL (GOV travado) por carteira
+    ///         "investidora", encarecendo a auto-rodada / o sybil de investidor.
+    ///         Default = 100e18 = stakar ~100 GOV no lock minimo (multiplier 1x)
+    ///         — nao proibitivo para o investidor pequeno legitimo, mas > 0 (o
+    ///         gate antigo aceitava qualquer poeira de GOV, inclusive self-stake
+    ///         trivial). Ajustavel por governanca via {setMinInvestWeight}.
+    ///         NAO se aplica ao {claim} (ver NatSpec de {claim}).
+    uint256 public minInvestWeight;
+
     /// @notice Rodada (unica) de cada projeto.
     mapping(uint256 projectId => Round) public rounds;
 
@@ -142,6 +164,7 @@ contract ProjectFunding is AccessControl, ReentrancyGuard {
     event RevenueNotified(uint256 indexed projectId, uint256 amount);
     event RevenueClaimed(uint256 indexed projectId, address indexed investor, uint256 amount);
     event MinTargetUpdated(uint256 previous, uint256 current);
+    event MinInvestWeightUpdated(uint256 previous, uint256 current);
 
     // ------------------------------------------------------------------
     // Constructor
@@ -156,6 +179,10 @@ contract ProjectFunding is AccessControl, ReentrancyGuard {
         STAKING = Staking(staking);
         _grantRole(DEFAULT_ADMIN_ROLE, admin);
         _grantRole(GOVERNANCE_ROLE, admin);
+
+        // Piso anti-sybil de entrada (D3). 100e18 = ~100 GOV no lock minimo
+        // (multiplier 1x). Ver NatSpec de {minInvestWeight}.
+        minInvestWeight = 100e18;
     }
 
     // ------------------------------------------------------------------
@@ -203,8 +230,16 @@ contract ProjectFunding is AccessControl, ReentrancyGuard {
     }
 
     /**
-     * @notice Investe CREDIT na rodada aberta. Exige GOV stakeado no projeto.
+     * @notice Investe CREDIT na rodada aberta. Exige peso de stake de GOV no
+     *         projeto >= {minInvestWeight} (piso anti-sybil de entrada, D3).
      * @dev Alvo batido finaliza automaticamente (paga o dono, ativa rev-share).
+     *      Gate = `STAKING.getWeight(msg.sender, projectId) >= minInvestWeight`
+     *      (reverte {InsufficientStakeWeight}). E uma barreira de ENTRADA: o
+     *      {claim} usa gate diferente (peso > 0) — ver NatSpec de {claim}.
+     *      Mitigacao D3 do parecer
+     *      `audit/economist/2026-07-10-wash-signal-integrity.md` §6: força o
+     *      atacante a imobilizar capital real (GOV) por carteira "investidora",
+     *      encarecendo a auto-rodada.
      */
     function invest(uint256 projectId, uint256 amount) external nonReentrant {
         Round storage r = rounds[projectId];
@@ -217,8 +252,12 @@ contract ProjectFunding is AccessControl, ReentrancyGuard {
         if (amount == 0) {
             revert ZeroAmount();
         }
-        if (STAKING.getWeight(msg.sender, projectId) == 0) {
-            revert NoGovStaked(projectId, msg.sender);
+        // D3: piso de peso minimo de stake para investir. Substitui o gate
+        // antigo `getWeight > 0` (que aceitava qualquer poeira / self-stake
+        // trivial) por um PISO ajustavel — barreira anti-sybil de ENTRADA.
+        uint256 weight = STAKING.getWeight(msg.sender, projectId);
+        if (weight < minInvestWeight) {
+            revert InsufficientStakeWeight(projectId, msg.sender, weight, minInvestWeight);
         }
         uint256 remaining = r.target - r.raised;
         if (amount > remaining) {
@@ -305,8 +344,19 @@ contract ProjectFunding is AccessControl, ReentrancyGuard {
 
     /**
      * @notice Saca a receita acumulada do investidor no projeto.
-     * @dev Exige GOV ainda stakeado no projeto (skin in the game). O valor
-     *      nunca expira — sem stake ele apenas fica retido ate re-stake.
+     * @dev Exige GOV ainda stakeado no projeto (skin in the game): gate
+     *      ORIGINAL `getWeight > 0` (reverte {NoGovStaked}). O valor nunca
+     *      expira — sem stake ele apenas fica retido ate re-stake.
+     *
+     *      DECISAO DE DESENHO (D3, parecer 2026-07-10 §6): o piso
+     *      {minInvestWeight} do {invest} deliberadamente NAO se aplica aqui. O
+     *      piso e uma barreira de ENTRADA (anti-sybil no momento de investir),
+     *      nao uma trava de SAIDA. Um investidor legitimo que ja investiu e
+     *      depois reduziu o stake (mas mantem algum) nao pode ser impedido de
+     *      sacar rev-share que JA conquistou — subir o piso no claim puniria
+     *      retroativamente quem entrou antes de uma mudança de parametro e
+     *      criaria risco de fundos presos. Por isso o claim mantem o gate
+     *      `peso > 0`, nao `peso >= minInvestWeight`.
      */
     function claim(uint256 projectId) external nonReentrant returns (uint256 amount) {
         if (STAKING.getWeight(msg.sender, projectId) == 0) {
@@ -330,6 +380,13 @@ contract ProjectFunding is AccessControl, ReentrancyGuard {
     function setMinTarget(uint256 newMin) external onlyRole(GOVERNANCE_ROLE) {
         emit MinTargetUpdated(minTarget, newMin);
         minTarget = newMin;
+    }
+
+    /// @notice Ajusta o piso de peso de stake exigido para {invest} (D3).
+    /// @dev So afeta o gate de ENTRADA ({invest}); o {claim} mantem `peso > 0`.
+    function setMinInvestWeight(uint256 newMin) external onlyRole(GOVERNANCE_ROLE) {
+        emit MinInvestWeightUpdated(minInvestWeight, newMin);
+        minInvestWeight = newMin;
     }
 
     // ------------------------------------------------------------------
