@@ -30,9 +30,15 @@ de segurança (invariantes, access control, static analysis) ficam em `Security`
   barreira de ENTRADA (anti-sybil ao investir), nao trava de saida, para nao punir
   quem investiu e depois reduziu o stake. E o D3 que força o atacante a imobilizar
   GOV real por carteira, encarecendo o sybil (ver `audit/economist/sim/sybil-cost-sim.js`).
-  Correcao D4 (decaimento/janela no GMV) segue pendente e e pre-requisito duro de
-  qualquer automacao indexada a volume. 380 testes passando; slither sem findings
-  high/medium novos.
+  **D4 — volume com decaimento:** nova view `FeeRouterV2.recentVolumeOf(projectId)`
+  = volume com decaimento exponencial (meia-vida `volumeHalfLife`, default 30 dias,
+  governavel via `setVolumeHalfLife`; aproximacao sem float = meias-vidas inteiras
+  por shift + interpolacao linear, erro max ~6%; error `ZeroHalfLife`). `grossVolumeOf`
+  fica INTACTO (soma eterna, so auditoria); e o `recentVolumeOf` que a UI/automacao
+  passam a ler p/ sinal — wash em rajada evapora e automacao indexada a volume nao e
+  drenavel por historico falso. **As 4 camadas (D1-D4) do parecer estao implementadas;
+  o vetor de wash-payment esta fechado.** ABI mudou (nova view + evento — resync
+  frontend/SDK). 386 testes passando; slither sem findings high/medium novos.
 
 ### Changed
 

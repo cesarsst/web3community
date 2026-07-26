@@ -47,6 +47,7 @@ contract FeeRouterV2 is AccessControl, ReentrancyGuard {
     error NotProjectOwner(uint256 projectId, address caller);
     error FeeAboveCap(uint16 provided, uint16 cap);
     error SplitDoesNotSumTo10000(uint256 sum);
+    error ZeroHalfLife();
 
     // ------------------------------------------------------------------
     // Types
@@ -69,6 +70,20 @@ contract FeeRouterV2 is AccessControl, ReentrancyGuard {
     uint16 public constant FEE_BPS_CAP = 500;
 
     uint256 private constant BPS = 10_000;
+
+    /// @notice Meia-vida padrao do decaimento do volume recente: 30 dias.
+    /// @dev Valor de sinal (D4), governavel via {setVolumeHalfLife}. Escolha: 30
+    ///      dias e uma janela suficientemente longa p/ nao penalizar apps com
+    ///      cadencia mensal legitima, e curta o bastante p/ que uma rajada de
+    ///      wash evapore em poucos meses (ver parecer §6, correcao D4).
+    uint256 private constant DEFAULT_VOLUME_HALF_LIFE = 30 days; // 2_592_000 s
+
+    /// @notice Teto de meias-vidas consideradas no decaimento antes de zerar.
+    /// @dev Apos MAX_DECAY_HALF_LIVES meias-vidas o fator (1/2)^n < 1/2^64 e o
+    ///      volume recente e tratado como ~0 (evaporou). Cap p/ limitar o loop
+    ///      de gas a no maximo 64 iteracoes de shift; qualquer sinal de wash em
+    ///      rajada some muito antes disso.
+    uint256 private constant MAX_DECAY_HALF_LIVES = 64;
 
     // ------------------------------------------------------------------
     // Storage
@@ -110,6 +125,22 @@ contract FeeRouterV2 is AccessControl, ReentrancyGuard {
     /// @dev Usado p/ incrementar uniquePayersOf so na primeira vez do pagador.
     mapping(uint256 projectId => mapping(address payer => bool)) public hasPaid;
 
+    /// @notice Volume "recente" com decaimento (D4): valor JA decaido ate
+    ///         {_recentVolumeUpdatedAt}. Nao e a soma bruta eterna — esse acumulador
+    ///         esquece o passado com meia-vida {volumeHalfLife}.
+    /// @dev So conta pagamentos qualificados (nao-self), como grossVolumeOf. E este
+    ///      o numero que a UI/automacao passam a ler p/ fins de sinal/automacao (ver
+    ///      {recentVolumeOf} e o parecer §6, correcao D4). Nao usar p/ auditoria/
+    ///      historico — p/ isso ha grossVolumeOf, que nao evapora.
+    mapping(uint256 projectId => uint256) private _recentVolume;
+
+    /// @notice Timestamp do ultimo update de {_recentVolume} por projeto.
+    mapping(uint256 projectId => uint64) private _recentVolumeUpdatedAt;
+
+    /// @notice Meia-vida do decaimento do volume recente, em SEGUNDOS (governavel).
+    /// @dev Default DEFAULT_VOLUME_HALF_LIFE (30 dias). Ver {setVolumeHalfLife}.
+    uint256 public volumeHalfLife;
+
     // ------------------------------------------------------------------
     // Events
     // ------------------------------------------------------------------
@@ -136,6 +167,7 @@ contract FeeRouterV2 is AccessControl, ReentrancyGuard {
     event FeeSplitUpdated(uint16 treasuryBps, uint16 buybackBps, uint16 grantsBps);
     event RecipientsUpdated(address treasury, address buyback, address grants);
     event AppRecipientUpdated(uint256 indexed projectId, address recipient);
+    event VolumeHalfLifeUpdated(uint256 previous, uint256 current);
 
     // ------------------------------------------------------------------
     // Constructor
@@ -171,6 +203,7 @@ contract FeeRouterV2 is AccessControl, ReentrancyGuard {
         grantsRecipient = grants_;
         feeBps = initialFeeBps;
         feeSplit = initialSplit;
+        volumeHalfLife = DEFAULT_VOLUME_HALF_LIFE;
 
         _grantRole(DEFAULT_ADMIN_ROLE, admin);
         _grantRole(GOVERNANCE_ROLE, admin);
@@ -251,6 +284,11 @@ contract FeeRouterV2 is AccessControl, ReentrancyGuard {
                 hasPaid[projectId][msg.sender] = true;
                 uniquePayersOf[projectId] += 1;
             }
+            // volume recente com decaimento (D4): decai o acumulado ate agora,
+            // soma o amount e regrava o timestamp. E este numero (via
+            // {recentVolumeOf}) que a UI/automacao leem — wash em rajada evapora.
+            _recentVolume[projectId] = _decayedVolume(projectId) + amount;
+            _recentVolumeUpdatedAt[projectId] = uint64(block.timestamp);
         }
 
         emit PaymentRouted(
@@ -292,6 +330,19 @@ contract FeeRouterV2 is AccessControl, ReentrancyGuard {
         emit RecipientsUpdated(treasury_, buyback_, grants_);
     }
 
+    /// @notice Ajusta a meia-vida do decaimento do volume recente (D4).
+    /// @dev Rejeita 0 (evita divisao por zero / decaimento infinito). O novo valor
+    ///      so afeta decaimentos FUTUROS: o {_recentVolume} ja gravado permanece,
+    ///      e passa a decair na nova cadencia a partir do proximo {_decayedVolume}.
+    ///      Espelha o padrao dos demais setters (setFeeBps etc).
+    function setVolumeHalfLife(uint256 newHalfLifeSeconds) external onlyRole(GOVERNANCE_ROLE) {
+        if (newHalfLifeSeconds == 0) {
+            revert ZeroHalfLife();
+        }
+        emit VolumeHalfLifeUpdated(volumeHalfLife, newHalfLifeSeconds);
+        volumeHalfLife = newHalfLifeSeconds;
+    }
+
     /// @notice Dono do projeto rotaciona o recipient de pagamento.
     function setAppRecipient(uint256 projectId, address recipient) external {
         if (REGISTRY.getProject(projectId).owner != msg.sender) {
@@ -309,6 +360,86 @@ contract FeeRouterV2 is AccessControl, ReentrancyGuard {
         if (sum != BPS) {
             revert SplitDoesNotSumTo10000(sum);
         }
+    }
+
+    // ------------------------------------------------------------------
+    // Volume recente com decaimento (D4)
+    // ------------------------------------------------------------------
+
+    /**
+     * @notice Volume "recente" do projeto, com decaimento por meia-vida.
+     * @dev E ESTE o numero que a UI e qualquer automacao devem ler p/ fins de
+     *      sinal/tracao — substitui {grossVolumeOf} nesse papel (parecer §6, D4).
+     *      {grossVolumeOf} continua sendo a soma bruta eterna, so p/ auditoria/
+     *      historico. Aqui, o volume ESQUECE o passado: sem novos pagamentos,
+     *      decai a ~metade a cada {volumeHalfLife} segundos, de modo que (a) uma
+     *      rajada de wash evapora e (b) automacao indexada a volume nao e
+     *      drenavel por volume falso historico. Monotonicamente nao-crescente no
+     *      tempo decorrido; nunca reverte.
+     */
+    function recentVolumeOf(uint256 projectId) external view returns (uint256) {
+        return _decayedVolume(projectId);
+    }
+
+    /**
+     * @notice Aplica o decaimento exponencial ao {_recentVolume} do projeto.
+     * @dev Aproximacao SEM floats: decaimento por meias-vidas INTEIRAS (cada uma
+     *      divide por 2 via shift) + interpolacao LINEAR no resto fracionario da
+     *      ultima meia-vida. Formalmente, com elapsed = q*H + r (q inteiro,
+     *      0 <= r < H):
+     *          exato:   v * 2^-(q + r/H)
+     *          usado:   (v >> q) * (1 - (r/H)/2)   == (v >> q) * (2H - r) / (2H)
+     *      i.e. dentro de uma meia-vida a curva 2^-x (convexa) e aproximada pela
+     *      reta secante entre x=0 (fator 1) e x=1 (fator 1/2).
+     *
+     *      ERRO MAXIMO: a secante superestima 2^-x; o desvio maximo ocorre em
+     *      x ~ 0,5 (meia meia-vida), onde 2^-0.5 = 0,7071 vs. reta 0,75 →
+     *      +0,0429 absoluto, ~+6,1% relativo. E um vies de super-estimacao
+     *      LIMITADO e transitorio dentro de cada meia-vida; e um SINAL, nao um
+     *      valor financeiro. Monotonico: nao-crescente em elapsed (o produto
+     *      (v>>q)*(2H-r)/(2H) so cai enquanto r cresce, e ao virar a meia-vida
+     *      q incrementa e r zera sem salto p/ cima). Cap em MAX_DECAY_HALF_LIVES:
+     *      alem disso o fator < 2^-64 e retornamos 0 (evaporou).
+     *
+     *      Overflow: v <= soma de amounts (nunca acima de grossVolumeOf); os
+     *      unicos produtos sao (v>>q) * (2H - r) com (2H - r) <= 2H <= 2*halfLife.
+     *      halfLife e um parametro de governanca sensato (segundos); em pratica
+     *      (v>>q) e pequeno quando q>0. Ainda assim a multiplicacao e CHECKED
+     *      (sem unchecked) — reverteria em overflow em vez de silenciar, mas isso
+     *      exigiria v e halfLife absurdamente grandes simultaneamente.
+     */
+    function _decayedVolume(uint256 projectId) internal view returns (uint256) {
+        uint256 v = _recentVolume[projectId];
+        // v==0 e block.timestamp<=updatedAt caem naturalmente no calculo abaixo
+        // (0 decai p/ 0; elapsed==0 nao decai) — sem guardas de igualdade estrita.
+
+        uint256 updatedAt = _recentVolumeUpdatedAt[projectId];
+        // Guarda defensiva contra timestamp nao-monotonico: nunca subtrai negativo.
+        if (block.timestamp < updatedAt) {
+            return v;
+        }
+
+        uint256 elapsed = block.timestamp - updatedAt;
+        uint256 halfLife = volumeHalfLife; // > 0 por invariante (constructor/setter)
+
+        uint256 wholeHalfLives = elapsed / halfLife;
+        if (wholeHalfLives >= MAX_DECAY_HALF_LIVES) {
+            return 0; // fator < 2^-64: evaporou
+        }
+
+        // meias-vidas inteiras: divide por 2 a cada uma.
+        v >>= wholeHalfLives;
+
+        // resto fracionario: interpolacao linear entre fator 1 e fator 1/2.
+        // fator = (2H - r) / (2H), com r = tempo dentro da meia-vida corrente.
+        // r calculado por subtracao (nao modulo) — evita falso-positivo de PRNG.
+        uint256 remainder = elapsed - wholeHalfLives * halfLife;
+        if (remainder > 0) {
+            uint256 twoH = halfLife * 2;
+            v = (v * (twoH - remainder)) / twoH;
+        }
+
+        return v;
     }
 
     // ------------------------------------------------------------------

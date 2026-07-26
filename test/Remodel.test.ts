@@ -552,6 +552,122 @@ describe("Remodel (PSM + ProjectFunding + FeeRouterV2)", function () {
       expect(await router.grossVolumeOf(1)).to.equal(200n * E18);
     });
 
+    // ---------------------------------------------------------------
+    // D4 — volume recente com decaimento por meia-vida
+    // (parecer 2026-07-10-wash-signal-integrity.md §6, correcao D4)
+    // ---------------------------------------------------------------
+
+    const HALF_LIFE = 30n * 24n * 60n * 60n; // default: 30 dias
+
+    it("D4: pay qualificado incrementa recentVolumeOf (e volumeHalfLife default = 30 dias)", async function () {
+      const { payer, psm, credit, router } = await loadFixture(deployFixture);
+      expect(await router.volumeHalfLife()).to.equal(HALF_LIFE);
+
+      await psm.connect(payer).buy(1_000n * E6);
+      await credit.connect(payer).approve(await router.getAddress(), ethers.MaxUint256);
+
+      expect(await router.recentVolumeOf(1)).to.equal(0n);
+      await router.connect(payer).pay(1, 100n * E18);
+      // no mesmo timestamp do pagamento nao ha decaimento.
+      expect(await router.recentVolumeOf(1)).to.equal(100n * E18);
+    });
+
+    it("D4: apos ~1 meia-vida sem pagamentos, recentVolumeOf cai ~50%", async function () {
+      const { payer, psm, credit, router } = await loadFixture(deployFixture);
+      await psm.connect(payer).buy(1_000n * E6);
+      await credit.connect(payer).approve(await router.getAddress(), ethers.MaxUint256);
+
+      const amount = 100n * E18;
+      await router.connect(payer).pay(1, amount);
+
+      await time.increase(Number(HALF_LIFE));
+      const recent = await router.recentVolumeOf(1);
+      // aproximacao: exatamente 1 meia-vida -> resto 0 -> v>>1 == metade exata.
+      // Valida a FAIXA (é aproximação): entre 45% e 55% do original.
+      expect(recent).to.be.greaterThan((amount * 45n) / 100n);
+      expect(recent).to.be.lessThan((amount * 55n) / 100n);
+      // grossVolumeOf (historico) NAO decai.
+      expect(await router.grossVolumeOf(1)).to.equal(amount);
+    });
+
+    it("D4: apos muitas meia-vidas recentVolumeOf ~0 (evapora) mas grossVolumeOf intacto", async function () {
+      const { payer, psm, credit, router } = await loadFixture(deployFixture);
+      await psm.connect(payer).buy(10_000n * E6);
+      await credit.connect(payer).approve(await router.getAddress(), ethers.MaxUint256);
+
+      const amount = 1_000n * E18;
+      await router.connect(payer).pay(1, amount);
+      expect(await router.recentVolumeOf(1)).to.equal(amount);
+
+      // ~70 meia-vidas: passa do cap MAX_DECAY_HALF_LIVES (64) -> zera.
+      await time.increase(Number(HALF_LIFE) * 70);
+
+      // Este teste PROVA a diferenca entre os dois numeros:
+      expect(await router.recentVolumeOf(1)).to.equal(0n); // sinal evaporou
+      expect(await router.grossVolumeOf(1)).to.equal(amount); // historico intacto
+    });
+
+    it("D4: self-payment NAO move recentVolumeOf (herda D1)", async function () {
+      const { projOwner, alice, psm, credit, router } = await loadFixture(deployFixture);
+      // rotaciona recipient p/ alice -> pagamento da alice vira self-payment.
+      await router.connect(projOwner).setAppRecipient(1, alice.address);
+      await psm.connect(alice).buy(1_000n * E6);
+      await credit.connect(alice).approve(await router.getAddress(), ethers.MaxUint256);
+
+      await router.connect(alice).pay(1, 100n * E18);
+      expect(await router.recentVolumeOf(1)).to.equal(0n);
+      expect(await router.grossVolumeOf(1)).to.equal(0n);
+    });
+
+    it("D4: setVolumeHalfLife só GOVERNANCE_ROLE; halfLife=0 reverte; emite evento", async function () {
+      const { admin, alice, router } = await loadFixture(deployFixture);
+      // nao-autorizado reverte
+      await expect(router.connect(alice).setVolumeHalfLife(1n)).to.be.reverted;
+      // halfLife = 0 reverte com custom error
+      await expect(router.connect(admin).setVolumeHalfLife(0n)).to.be.revertedWithCustomError(
+        router,
+        "ZeroHalfLife",
+      );
+      // governanca ajusta e emite (previous == default)
+      await expect(router.connect(admin).setVolumeHalfLife(7n * 24n * 60n * 60n))
+        .to.emit(router, "VolumeHalfLifeUpdated")
+        .withArgs(HALF_LIFE, 7n * 24n * 60n * 60n);
+      expect(await router.volumeHalfLife()).to.equal(7n * 24n * 60n * 60n);
+    });
+
+    it("D4: conservacao de valor intacta (recentVolumeOf nao muda nenhuma transferencia)", async function () {
+      const { projOwner, treasuryEoa, buybackEoa, grantsEoa, payer, psm, credit, funding, router } =
+        await loadFixture(fundedFixture);
+      await psm.connect(payer).buy(1_000n * E6);
+      await credit.connect(payer).approve(await router.getAddress(), ethers.MaxUint256);
+
+      const amount = 100n * E18;
+      const routerAddr = await router.getAddress();
+      const before = {
+        t: await credit.balanceOf(treasuryEoa.address),
+        b: await credit.balanceOf(buybackEoa.address),
+        g: await credit.balanceOf(grantsEoa.address),
+        f: await credit.balanceOf(await funding.getAddress()),
+        o: await credit.balanceOf(projOwner.address),
+        payer: await credit.balanceOf(payer.address),
+      };
+
+      await router.connect(payer).pay(1, amount);
+
+      const dT = (await credit.balanceOf(treasuryEoa.address)) - before.t;
+      const dB = (await credit.balanceOf(buybackEoa.address)) - before.b;
+      const dG = (await credit.balanceOf(grantsEoa.address)) - before.g;
+      const dF = (await credit.balanceOf(await funding.getAddress())) - before.f;
+      const dO = (await credit.balanceOf(projOwner.address)) - before.o;
+      const dPayer = before.payer - (await credit.balanceOf(payer.address));
+
+      expect(dPayer).to.equal(amount);
+      expect(dT + dB + dG + dF + dO).to.equal(amount);
+      expect(await credit.balanceOf(routerAddr)).to.equal(0n); // router nao retem
+      // e o novo sinal registrou o pagamento qualificado.
+      expect(await router.recentVolumeOf(1)).to.equal(amount);
+    });
+
     it("conservacao: soma das transferencias == amount (pagamento de terceiro)", async function () {
       const { projOwner, treasuryEoa, buybackEoa, grantsEoa, payer, psm, credit, funding, router } =
         await loadFixture(fundedFixture);
