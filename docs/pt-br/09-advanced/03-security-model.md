@@ -1,258 +1,98 @@
 # Modelo de segurança
 
-**Para quem é:** auditores, segurança ofensiva, pesquisadores.
-**Pré-requisitos:** conhecimento geral da arquitetura.
+**Para quem é:** auditor, dev avançado ou investidor técnico que quer o mapa de confiança do protocolo.
+**Pré-requisitos:** ter lido os contratos em `contracts/*.sol`; [Riscos e segurança](../06-for-investors/03-risk-and-security.md).
 
-Este documento consolida invariantes, superfícies de ataque identificadas e mitigações implementadas nos 12 contratos.
+O modelo de segurança se apoia em três pilares: **roles minimizadas** (cada poder concentrado no menor lugar possível), **invariantes** (classes de ataque impossíveis por construção) e **governança via Timelock** com anti-captura por supermaioria.
 
-## Invariantes globais
+## Mapa de roles
 
-### I1 — Cap do GOV
+O princípio é: cada capacidade sensível pertence a **um único** detentor, e esse detentor é o mais restrito possível.
 
-**Afirmação**: `GovernanceToken.totalSupply() <= CAP_SUPPLY = 100_000_000 * 1e18` em todo momento.
+| Role | Detentor em produção | Poder |
+|---|---|---|
+| `MINTER_ROLE` (CREDIT) | **só o `CreditPSM`** | mintar CREDIT (só contra USDC depositado) |
+| `BURNER_ROLE` (CREDIT) | **só o `CreditPSM`** | queimar CREDIT (só o próprio saldo, no `sell`) |
+| `REVENUE_NOTIFIER_ROLE` (ProjectFunding) | **só o `FeeRouterV2`** | contabilizar rev-share de um pagamento |
+| `GOVERNANCE_ROLE` (Treasury, Registry, FeeRouterV2, ProjectFunding) | **só o `CommunityTimelock`** | ajustar parâmetros, mover fundos, gerir projetos |
+| `PROPOSER_ROLE` / `CANCELLER_ROLE` (Timelock) | **só o `CommunityGovernor`** | enfileirar / cancelar operações aprovadas |
+| `EXECUTOR_ROLE` (Timelock) | `address(0)` (público pós-delay) | executar operação já vencida |
+| `DEFAULT_ADMIN_ROLE` (contratos econômicos) | **só o `CommunityTimelock`** | gerir roles (padrão OZ) |
 
-**Onde é protegida**: `GovernanceToken._update`. Para mint (from == 0), verifica `totalSupply + value <= CAP_SUPPLY`, senão reverte `CapExceeded`.
+Consequências desse desenho:
 
-**Relacionada**: `_maxSupply()` sobrescrito para retornar CAP_SUPPLY, garantindo que checks internos de ERC20Votes (uint208) também respeitem.
+- **Só o PSM cria ou destrói CREDIT.** Nenhum outro contrato — nem a governança — minta CREDIT. Isso é o que sustenta o lastro integral: CREDIT só nasce contra USDC.
+- **Só o FeeRouterV2 notifica receita.** O `ProjectFunding.notifyRevenue` é gated por `REVENUE_NOTIFIER_ROLE`; ninguém pode inflar artificialmente o acumulador de rev-share.
+- **Nenhuma EOA tem poder unilateral** sobre os contratos econômicos após o bootstrap. O deployer transfere tudo ao Timelock e renuncia às próprias roles.
 
-### I2 — Burn no consumo
+## Invariantes
 
-**Afirmação**: todo CREDIT consumido em pagamentos é queimado via `_burn` nativo, decrementando `totalSupply`. Nenhum caminho de `FeeRouter.pay` com `burnBps > 0` desvia para dead-address, treasury ou remint.
+O que uma invariante garante: um estado que **nunca** pode ocorrer, verificável em teste e por construção.
 
-**Onde é protegida**:
+### I-PSM1 — lastro integral, sem saque
 
-- `FeeRouter.pay` → `BurnTracker.burnAndRecord` → `CreditToken.burnByRole`.
-- `CreditToken.burnByRole` usa `_burn` nativo do ERC-20.
+```
+USDC.balanceOf(CreditPSM) >= mintedOutstanding   (em unidades normalizadas)
+```
 
-**Validação**: teste integrado valida decremento exato em `totalSupply` para cada `burned`.
+Não existe **nenhuma** função de saque do lastro no PSM — nem para governança. `buy` deposita USDC e minta 1:1; `sell` queima CREDIT (do próprio saldo do PSM, após `transferFrom` do vendedor — a role de burn nunca toca saldo de terceiro) e devolve USDC 1:1. Se a DAO quiser gastar, gasta da **fee** (via Treasury), nunca do lastro. O USDC do PSM é segregado do Treasury por construção.
 
-### I3 — Cap por rodada
+### Conservação no `pay`
 
-**Afirmação**: emissão de CREDIT por rodada nunca excede `capMax`. Burn por projeto por rodada nunca excede `maxBurnPerRoundPerProject` (se > 0).
+Cada `FeeRouterV2.pay(projectId, amount)` reparte `amount` **exatamente**:
 
-**Onde é protegida**:
+```
+amount = fee + revShare + toApp
+  fee     = amount * feeBps / 10000            (feeBps <= FEE_BPS_CAP = 500)
+  revShare = amount * revShareBpsOf(id) / 10000 (0 se a rodada não financiou)
+  toApp    = amount - fee - revShare
+```
 
-- `RewardDistributor.finalizeRound`: `totalEmission = min(rawEmission, capMax)`.
-- `BurnTracker.burnAndRecord`: reverte `SanityCapExceeded` se acumulado + amount > cap.
+Sem sobra, sem criação de valor. O teto duro `FEE_BPS_CAP` (5%) é enforced no `setFeeBps` e no constructor — a governança não consegue passar dele.
 
-### I4 — Governance-only exit
+### All-or-nothing no funding
 
-**Afirmação**: toda função state-changing que move fundos (Treasury, Staking, etc.) ou muda parâmetros econômicos exige `GOVERNANCE_ROLE` (ou Ownable2Step no GOV). Nenhuma EOA retém poder unilateral pós-handoff.
+Uma rodada só transfere capital ao owner quando `raised == target` (finaliza automaticamente no `invest` que fecha o alvo). Prazo vencido sem alvo → `Failed` → `refund` devolve 100%. O investidor nunca financia parcialmente um projeto que não atingiu a meta.
 
-**Onde é protegida**:
+### Gate de GOV stakeado
 
-- Setters nos contratos econômicos têm `onlyRole(GOVERNANCE_ROLE)`.
-- `GovernanceToken.mint` é `onlyOwner` (Ownable2Step).
-- `TeamVesting.revoke` é `onlyOwner`.
-- `DEFAULT_ADMIN_ROLE` foi transferido ao Timelock no deploy.
+`ProjectFunding.invest` e `claim` exigem `Staking.getWeight(msg.sender, projectId) > 0`. Materializa "quem tem GOV em stake no projeto participa da rodada e recebe a redistribuição". Sem stake, o rev-share não é perdido — fica acruado até o investidor voltar a stakear.
 
-### I5 — Anti-flashloan no voto
+### Anti-flashloan (staking e voto)
 
-**Afirmação**: flash-loan de GOV no bloco da votação não confere voting power. Flash-stake no bloco de `finalizeRound` não entra no cálculo de share.
+- **Voto:** o Governor usa `getPastVotes` (snapshot) — poder congelado em bloco anterior ao voto (I5). Ver [Voting power](../07-governance/02-voting-power.md).
+- **Staking:** pesos são historiografados por bloco (`Checkpoints.Trace208`); consultas históricas (`getWeightAt`) leem bloco passado, impedindo flash-staking no mesmo bloco de uma distribuição.
 
-**Onde é protegida**:
+## Governança via Timelock
 
-- `Governor.castVote` lê `GovernanceToken.getPastVotes(account, proposalSnapshot)`.
-- `RewardDistributor._calculateClaim` lê `Staking.getWeightAt(user, projectId, snapshotBlock)`.
-- `snapshotBlock` é gravado em bloco anterior ao consultado.
+Toda mudança governável percorre `Governor` (voto) → `Timelock` (execução com delay). Ver [Ciclo de uma proposta](../07-governance/01-proposal-lifecycle.md). Propriedades de segurança:
 
-### I6 — Lock mínimo
+- **Delay como última defesa.** O `minDelay` do Timelock (2 dias em produção) dá janela de reação mesmo se uma proposta maliciosa passar.
+- **Execução determinística.** O Timelock só executa os calldatas exatos da proposta aprovada (o hash de operação cobre targets/values/calldatas). Não há injeção de chamada não escaneada.
+- **Execução pública.** `executors = [address(0)]` — qualquer um executa uma operação vencida. Reduz o vetor de captura (não há executor privilegiado a comprometer) sem perda de segurança (o delay é o gate real).
 
-**Afirmação**: stake com lock abaixo de 14 dias reverte. Unstake antes do lock em projeto não-Removed reverte.
+## Supermaioria anti-captura
 
-**Onde é protegida**:
+Alterar quem detém roles no **Treasury** ou no **Timelock** decide quem pode esvaziar o cofre — o vetor clássico de captura de uma DAO. O `CommunityGovernor` fecha esse vetor:
 
-- `Staking.stake` / `increaseStake` (indiretamente) reverte com `LockTooShort`.
-- `Staking.unstake` reverte com `LockNotExpired` se `block.timestamp < unlockAt` e projeto não-Removed.
+- No `propose`, escaneia targets+calldatas. Qualquer `grantRole`/`revokeRole`/`renounceRole` com `target == TREASURY` ou `target == timelock()` marca a proposta inteira como `Supermajority`.
+- `_voteSucceeded` passa a exigir `forVotes >= 3 * againstVotes` **e** `forVotes > 0` (For ≥ 75% dos votos decisivos).
+- **Batch misto contamina tudo:** empacotar a chamada sensível junto de chamadas populares não dilui o requisito — a proposta inteira vira `Supermajority`.
+- **Chamadas aninhadas falham:** um contrato intermediário chamado pela proposta nunca é o Timelock, então a indireção não passa no AccessControl do Treasury/Timelock.
 
-### I7 — Projetos via governança
+## Padrões de implementação
 
-**Afirmação**: nenhum projeto entra em `Active` sem passar por `GOVERNANCE_ROLE` (Timelock). Operações dependentes de projeto (`FeeRouter.pay`, `BurnTracker.burnAndRecord`, `Staking.stake`) verificam `isActive` antes.
+- **CEI estrito** (Checks-Effects-Interactions) em todas as funções que movem tokens — effects antes de `safeTransfer`.
+- **`ReentrancyGuard`** nas funções state-changing do PSM, FeeRouterV2, ProjectFunding, Treasury e Staking (mesmo com tokens sem hooks conhecidos, é blindagem contra regressão).
+- **`SafeERC20`** em todas as transferências.
+- **Custom errors** em vez de strings, com args para diagnóstico off-chain.
+- Solidity 0.8.24 (aritmética checked; overflow reverte, não wrappa) + OpenZeppelin 5.0.2 pinado.
 
-**Onde é protegida**:
+## Estado de verificação
 
-- `ProjectRegistry.registerProject` e `activateProject` são `onlyRole(GOVERNANCE_ROLE)`.
-- Callers verificam `isActive` e revertem com `ProjectNotActive`.
-
-## Superfícies de ataque e mitigações
-
-### Reentrancy
-
-**Vetor**: ERC-20 custom com callbacks (ERC-777 legacy, tokens maliciosos) podendo reentrar em `transfer` / `approve`.
-
-**Mitigação**: `ReentrancyGuard` em todas as funções que movem valor. Além disso, CEI estrito — effects antes de interactions.
-
-**Contratos com guard**:
-
-- `Treasury.transfer`, `batchTransfer`, `payRebates`, `executeBuyback`, `sweepETH`.
-- `Staking.stake`, `increaseStake`, `extendLock`, `unstake`, `unstakeAll`.
-- `BurnTracker.burnAndRecord`.
-- `RewardDistributor.claim`, `claimMany`.
-- `FeeRouter.pay`.
-- `UserSubsidy.claim`, `closeCampaign`.
-
-### Integer overflow / underflow
-
-**Vetor**: precisões de ponto flutuante em cálculos de weight, share, emission.
-
-**Mitigação**:
-
-- Solidity 0.8.24 — checked arithmetic por default.
-- `SafeCast` explícito em conversões que podem perder bits.
-- Ordem das operações: multiplicar antes de dividir (preservar precisão).
-- Bounds analíticos documentados nos contratos (ex: peso máximo em `Staking` cabe em uint208 com folga).
-
-### Denial of Service via loops
-
-**Vetor**: funções com loop sobre arrays controlados pelo caller.
-
-**Mitigação**:
-
-- `Treasury.batchTransfer` / `payRebates`: arrays externos, mas emissor é governança (Timelock) — sem ataque prático.
-- `RewardDistributor.claimMany`: arrays externos, mas caller paga o gas.
-- Nenhuma iteração sobre "todos os projetos" ou "todos os stakers" em caminho on-chain.
-
-### Front-running
-
-**Vetor**: atacante observa mempool, submete tx com gas maior para capturar valor.
-
-**Mitigação**:
-
-- Governance com `votingDelay` de ~1d — front-running direto de voto não funciona (voto via snapshot passado).
-- `finalizeRound` é permissionless mas idempotente — front-run não traz vantagem (qualquer um pode finalizar, resultado é o mesmo).
-- `FeeRouter.pay` não é atacável via FR — `user` e `amount` são fixos, split é determinístico.
-
-### Ataques de sanity cap / cap econômico
-
-**Vetor**: projeto malicioso inflaciona burn para capturar share.
-
-**Mitigação**:
-
-- Sanity cap por `(rodada, projeto)` — `SanityCapExceeded` se exceder.
-- `capMax` global na emissão — clampa mesmo com burn absurdo.
-- Probation penalty de 25% em projetos novos (primeiros 30 dias).
-
-### Ataques via colateral reutilizável
-
-**Vetor**: owner de projeto tenta reutilizar o colateral para múltiplas listagens.
-
-**Mitigação**: cada `registerProject` exige colateral separado pullado via `transferFrom`. Saldos são custodiados por projeto no Registry.
-
-### Ataques via transferência de ownership
-
-**Vetor**: transferência acidental ou maliciosa de ownership (GOV, projeto, vesting).
-
-**Mitigação**: `Ownable2Step` em GovernanceToken e TeamVesting; 2-step próprio em ProjectRegistry.transferProjectOwnership. `newOwner` precisa aceitar explicitamente.
-
-### Ataques via recuperação de tokens perdidos
-
-**Vetor**: tokens enviados para contratos errados (ex: ERC-20 para `Staking` em vez de `stake`).
-
-**Mitigação**: **nenhuma no v1**. Decisão consciente — adicionar `rescueTokens` criaria backdoor governance-accessível. Tokens perdidos ficam perdidos (e o custo educa usuários). Em caso de perda significativa, a DAO pode votar migração.
-
-### Ataques via upgrade
-
-**Vetor**: contrato upgradável com proxy pode ser trocado maliciosamente.
-
-**Mitigação**: **contratos não são upgradáveis**. Nenhum proxy. Qualquer substituição exige deploy novo + proposta para migrar roles/ownership.
-
-### Ataques via time / timestamp
-
-**Vetor**: miners/sequencers manipulam `block.timestamp`.
-
-**Mitigação**:
-
-- Lock, probation e vesting dependem de timestamps — manipulação em ±15s é irrelevante para janelas de dias/semanas.
-- Governance usa `block.number` (clock), não timestamp — mais resistente.
-
-### Ataques via signature replay
-
-**Vetor**: assinaturas EIP-712 reexecutadas em outro contrato / chain.
-
-**Mitigação**:
-
-- Domain separator inclui `chainId` via OZ `EIP712` base.
-- `nonces` em `ERC20Permit` e `ERC20Votes` invalidam reuso.
-- Governor `castVoteBySig` usa nonce próprio.
-
-## Threat model
-
-### Atacante externo sem GOV
-
-- Não pode propor (threshold = 10k GOV delegado).
-- Pode chamar `FeeRouter.pay` (se tiver CREDIT e approve) — comportamento esperado.
-- Pode chamar `finalizeRound` — comportamento esperado.
-- Pode chamar `claim` — só recebe se tem peso em `(user, projectId)` no snapshot.
-- Pode enviar ETH ao Treasury — doação.
-
-**Ataque prático**: nenhum direto.
-
-### Atacante com GOV mas abaixo do threshold
-
-- Pode votar em propostas (se delegou).
-- Pode stakar em projetos.
-- Pode `delegate` para outrem.
-
-**Ataque prático**: coordenação com outros holders — comportamento de governança normal.
-
-### Atacante com GOV acima do threshold (~10k)
-
-- Pode propor mudanças de parâmetro dentro dos bounds.
-- Pode propor registro de projetos (se tiver colateral aprovado).
-- Proposta ainda precisa de quorum (4% do supply) + For > Against.
-
-**Ataque prático**: spam de propostas — custa gas da submissão + pressão social/política.
-
-### Atacante com > 4% do supply
-
-- Pode atingir quorum sozinho se 100% do resto votar contra ou se omitir.
-- Ainda precisa de For > Against — outros holders podem bloquear.
-
-**Mitigação**: distribuição ampla do GOV no bootstrap (nenhum single holder > 25%).
-
-### Atacante com > 50% do supply (governance capture)
-
-- Pode aprovar qualquer proposta dentro dos bounds on-chain.
-- **Não pode** quebrar invariantes imutáveis (cap, MIN_LOCK, bounds de parâmetros).
-- **Não pode** drenar fundos de stakers com lock vigente.
-
-**Mitigação residual**: delay do Timelock dá 2 dias para holders não-atacantes responderem (saírem de posição, coordenarem proposta contrária, gritarem publicamente).
-
-## Auditoria estática
-
-Slither 0.11.5 rodado em todos os contratos. Resultados salvos em `audit/slither/`:
-
-- `<Contract>.txt` — versão completa (inclui warnings em libs OZ).
-- `<Contract>-projectonly.txt` — filtrado apenas para código do projeto.
-
-Status no momento deste doc: **zero findings high/medium** no código do projeto. Findings low/informational documentados e aceitos.
-
-## Suite de testes
-
-- Total: 462+ testes.
-- Coverage: 100% statements, 99.84% lines.
-- Testes integrados end-to-end em `test/ignition/Dao.test.ts`.
-- Simulação econômica em `scripts/simulation/` — 52 rodadas × 3 cenários (base, crescimento, death spiral).
-
-## Runbook de incidente
-
-Se descoberto bug pós-mainnet:
-
-1. **Severidade crítica (fundos em risco)**:
-   - Informar signatários multi-sig.
-   - Preparar proposta de emergência (mesmo que delays sejam dolorosos — não há botão de pause).
-   - Comunicar publicamente via canais oficiais.
-   - Se contratos dependentes permitem mitigação (ex: revogar role de contrato comprometido), proposta rápida.
-   - Bug bounty critical pagável pós-confirmação.
-
-2. **Severidade média**:
-   - Proposta via governança regular (~10 dias).
-   - Documentação pública + changelog.
-
-3. **Severidade baixa**:
-   - Tracking issue no repo.
-   - Fix em próximo deploy (se houver) ou documentado como aceito.
+- 872 testes passando; slither sem findings high/medium.
+- **Pendências de mainnet:** auditoria externa + parecer jurídico sobre o rev-share (ver [Riscos e segurança](../06-for-investors/03-risk-and-security.md)). Até lá, só testnet/local.
 
 ---
 
-Ver [Riscos e segurança (visão investidor)](../06-for-investors/03-risk-and-security.md) para abordagem menos técnica dos mesmos tópicos.
+**Próximo →** [FAQ](../10-reference/01-faq.md)

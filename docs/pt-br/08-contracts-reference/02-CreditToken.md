@@ -1,129 +1,92 @@
-# CreditToken
+# CreditToken (CREDIT)
 
-**Para quem é:** devs integrando com o token utilitário ou auditores.
-**Pré-requisitos:** [Dual-token economy](../02-core-concepts/01-dual-token-economy.md).
+**Para quem é:** devs/auditores.
 
-## Visão rápida
+Contrato: `contracts/CreditToken.sol` · Solidity 0.8.24 · OpenZeppelin 5.
 
-Token ERC-20 utilitário, queimado no consumo dentro dos apps. Supply elástico sem cap hardcoded — a inflação é controlada economicamente pelo `RewardDistributor` (único holder de `MINTER_ROLE` em produção), que aplica a fórmula `min(max(alpha*burn, floor), capMax)` por rodada.
+## Papel
 
-Queima em três caminhos: `burn` (self), `burnFrom` (com allowance), `burnByRole` (sem allowance, role-gated). O caminho `burnByRole` existe para habilitar burn atômico pelo `BurnTracker` sem exigir approve prévio do usuário (UX de 1 tx no app).
+Token utilitário ERC-20 do protocolo — o **trilho de pagamento estável** do modelo vigente (remodel 2026-07-08). CREDIT vale 1:1 USDC porque só entra e sai de circulação pelo [CreditPSM](03-CreditPSM.md): `buy` minta contra USDC depositado, `sell` queima devolvendo USDC. Sem cap hardcoded — a expansão/contração do supply é 100% lastreada no PSM.
 
-## Herança
+No modelo vigente, **apenas o `CreditPSM` detém `MINTER_ROLE` e `BURNER_ROLE`**. Nenhum outro contrato cunha ou queima CREDIT. O caminho `burnByRole` (queima sem allowance) é usado pelo PSM para queimar CREDIT que já está no próprio saldo do PSM (após o `transferFrom` do vendedor) — a role nunca toca saldo de terceiros.
 
-```
-ERC20 (OZ)
-ERC20Burnable (OZ)
-AccessControl (OZ)
-```
+Herança: `ERC20`, `ERC20Burnable`, `AccessControl`.
 
-## Parâmetros e storage
+## Interface pública
+
+### Roles / storage
 
 | Nome | Tipo | Valor | Descrição |
 |---|---|---|---|
-| `MINTER_ROLE` | `bytes32` constant | `keccak256("MINTER_ROLE")` | Role para cunhar |
-| `BURNER_ROLE` | `bytes32` constant | `keccak256("BURNER_ROLE")` | Role para queimar sem allowance |
-| `genesisMinted` | `bool` | `false` no deploy | Flag one-shot; previne re-execução de `mintGenesis` |
-| `name` | ERC-20 | "Web3Community Credit" (produção) | — |
-| `symbol` | ERC-20 | "CREDIT" (produção) | — |
+| `MINTER_ROLE` | `bytes32 constant` | `keccak256("MINTER_ROLE")` | Autoriza `mint`. Produção: apenas o `CreditPSM`. |
+| `BURNER_ROLE` | `bytes32 constant` | `keccak256("BURNER_ROLE")` | Autoriza `burnByRole` (queima sem allowance). Produção: apenas o `CreditPSM`. |
+| `genesisMinted` | `bool public` | `false` no deploy | Flag one-shot; impede re-execução de `mintGenesis`. |
 
-Sem cap hardcoded.
+### Constructor
 
-## Roles e permissões
+```solidity
+constructor(string name_, string symbol_, address initialAdmin)
+```
+`initialAdmin` recebe `DEFAULT_ADMIN_ROLE`. Reverte com `ZeroAddress` se `initialAdmin == 0`. Nada é cunhado no constructor.
 
-| Role | Em produção concedida a |
-|---|---|
-| `DEFAULT_ADMIN_ROLE` | `CommunityTimelock` (após handoff) |
-| `MINTER_ROLE` | `RewardDistributor` |
-| `BURNER_ROLE` | `BurnTracker` |
+### Funções
 
-## Funções externas
+```solidity
+function mintGenesis(address to, uint256 amount) external onlyRole(DEFAULT_ADMIN_ROLE)
+```
+Cunhagem única de genesis (`amount` e `to` são parâmetros, sem hardcode). One-shot via `genesisMinted`. **Não** consome `MINTER_ROLE`. Emite `GenesisMinted` + `Transfer(0, to, amount)`.
 
-### `mintGenesis(address to, uint256 amount)`
+```solidity
+function mint(address to, uint256 amount, string calldata tag) external onlyRole(MINTER_ROLE)
+```
+Cunha `amount` para `to`. Sem cap on-chain. Produção: chamado só pelo `CreditPSM` em `buy` (tag `"psm:buy"`). Emite `Minted` + `Transfer(0, to, amount)`.
 
-Cunhagem única de "genesis" (em produção: 10M CREDIT para o Treasury). Flag `genesisMinted` impede re-execução.
+```solidity
+function burnByRole(address from, uint256 amount, string calldata tag) external onlyRole(BURNER_ROLE)
+```
+Queima `amount` de `from` **sem** consumir allowance. Produção: chamado só pelo `CreditPSM` em `sell` (tag `"psm:sell"`), sempre sobre o saldo do próprio PSM. Emite `BurnedByRole` + `Transfer(from, 0, amount)`.
 
-- **Quem chama**: `DEFAULT_ADMIN_ROLE`.
-- **Reverte**:
-  - `GenesisAlreadyMinted` se já chamado.
-  - `ZeroAddress` / `ZeroAmount`.
-- **Eventos**: `GenesisMinted(to, amount)` + `Transfer(0, to, amount)`.
+### Herdadas relevantes
 
-### `mint(address to, uint256 amount, string calldata tag)`
-
-Cunha `amount` para `to`. Não aplica cap (responsabilidade do caller).
-
-- **Quem chama**: `MINTER_ROLE` (em produção, `RewardDistributor`).
-- **Reverte**: `ZeroAddress`, `ZeroAmount`.
-- **Eventos**: `Minted(to, amount, tag)` + `Transfer(0, to, amount)`.
-
-### `burnByRole(address from, uint256 amount, string calldata tag)`
-
-Queima `amount` do saldo de `from` **sem** consumir allowance. Usado pelo `BurnTracker` para queimar atomicamente em `burnAndRecord`.
-
-- **Quem chama**: `BURNER_ROLE` (em produção, `BurnTracker`).
-- **Reverte**: `ZeroAddress`, `ZeroAmount`, `ERC20InsufficientBalance`.
-- **Eventos**: `BurnedByRole(operator, from, amount, tag)` + `Transfer(from, 0, amount)`.
-
-### Funções herdadas relevantes
-
-- **ERC-20**: `transfer`, `transferFrom`, `approve`, `balanceOf`, `allowance`, `totalSupply`.
-- **ERC20Burnable**: `burn(uint256)` (self-burn), `burnFrom(address, uint256)` (via allowance).
-- **AccessControl**: `grantRole`, `revokeRole`, `renounceRole`, `hasRole`, `getRoleAdmin`, `supportsInterface`.
+- **ERC-20:** `transfer`, `transferFrom`, `approve`, `balanceOf`, `allowance`, `totalSupply`, `name`, `symbol`, `decimals`.
+- **ERC20Burnable:** `burn(uint256)` (self-burn), `burnFrom(address, uint256)` (via allowance).
+- **AccessControl:** `grantRole`, `revokeRole`, `renounceRole`, `hasRole`, `getRoleAdmin`, `supportsInterface`.
 
 ## Eventos
 
-| Evento | Emitido em | Parâmetros indexados |
+| Evento | Emitido em | Indexados |
 |---|---|---|
-| `GenesisMinted(to, amount)` | `mintGenesis` | `to` |
-| `Minted(to, amount, tag)` | `mint` | `to` |
-| `BurnedByRole(operator, from, amount, tag)` | `burnByRole` | `operator`, `from` |
-| `Transfer(from, to, value)` | herdado | `from`, `to` |
-| `RoleGranted/RoleRevoked/RoleAdminChanged` | AccessControl | — |
+| `GenesisMinted(address to, uint256 amount)` | `mintGenesis` | `to` |
+| `Minted(address to, uint256 amount, string tag)` | `mint` | `to` |
+| `BurnedByRole(address operator, address from, uint256 amount, string tag)` | `burnByRole` | `operator`, `from` |
+| `Transfer` / `Approval` | herdados ERC-20 | — |
+| `RoleGranted` / `RoleRevoked` / `RoleAdminChanged` | `AccessControl` | conforme OZ |
 
-## Erros customizados
+## Erros
 
 | Erro | Quando ocorre |
 |---|---|
-| `ZeroAddress()` | `to` ou `from` é zero em operações que exigem válido |
+| `ZeroAddress()` | `to`/`from`/`initialAdmin` é `address(0)` |
 | `ZeroAmount()` | `amount == 0` |
-| `GenesisAlreadyMinted()` | `mintGenesis` segunda tentativa |
-| OZ | `ERC20InsufficientBalance`, `ERC20InsufficientAllowance`, `AccessControlUnauthorizedAccount`, etc. |
+| `GenesisAlreadyMinted()` | segunda chamada a `mintGenesis` |
+| herdados OZ | `ERC20InsufficientBalance`, `ERC20InsufficientAllowance`, `AccessControlUnauthorizedAccount`, etc. |
+
+## Roles
+
+| Role | Produção |
+|---|---|
+| `DEFAULT_ADMIN_ROLE` | `CommunityTimelock` (após handoff). Gerencia as demais roles via proposta. |
+| `MINTER_ROLE` | Apenas o `CreditPSM`. |
+| `BURNER_ROLE` | Apenas o `CreditPSM`. |
 
 ## Invariantes
 
-- **Genesis one-shot**: `mintGenesis` só executa uma vez por lifetime do contrato.
-- **`MINTER_ROLE` gate**: `mint` exige role; em produção, só `RewardDistributor`.
-- **`BURNER_ROLE` gate**: `burnByRole` exige role; em produção, só `BurnTracker`.
-- **Supply elástico**: cresce com `mint`/`mintGenesis`; cai com `burn`/`burnFrom`/`burnByRole`. Sem cap hardcoded.
-- **CEI aplicado**: `burnByRole` é checks → effect (`_burn` nativo) → sem interaction externa. Sem callback no `_burn`.
+- **Genesis one-shot:** `mintGenesis` executa no máximo uma vez.
+- **Lastro via PSM:** no modelo vigente só o `CreditPSM` cunha/queima CREDIT, o que mantém `totalSupply` de CREDIT em circulação alinhado ao USDC retido no PSM (ver invariantes I-PSM1/I-PSM2 do [CreditPSM](03-CreditPSM.md)).
+- **`burnByRole` seguro:** só o PSM detém a role e só queima o próprio saldo; o gate é revogável pelo admin (Timelock).
+- **CEI em `burnByRole`:** checks → `_burn` → sem interação externa.
+- **CREDIT não vota:** não herda `ERC20Votes` (separação governança × uso operacional). Não herda `ERC20Permit`.
 
-## Observações importantes
+## Ver também
 
-### Por que `burnByRole` em vez de `burnFrom` com allowance?
-
-`FeeRouter.pay` → `BurnTracker.burnAndRecord` → `CreditToken.burnByRole` é um caminho de **1 tx** do usuário. Se fosse via `burnFrom`, usuário precisaria:
-
-1. `approve(burnTracker, amount)` — tx 1.
-2. Chamar alguma função que acione `burnTracker.burnFrom(user, ...)` — tx 2.
-
-Quebraria UX e abriria janela de front-run entre approve e burn. O caminho com role é seguro porque a role só é concedida a contratos específicos via proposta + Timelock.
-
-O caminho via allowance (`burnFrom`) continua disponível para quem quer controle explícito de consentimento.
-
-### Não herda `ERC20Permit` nem `ERC20Votes`
-
-Decisão consciente para v1:
-
-- CREDIT não vota. Se votasse, misturaria governança com uso operacional.
-- Permit pode ser útil mas não é necessário no fluxo atual (allowance na tx do app).
-
-Se permit virar necessário em v2, basta adicionar `ERC20Permit` como extensão preservando o storage layout.
-
-### Gerenciamento de roles
-
-O `DEFAULT_ADMIN_ROLE` tem poder de conceder/revogar `MINTER_ROLE` e `BURNER_ROLE`. Em produção, esse poder é do Timelock — qualquer mudança de minter/burner passa por proposta.
-
----
-
-**Ver também**: [RewardDistributor](07-RewardDistributor.md), [BurnTracker](06-BurnTracker.md).
+[CreditPSM](03-CreditPSM.md) · [FeeRouterV2](06-FeeRouterV2.md) · [GovernanceToken](01-GovernanceToken.md)

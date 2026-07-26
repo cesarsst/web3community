@@ -14,15 +14,17 @@
     "test:gas": "REPORT_GAS=true hardhat test",
     "coverage": "hardhat coverage",
     "node": "hardhat node",
-    "deploy:local": "hardhat ignition deploy ./ignition/modules/Dao.ts --network localhost",
-    "deploy:sepolia": "hardhat ignition deploy ./ignition/modules/Dao.ts --network sepolia",
-    "sim": "hardhat run scripts/simulation/economicSim.ts",
+    "deploy:local": "DEPLOY_USDC_MOCK=true hardhat ignition deploy ./ignition/modules/Dao.ts --parameters ignition/parameters/dev.json --network localhost",
+    "deploy:sepolia": "hardhat ignition deploy ./ignition/modules/Dao.ts --parameters ignition/parameters/production.json --network sepolia",
     "lint": "npm run lint:sol && npm run lint:ts",
     "lint:sol": "bash scripts/lint-sol.sh",
     "lint:ts": "eslint --no-error-on-unmatched-pattern '{scripts,test,ignition}/**/*.ts' 'hardhat.config.ts'",
     "format": "prettier --write '**/*.{ts,js,json,md,sol}'",
     "format:check": "prettier --check '**/*.{ts,js,json,md,sol}'",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "deploy:prod-sim": "hardhat run scripts/deploy-prod-sim.ts --network localhost",
+    "sync:frontend": "bash scripts/sync-frontend.sh",
+    "deploy:prod-sim:sync": "npm run deploy:prod-sim && npm run sync:frontend"
   },
   "devDependencies": {
     "@nomicfoundation/hardhat-ignition-ethers": "^0.15.0",

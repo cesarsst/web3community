@@ -9,8 +9,256 @@ de segurança (invariantes, access control, static analysis) ficam em `Security`
 
 ## [Unreleased]
 
+### Security
+
+- **Integridade de sinal no `FeeRouterV2` — mitigações D1+D2 (wash-payment).**
+  Parecer `audit/economist/2026-07-10-wash-signal-integrity.md`: o modelo era
+  a prova de roubo, mas os sinais derivados (GMV, rev-share, pressao de buyback)
+  eram falsificaveis por `pay()` circular a 2,5%/ciclo. **D1 — guarda
+  anti-self-payment:** quando `msg.sender` e o owner ou o `appRecipient` do
+  projeto, o split de valor ocorre normalmente (conservacao intacta) mas o
+  pagamento e marcado `selfPayment` e NAO credita os contadores de sinal. **D2 —
+  `uniquePayersOf`:** novo contador de pagadores DISTINTOS por projeto (+ mapping
+  `hasPaid`) — e este o numero que a UI/automacao deve ler no lugar da soma bruta
+  `grossVolumeOf`, pois um loop de dois enderecos nao o move. Evento
+  `PaymentRouted` ganhou o campo `bool selfPayment` no fim (ABI mudou — resync
+  frontend/SDK no merge). **D3 — piso de stake para investir:** o gate de
+  `ProjectFunding.invest` passa de `getWeight > 0` para
+  `getWeight >= minInvestWeight` (novo storage governavel, default `100e18` = ~100
+  GOV no lock minimo; setter `setMinInvestWeight` gated GOVERNANCE_ROLE; novo error
+  `InsufficientStakeWeight`). Gate ASSIMETRICO: o `claim` mantem `> 0` — o piso e
+  barreira de ENTRADA (anti-sybil ao investir), nao trava de saida, para nao punir
+  quem investiu e depois reduziu o stake. E o D3 que força o atacante a imobilizar
+  GOV real por carteira, encarecendo o sybil (ver `audit/economist/sim/sybil-cost-sim.js`).
+  **D4 — volume com decaimento:** nova view `FeeRouterV2.recentVolumeOf(projectId)`
+  = volume com decaimento exponencial (meia-vida `volumeHalfLife`, default 30 dias,
+  governavel via `setVolumeHalfLife`; aproximacao sem float = meias-vidas inteiras
+  por shift + interpolacao linear, erro max ~6%; error `ZeroHalfLife`). `grossVolumeOf`
+  fica INTACTO (soma eterna, so auditoria); e o `recentVolumeOf` que a UI/automacao
+  passam a ler p/ sinal — wash em rajada evapora e automacao indexada a volume nao e
+  drenavel por historico falso. **As 4 camadas (D1-D4) do parecer estao implementadas;
+  o vetor de wash-payment esta fechado.** ABI mudou (nova view + evento — resync
+  frontend/SDK). 386 testes passando; slither sem findings high/medium novos.
+
 ### Changed
 
+- **REMODEL 2026-07-08 — payment rail + funding por rev-share.** O protocolo
+  abandona o modelo burn-to-mint (taxa efetiva de ~80% sobre a receita do app;
+  bypass era estrategia dominante — parecer
+  `audit/economist/2026-07-08-feerouter-bypass.md`) e passa a operar como
+  trilho de pagamento com taxa competitiva (2,5%) e investimento por fatia de
+  receita real. CREDIT vira stablecoin de pagamento (1:1 USDC, lastro
+  integral no `CreditPSM`); a renda do investidor passa a vir de receita dos
+  apps (`ProjectFunding`), nao de emissao; GOV captura valor via buyback
+  financiado pela fee (`FeeRouterV2`). Contratos do modelo antigo
+  (`FeeRouter` V1, `BurnTracker`, `RewardDistributor`/`V2`,
+  `LiquidityGauge`) permanecem deployados como legado, sem papel no fluxo
+  novo.
+
+### Added
+
+- **`CreditPSM` — Peg Stability Module (remodel 2026-07-08).**
+  `contracts/CreditPSM.sol`: `buy()`/`sell()` convertem USDC<->CREDIT 1:1
+  (escala 6<->18 dec; poeira reverte `DustAmount`). Lastro 100% retido no
+  contrato, sem NENHUMA funcao de saque (nem governanca) — I-PSM1. Burn de
+  resgate sempre sobre saldo proprio (`BURNER_ROLE` nunca toca terceiros).
+  `mintedOutstanding` com clamp conservador para CREDIT de origem externa.
+
+- **`ProjectFunding` — captacao + rev-share (remodel 2026-07-08).**
+  `contracts/ProjectFunding.sol`: dono de projeto Active abre UMA rodada
+  (alvo >= `minTarget`, rev-share 100–3000 bps, prazo 1–90d). Investir e
+  sacar exigem GOV stakeado no projeto. All-or-nothing: alvo batido paga o
+  dono e ativa `revShareBpsOf`; prazo vencido -> `closeExpiredRound`
+  (permissionless) -> `refund` integral. Distribuicao O(1) via acumulador
+  MasterChef; claims nunca expiram. `notifyRevenue` restrito a
+  `REVENUE_NOTIFIER_ROLE` (FeeRouterV2).
+
+- **`FeeRouterV2` — trilho de pagamento (remodel 2026-07-08).**
+  `contracts/FeeRouterV2.sol`: `pay()` com fee default 250 bps (teto duro
+  `FEE_BPS_CAP = 500`), split interno 40/40/20 (treasury/buyback/grants,
+  recipients configuraveis), rev-share descontado no ato e o restante
+  (~89,5–97,5%) direto pro `appRecipient`. `grossVolumeOf` como metrica
+  on-chain de investidor; `previewPay` para UI; `PaymentRouted` detalha as
+  5 parcelas.
+
+- **`scripts/deploy-remodel.ts`** — deploy dos tres contratos sobre ambiente
+  `deploy-prod-sim`, wiring de roles e persistencia em `dev_addresses.json`.
+
+- **`test/Remodel.test.ts`** — 14 testes: PSM (escala, lastro, dust, resgate
+  acima do lastro), Funding (gates, bounds, all-or-nothing, refund, claim
+  pro-rata) e RouterV2 (split exato, teto de fee, gates).
+
+- **`CreditPriceOracle` — adapter de producao do `ICreditPriceOracle` (FFP).**
+  `contracts/CreditPriceOracle.sol` (novo, SPDX `GPL-2.0-or-later` por conter
+  port do `TickMath.getSqrtRatioAtTick` da Uniswap v3-core, anotado no header):
+  pipeline `pool.observe([secondsAgo, 0])` -> tick medio aritmetico
+  (arredondado para -infinito, convencao OracleLibrary) -> exponenciacao
+  binaria `1.0001^tick` em Q128 -> quote (port de `OracleLibrary.getQuoteAtTick`
+  usando `Math.mulDiv` do OZ 5.x, com ramo Q128 para `sqrtRatio > uint128.max`)
+  -> escala USDC->18 dec -> multiplicacao pelo Chainlink USDC/USD. Sem
+  owner/setters: pool, credit, usdc, feed, ordem do par e fatores de escala
+  sao todos `immutable` (troca = novo deploy + `Treasury.setPriceOracle`).
+  Ordem token0/token1 detectada no constructor via `pool.token0()` e validada
+  (`PoolTokenMismatch`); decimais lidos de `IERC20Metadata.decimals()`
+  (> 18 reverte `UnsupportedDecimals`). Chainlink: staleness max 6h (igual
+  `Treasury.CHAINLINK_MAX_STALENESS`), banda fixa `[9900, 10100]` bps
+  (defesa em profundidade para `recordDailyPrice`, que nao passa pelo
+  `_enforceChainlinkSanity` do Treasury); feed `address(0)` = fallback
+  explicito 1 USDC = 1 USD. Tick medio validado em int56 contra
+  `[MIN_TICK, MAX_TICK]` ANTES do cast para int24 (elimina truncamento
+  silencioso do OracleLibrary canonico). Custom errors: `ZeroAddress`,
+  `PoolTokenMismatch`, `UnsupportedDecimals`, `ZeroTwapWindow`,
+  `ObserveFailed(bytes)`, `InvalidTick`, `ChainlinkStale`,
+  `InvalidChainlinkAnswer`, `UsdcDepegDetected`. Suporte:
+  `contracts/interfaces/IUniswapV3Pool.sol` ganha `token0()`/`token1()`;
+  `contracts/test/UniswapV3PoolMock.sol` estendido de forma retrocompativel
+  (`setTokens`, `setMeanTick`, `setRawTickCumulatives`, `observe` view);
+  mock novo `contracts/test/ERC20DecimalsMock.sol` (decimals configuravel).
+  Testes: `test/CreditPriceOracle.test.ts` com 25 testes — espelho exato de
+  TickMath/getQuoteAtTick em bigint (asserts de igualdade exata, nao
+  aproximada), CREDIT como token0 E token1, conversao 6->18 dec, bordas de
+  tick, sanity Chainlink, e integracao Treasury completa (`setPriceOracle` +
+  `recordDailyPrice` + bootstrap MA90 + `executeBuyback` real com burn).
+- **Ignition — Fase F opcional: deploy da infra CLP Fase 1 via env vars.**
+  `ignition/modules/Dao.ts` ganha `DEPLOY_CLP_PHASE1=true` (deploya
+  `LiquidityGauge` + `RewardDistributorV2`, admin = Timelock; novos
+  parametros `uniswapV3Staker`/`positionManager` com default ZeroAddress =
+  revert fail-fast, mesmo padrao do `teamVestingBeneficiary`) e flag
+  separada `DEPLOY_CLP_ORACLE=true` (deploya `CreditPriceOracle` com
+  parametros `creditUsdcPool`/`usdcUsdFeed`; address(0) reverte no
+  constructor — sem deploy silencioso quebrado; feed address(0) e valido).
+  Env vars em vez de parametros pelo mesmo motivo documentado na Fase E
+  (RuntimeValue sempre truthy impede branching build-time). NENHUMA role e
+  concedida pelo modulo (MINTER_ROLE do V2, whitelist do gauge e
+  `setPriceOracle` ficam para propostas DAO). Retorno do modulo ganha
+  campos opcionais `liquidityGauge`/`distributorV2`/`creditPriceOracle`.
+
+### Security
+
+- **`CommunityGovernor` — supermaioria de 75% para propostas contendo
+  `Treasury.removePOL`.** Implementa a politica de exit do POL registrada
+  em `docs/governance/fase1-2-pol.md` (antes apenas norma social). Novos:
+  `enum ProposalType { Standard, Supermajority }`, constante
+  `REMOVE_POL_SELECTOR = Treasury.removePOL.selector` (= `0x6a71d4b3`,
+  derivada pelo compilador — sincronia garantida), `TREASURY` immutable
+  (3o argumento do constructor; `address(0)` aceito em dev = scan
+  desativado), mapping `proposalRequiresSupermajority` e evento
+  `ProposalTypeSet` (emitido em TODO propose, Standard e Supermajority,
+  para indexacao). Override de `propose()` roda `super.propose` primeiro e
+  depois escaneia targets+calldatas: `target == TREASURY &&
+calldatas[i].length >= 4 && bytes4(calldatas[i]) == REMOVE_POL_SELECTOR`
+  marca a proposta INTEIRA (batch misto contamina — evita diluir o
+  requisito empacotando removePOL com calls populares; guard `length >= 4`
+  evita falso-positivo do pad-a-zeros do `bytes4()`). Override de
+  `_voteSucceeded`: Supermajority exige `forVotes > 0 && forVotes >= 3 *
+againstVotes` (75% inclusivo dos votos decisivos For/Against, Abstain
+  fora da razao como no CountingSimple; `forVotes > 0` fecha o edge 0/0
+  com quorum so de Abstain). Conservador por design: ">25% do POL" nao e
+  mensuravel no propose (liquidez muda entre propose e execute), entao
+  TODA proposta com removePOL exige 75%. `ignition/modules/Dao.ts` passa
+  `treasury` ao Governor (Treasury ja era deployado antes na fase A).
+  ANTI-BYPASS de roles (review adversarial): o scan tambem marca como
+  Supermajority QUALQUER call de gestao de roles do `IAccessControl`
+  (`grantRole`/`revokeRole`/`renounceRole`; constantes
+  `GRANT_ROLE_SELECTOR`/`REVOKE_ROLE_SELECTOR`/`RENOUNCE_ROLE_SELECTOR`)
+  com target no TREASURY ou no proprio Timelock (`timelock()`) — sem
+  isso, uma proposta de maioria simples poderia conceder
+  GOVERNANCE_ROLE/DEFAULT_ADMIN_ROLE do Treasury (ou PROPOSER_ROLE do
+  Timelock) a um terceiro que chamaria `removePOL` direto, refutando a
+  garantia de 75% (em producao o Timelock detem DEFAULT_ADMIN_ROLE do
+  Treasury, Dao.ts fase C.2). Nested calls continuam falhando no
+  AccessControl (msg.sender nunca e o Timelock).
+  Testes: `test/CommunityGovernor.supermajority.test.ts` (21 testes:
+  74/26 Defeated vs 76/24 Succeeded, fronteira EXATA 75/25 Succeeded e
+  75k-1wei Defeated, supermaioria na razao mas abaixo do quorum
+  Defeated, quorum so com Abstain Defeated (guard `forVotes > 0`),
+  anti-bypass grantRole/revokeRole/renounceRole no Treasury e no
+  Timelock com fixture espelhando producao (DEFAULT_ADMIN do Treasury no
+  Timelock + renuncia do deployer, execute real via queue + delay),
+  grantRole em contrato terceiro continua Standard, batch misto,
+  selector `transfer` continua Standard, wiring de selectors/TREASURY) +
+  fixture de `test/CommunityGovernor.test.ts` atualizado para o novo
+  constructor.
+- **Segregacao on-chain de saldos reservados (`LiquidityGauge` +
+  `Treasury`).** Invariantes que antes eram apenas comentario passam a
+  ser enforced no lado das saidas:
+  - `contracts/LiquidityGauge.sol`: novo ledger `totalVestingLocked`
+    (incrementa em `_createVestingPosition`, unico ponto de criacao de
+    vesting; decrementa em `harvest` pelo valor sacado, CEI).
+    `governanceRescueRewards` nao pode mais drenar CREDIT reservado a
+    vesting em curso: novo check `RescueExceedsUnreserved(available,
+requested)` apos o `InsufficientBalance` original (ordem preservada);
+    sentinel `type(uint256).max` agora transfere apenas o nao-reservado.
+    Nova view `getUnreservedBalance()` (saturante em zero).
+    `emergencyUnstake` (forfeit vira saldo nao-reservado, positions
+    previas intactas) e a compactacao swap-and-pop de `harvest`
+    verificados por teste — contador correto em ambos os caminhos.
+  - `contracts/Treasury.sol`: `_enforceUnreservedCredit` aplicado em
+    `transfer`, em `batchTransfer`/`payRebates` (sobre o TOTAL do batch —
+    parcelas isoladas nao contornam) e em `addPOL` (saida generica de
+    CREDIT do saldo livre; o bucket earmarkado usa `addPOLFromRefill`).
+    Saidas de CREDIT nao podem mais invadir `polRefillBucket +
+pendingGaugeRewards`: revert `TransferExceedsUnreservedCredit(
+available, requested)`. Nova view `unreservedCreditBalance()`
+    (saturante em zero). `addPOLFromRefill`/`flushPendingGaugeRewards`
+    confirmados operando com unreserved == 0 (debitam o ledger antes das
+    interactions, CEI ja correto). `sweepETH` fora do escopo (ETH);
+    `executeBuyback` neutro em CREDIT (compra e queima na mesma tx).
+  - `contracts/Treasury.sol` — lado das ENTRADAS tambem enforced (review
+    adversarial): `depositPolRefill`/`depositPendingGaugeRewards` agora
+    revertem com `DepositExceedsCreditBalance(reservedAfter,
+creditBalance)` se a reserva total pos-deposito exceder o
+    `balanceOf(CREDIT)` real. Sem isso, um depositor bugado/comprometido
+    inflaria o ledger acima do lastro, `unreservedCreditBalance()`
+    saturaria em 0 e TODA saida generica de CREDIT congelaria (DoS). O
+    fluxo legitimo (V2 minta ANTES do deposit na mesma tx) nao muda.
+  - `contracts/Treasury.sol` — valvulas anti-freeze/reciclagem (review
+    adversarial): `flushPendingGaugeRewards` ganhou `amount` parcial
+    (0 = ledger inteiro) e `poolId` explicito (0 = default de
+    `setLiquidityGauge`; poolIds do gauge sao 1-based) — defesa contra o
+    freeze por `IncentiveOverlap` quando o `RewardDistributorV2` recria
+    incentives na pool default a cada `finalizeRound` (novo erro
+    `PendingGaugeRewardsInsufficient`). Novas
+    `writeDownPolRefillBucket`/`writeDownPendingGaugeRewards`
+    (GOVERNANCE_ROLE, eventos `PolRefillWrittenDown`/
+    `PendingGaugeWrittenDown`): reducao explicita e auditavel dos
+    ledgers, liberando a parcela para o saldo livre — escape do freeze
+    do gauge e reciclagem do bucket bonders, que cresce 5%/rodada sem
+    contrapartida on-chain de USDC (a fatia `treasuryBps` do FeeRouter e
+    denominada em CREDIT, nao USDC — NatSpec de `addPOLFromRefill` e
+    comentario do split em `ignition/modules/Dao.ts` corrigidos).
+  - Testes: `test/LiquidityGauge.segregation.test.ts` (10) +
+    `test/Treasury.segregation.test.ts` (20: inclui enforcement dos
+    depositos, agregacao dos dois ledgers e write-downs) +
+    `test/Treasury.polRefill.test.ts` (23: flush parcial, poolId
+    explicito, `DepositExceedsCreditBalance`).
+- **`ChainlinkAggregatorMock` — decimals configuraveis (`setDecimals`).**
+  `Treasury._enforceChainlinkSanity` e `CreditPriceOracle._usdcToUsd`
+  leem `feed.decimals()` em runtime, mas o mock fixava 8 — a matematica
+  de escala nunca era exercitada fora de 8 decimais.
+  `test/CreditPriceOracle.test.ts` ganha 4 testes: feeds de 18 e 6
+  decimais a $1.00 produzem preco IDENTICO ao de 8 dec, multiplicacao
+  exata a $0.99 em 18 dec, e banda de sanidade (UsdcDepegDetected)
+  normalizando bps corretamente em 18 e 6 dec.
+
+### Changed
+
+- **Fase 0 do pivot CLP aplicada aos parametros de deploy — split default
+  70/20/10.** `ignition/parameters/production.json` e
+  `ignition/parameters/dev.json` mudam `burnBps/treasuryBps/rebateBps` de
+  `9500/0/500` para `7000/2000/1000` (decisao ratificada, pre-requisito
+  C4 do parecer `audit/economist/2026-04-24-clp-pivot.md`). Os defaults
+  inline de `ignition/modules/Dao.ts` tambem foram atualizados — deploys
+  sem parameters JSON (testes ignition/e2e, scripts dev) usariam o split
+  antigo, criando drift com a decisao ratificada. Testes ajustados para o
+  split novo: `test/ignition/Dao.test.ts`, `test/e2e/FullLifecycle.test.ts`,
+  `test/e2e/projectLifecycle.e2e.test.ts`,
+  `test/e2e/stakingRewards.e2e.test.ts`,
+  `test/e2e/governanceFlow.e2e.test.ts`;
+  `test/governance/Fase0DefaultSplit.test.ts` agora seeda EXPLICITAMENTE
+  o split antigo via parametros ignition, preservando o teste dos
+  mecanismos da proposta `setDefaultSplit` com o mesmo calldata do script
+  real.
 - Docs publicas (`/docs`): traducao das 10 paginas multi-idioma que estavam
   como stub `status: needs-translation` apos o pivot CLP — paridade real
   alcancada entre pt-br, en e es (50/50/50 markdown). Arquivos traduzidos:

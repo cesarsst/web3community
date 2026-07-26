@@ -1,159 +1,76 @@
 # Votar em propostas
 
-**Para quem é:** holder de GOV que quer participar das decisões da DAO.
-**Pré-requisitos:** [Ter GOV](02-holding-gov.md), [Governance (conceito)](../02-core-concepts/05-governance.md).
+**Para quem é:** holders de GOV que querem participar das decisões da DAO.
+**Pré-requisitos:** [Ter GOV](02-holding-gov.md) e [Governança](../02-core-concepts/05-governance.md).
 
-## Pré-requisito absoluto: delegar
+## Antes de tudo: delegue
 
-Ter GOV **não** te dá voting power automático. Você precisa delegar uma vez:
-
-```solidity
-GovernanceToken.delegate(yourAddress)
-```
-
-Sem isso, `getVotes(you) == 0` e o Governor não contabiliza seus votos. Depois de delegado, está sempre ativo — transferências de GOV atualizam automaticamente.
-
-Se quer delegar a outrem:
+Você **só tem poder de voto se delegou GOV** — inclusive a si mesmo. E a delegação precisa estar ativa **antes** do snapshot da proposta.
 
 ```solidity
-GovernanceToken.delegate(delegate_address)
+GovernanceToken.delegate(suaConta);   // ou delegate(representante)
 ```
 
-A mudança entra em vigor no bloco seguinte. Propostas já abertas não são afetadas (usam snapshot anterior).
+O voto é lido por snapshot (`getPastVotes`) no bloco de referência da proposta. Delegar depois do snapshot não vale para a proposta em curso. Sem delegar, `getVotes` é zero.
 
-## Ciclo de uma proposta (visão do votante)
+> Por que snapshot? Para ser **imune a flash loans**: ninguém pode pegar GOV emprestado no mesmo bloco do voto para inflar poder. Você tem que ter (e ter delegado) o GOV **antes**.
+
+## O ciclo de uma proposta
 
 ```
-  +-------------+       +-------------+       +-------------+       +-------------+
-  |   Pending   | ----> |   Active    | ----> | Succeeded   | ----> |  Queued     |
-  | (votingDelay|       |(votingPeriod|       | ou Defeated |       | (timelock)  |
-  |  ~1 dia)    |       | ~7 dias)    |       |             |       |             |
-  +-------------+       +-------------+       +-------------+       +-------------+
-                                                                           |
-                                                                           | minDelay 2d
-                                                                           v
-                                                                    +-------------+
-                                                                    |  Executed   |
-                                                                    +-------------+
-
-  Estados alternativos:
-  - Canceled: proposer desistiu ou governanca cancelou
-  - Expired: proposta nao foi queued em timely fashion
+   Pending  ->  Active  ->  Succeeded  ->  Queued  ->  Executed
+   (votingDelay) (votingPeriod) (venceu)   (na fila    (apos minDelay
+   ~1 dia        ~7 dias                    do Timelock) do Timelock, 2 dias)
+                    |
+                    +-> Defeated (perdeu ou sem quorum)
 ```
 
-Durante o estado `Active` é que você vota.
+Parâmetros de produção (do [`CommunityGovernor`](../08-contracts-reference/10-CommunityGovernor.md)):
+
+| Fase | Duração (produção) |
+|---|---|
+| `votingDelay` (Pending) | 7200 blocos (~1 dia) |
+| `votingPeriod` (Active) | 50400 blocos (~7 dias) |
+| `minDelay` do Timelock (Queued) | 172800 s (2 dias) |
+
+Do início à execução, ~10 dias. A latência é intencional — é a janela de segurança da comunidade.
 
 ## Como votar
 
-Função principal no Governor:
+Durante a fase **Active**, chame `castVote` no Governor:
 
 ```solidity
-function castVote(uint256 proposalId, uint8 support) public returns (uint256);
+CommunityGovernor.castVote(proposalId, support);
+// support: 0 = Against, 1 = For, 2 = Abstain
 ```
 
-Onde `support`:
+Variantes: `castVoteWithReason(proposalId, support, reason)` para registrar uma justificativa, e `castVoteBySig(...)` para votar por assinatura (gasless via relayer).
 
-- `0` — Against
-- `1` — For
-- `2` — Abstain
+## Quando uma proposta passa
 
-Variantes:
+- **Proposta Standard**: `For > Against` **e** quorum de **4%** do supply atingido. Abstain conta só para quorum, não para a razão For/Against.
+- **Proposta Supermajority**: exige `For ≥ 75%` dos votos decisivos (`forVotes >= 3 * againstVotes` e `forVotes > 0`). Isso é acionado automaticamente quando a proposta contém **gestão de roles do Treasury ou do Timelock** (grant/revoke/renounce). O evento `ProposalTypeSet` sinaliza o tipo antes da votação abrir.
 
-- `castVoteWithReason(proposalId, support, reason)` — anexa razão em string (indexada em evento).
-- `castVoteBySig(proposalId, support, v, r, s)` — voto via assinatura (EIP-712, permite gasless via relayer).
-- `castVoteWithReasonAndParamsBySig(...)` — versão com razão + params.
+## Propor (se você tiver GOV suficiente)
 
-## Sua voting power
-
-Quando a proposta abre, o Governor calcula um snapshot block. Seu peso de voto é:
+Para **criar** uma proposta, você precisa de `proposalThreshold` = **10.000 GOV** delegados (0,01% do cap):
 
 ```solidity
-uint256 power = GovernanceToken.getPastVotes(you, snapshotBlock);
+CommunityGovernor.propose(targets, values, calldatas, description);
 ```
 
-Ou seja: **seu balance de GOV no bloco do snapshot, via sua delegação no bloco do snapshot**. Se você delegou a si, é o seu próprio balance. Se delegou a X, X tem o poder; você não vota com aquele token.
+A proposta descreve exatamente as chamadas que o Timelock executará se aprovada. O Timelock só executa **esses** calldatas (o hash cobre targets/values/calldatas) — não há como injetar uma call que não foi votada.
 
-Comprar ou vender GOV **depois** do snapshot não muda o poder daquela proposta.
+## Depois de aprovada
 
-## Como a proposta é decidida
+1. **Queue** — qualquer um chama `queue(...)` para enfileirar no Timelock.
+2. **Espera** o `minDelay` (2 dias).
+3. **Execute** — qualquer um chama `execute(...)`. O `EXECUTOR_ROLE` é público (`address(0)`), então não depende de um executor específico. O delay já expirado é o único gate.
 
-Definido em `GovernorCountingSimple`:
+## O que a governança controla
 
-**Para vencer**, a proposta precisa:
-
-1. Atingir **quorum** — `forVotes + abstainVotes >= quorum(snapshotBlock)`. Em produção, quorum = 4% do supply no snapshot.
-2. Ter mais `For` que `Against` — `forVotes > againstVotes`.
-
-Se ambas as condições verdadeiras quando a janela fecha → `Succeeded`. Caso contrário → `Defeated`.
-
-## Após `Succeeded`
-
-Qualquer um (não precisa ser o proposer) pode chamar:
-
-```solidity
-CommunityGovernor.queue(proposalId);       // ou
-CommunityGovernor.queue(targets, values, calldatas, descriptionHash);
-```
-
-Isso enfileira a proposta no Timelock. Agora o estado é `Queued`. O Timelock agenda a execução para `now + minDelay` (2 dias em produção).
-
-Após o delay expirar, qualquer um chama:
-
-```solidity
-CommunityGovernor.execute(proposalId);
-```
-
-Que executa as chamadas efetivas (`targets[].call(calldatas[])`) via Timelock.
-
-## Cancelamento
-
-- O proposer pode cancelar **sua própria** proposta enquanto ela está `Pending` (voting delay) ou `Active` (period).
-- Governança pode cancelar via proposta contrária (meta-proposta).
-- Cancelamentos pós-queue também invalidam a operação no Timelock (`Timelock.cancel`).
-
-O Timelock v1 **não** tem guardian separado — não há botão de pânico unilateral. Isso é intencional: nenhum ator pode cancelar propostas sozinho, porque isso seria vetor de captura.
-
-## Parâmetros em produção
-
-| Parâmetro | Valor | Fonte |
-|---|---|---|
-| `votingDelay` | 7200 blocos (~1d) | `production.json` |
-| `votingPeriod` | 50400 blocos (~7d) | `production.json` |
-| `proposalThreshold` | 10.000 GOV | `production.json` |
-| `quorumNumerator` | 4 (% do supply) | `production.json` |
-| `timelockMinDelay` | 172800 seg (2d) | `production.json` |
-
-Todos ajustáveis via proposta (onlyGovernance nos setters). Mais em [Parâmetros](../07-governance/03-parameters.md).
-
-## Tutorial: votar passo a passo
-
-1. **Primeiro uso:** `GovernanceToken.delegate(you)`. Paga gas uma vez.
-2. **Achar proposta:** via hub ou indexador (procure por evento `ProposalCreated` do Governor).
-3. **Ler a proposta** — descrição e `(targets, calldatas)` vão dizer exatamente o que ela faz on-chain.
-4. **Votar** — `CommunityGovernor.castVote(proposalId, support)`. Ou com razão: `castVoteWithReason`.
-5. **Espere fechar.** Se vencer, alguém chama `queue` (talvez você).
-6. **Após delay do Timelock** — alguém chama `execute`.
-
-## O que checar antes de votar For
-
-- Quem propôs (tem histórico na DAO? é uma entidade conhecida?).
-- O que exatamente a proposta faz — decodifique os `calldatas` contra as ABIs dos contratos.
-- Se a proposta altera parâmetro: está dentro dos bounds dos contratos? (ver [Parâmetros](../07-governance/03-parameters.md)).
-- Se a proposta move fundos: para onde? quanto? por quê?
-- Qual é a discussão off-chain (forum, Discord, etc.)?
-
-## Votar via UI
-
-O hub frontend oferece:
-
-- Lista de propostas abertas.
-- Decodificação legível dos `calldatas`.
-- Botões para For / Against / Abstain.
-- Feedback em tempo real do progresso de votação + quorum.
-- Botões para `queue` / `execute` quando chega a hora.
-
-Nada impede você de chamar direto os contratos via sua wallet, mas a UI é o caminho ergonômico.
+Toda função privilegiada dos contratos econômicos (Treasury, Registry, FeeRouterV2, ProjectFunding, mint de GOV) só é chamável pelo Timelock — logo, só por proposta aprovada. Isso inclui ajustar a fee (respeitando o teto de 5%), o split, o `minTarget` das rodadas, ativar/suspender projetos e liberar fundos da tesouraria. Ver [Governança](../02-core-concepts/05-governance.md).
 
 ---
 
-**Próximo →** [Reivindicar rewards](05-claiming-rewards.md)
+**Próximo →** [Sacar rev-share](05-claiming-revenue.md)

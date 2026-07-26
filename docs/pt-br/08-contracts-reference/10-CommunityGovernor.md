@@ -1,189 +1,95 @@
 # CommunityGovernor
 
-**Para quem é:** auditores, devs consultando propostas, delegates.
-**Pré-requisitos:** [Governance (conceito)](../02-core-concepts/05-governance.md), [Voting power](../07-governance/02-voting-power.md).
+**Para quem é:** devs/auditores.
 
-## Visão rápida
+Contrato: `contracts/CommunityGovernor.sol` · Solidity 0.8.24 · OpenZeppelin 5.
 
-Governor canônico da DAO. Composto pelo stack OpenZeppelin 5.0.2:
+## Papel
 
-```
-Governor
-GovernorSettings
-GovernorCountingSimple
-GovernorVotes
-GovernorVotesQuorumFraction
-GovernorTimelockControl
-```
+Governor canônico da DAO, composto pelo stack OZ 5: `Governor` + `GovernorSettings` + `GovernorCountingSimple` + `GovernorVotes` + `GovernorVotesQuorumFraction` + `GovernorTimelockControl`.
 
-Voting power lida do `GovernanceToken` (ERC20Votes) — imune a flash-loans. Toda execução roteada via `CommunityTimelock` com delay.
+Voting power é lida do [GovernanceToken](01-GovernanceToken.md) (ERC20Votes) — flash loans não influenciam propostas. Toda execução bem-sucedida é roteada via [CommunityTimelock](09-CommunityTimelock.md), que aplica delay.
 
-## Herança
+### Tipos de proposta e supermaioria
 
-```
-Governor (OZ)
-GovernorSettings (OZ)
-GovernorCountingSimple (OZ)
-GovernorVotes (OZ)
-GovernorVotesQuorumFraction (OZ)
-GovernorTimelockControl (OZ)
-```
+O Governor classifica cada proposta em `ProposalType.Standard` ou `ProposalType.Supermajority`. **Gestão de roles** (`grantRole`/`revokeRole`/`renounceRole` do `IAccessControl`) direcionada ao **Treasury** ou ao **próprio Timelock** muda quem pode movimentar o cofre da DAO — é o vetor clássico de captura. Por isso, no `propose`, o Governor escaneia targets+calldatas: qualquer call de gestão de roles com `target == TREASURY` ou `target == timelock()` marca a proposta inteira como `Supermajority`, e `_voteSucceeded` passa a exigir **`forVotes >= 3 * againstVotes`** (For ≥ 75% dos votos decisivos For/Against; Abstain fora da razão).
 
-## Parâmetros (via constructor)
+Clock mode: `block.number` (o token não sobrescreve `clock()`); toda aritmética de delay/period é em **blocos**.
 
-| Parâmetro | Tipo | Em produção | Descrição |
-|---|---|---|---|
-| `token` | IVotes | GovernanceToken | Fonte de voting power |
-| `timelock` | TimelockController | CommunityTimelock | Executor |
-| `initialVotingDelay` | uint48 (blocos) | `7200` (~1d) | Pending → Active |
-| `initialVotingPeriod` | uint32 (blocos) | `50400` (~7d) | Duração da votação |
-| `initialProposalThreshold` | uint256 | `10_000 * 1e18` | Min voting power para propor |
-| `initialQuorumNumerator` | uint256 | `4` | % do supply necessário |
-| `name` EIP-712 | string | `"CommunityGovernor"` | **Imutável** |
+## Interface pública
 
-## Roles e permissões
-
-Não usa AccessControl direto. Setters de parâmetros são `onlyGovernance` — chamados apenas pelo `_executor()` (o Timelock).
-
-## Funções externas
-
-### Propose
+### Tipo
 
 ```solidity
-function propose(
-    address[] memory targets,
-    uint256[] memory values,
-    bytes[] memory calldatas,
-    string memory description
-) public returns (uint256 proposalId);
+enum ProposalType { Standard, Supermajority }
 ```
 
-- **Reverte**: `GovernorInsufficientProposerVotes` se `getVotes(msg.sender, clock()-1) < proposalThreshold`.
-- **Eventos**: `ProposalCreated(...)`.
+### Constantes / immutables / storage
 
-### Voting
+| Nome | Tipo | Descrição |
+|---|---|---|
+| `GRANT_ROLE_SELECTOR` | `bytes4 constant` | `IAccessControl.grantRole.selector` (`0x2f2ff15d`). |
+| `REVOKE_ROLE_SELECTOR` | `bytes4 constant` | `IAccessControl.revokeRole.selector` (`0xd547741f`). |
+| `RENOUNCE_ROLE_SELECTOR` | `bytes4 constant` | `IAccessControl.renounceRole.selector` (`0x36568abe`). |
+| `TREASURY` | `address immutable public` | Endereço do Treasury alvo do scan de gestão de roles. `address(0)` (deploy dev sem treasury) desliga o scan — nenhuma proposta vira Supermajority. |
+| `proposalRequiresSupermajority` | `mapping(uint256 => bool) public` | `true` se a proposta foi marcada Supermajority no `propose`. |
+
+### Constructor
 
 ```solidity
-function castVote(uint256 proposalId, uint8 support) public returns (uint256 weight);
-function castVoteWithReason(uint256 proposalId, uint8 support, string reason) public returns (uint256);
-function castVoteBySig(uint256 proposalId, uint8 support, uint8 v, bytes32 r, bytes32 s) public returns (uint256);
-function castVoteWithReasonAndParamsBySig(...) public returns (uint256);
+constructor(
+    IVotes token, TimelockController timelock, address treasury,
+    uint48 initialVotingDelay, uint32 initialVotingPeriod,
+    uint256 initialProposalThreshold, uint256 initialQuorumNumerator
+)
 ```
+`name` do EIP-712 é `"CommunityGovernor"` (fixo). `treasury` pode ser `address(0)`. Guards OZ: `GovernorInvalidVotingPeriod(0)`, `GovernorInvalidQuorumFraction(n, 100)`.
 
-- `support`: 0=Against, 1=For, 2=Abstain.
-- **Eventos**: `VoteCast(voter, proposalId, support, weight, reason)`.
+Parâmetros sugeridos — produção: delay `7200` (~1d), period `50400` (~7d), threshold `10_000e18` GOV, quorum `4%`. Dev: delay `1`, period `50`.
 
-### Queue / Execute / Cancel
+### Propostas
 
 ```solidity
-function queue(uint256 proposalId) public returns (uint256);
-function queue(address[] targets, uint256[] values, bytes[] calldatas, bytes32 descriptionHash) public returns (uint256);
-
-function execute(uint256 proposalId) public payable returns (uint256);
-function execute(address[] targets, uint256[] values, bytes[] calldatas, bytes32 descriptionHash) public payable returns (uint256);
-
-function cancel(address[] targets, uint256[] values, bytes[] calldatas, bytes32 descriptionHash) public returns (uint256);
+function propose(address[] targets, uint256[] values, bytes[] calldatas, string description)
+    public override returns (uint256)
 ```
+Cria a proposta (via `super.propose`) e classifica o `ProposalType`. Escaneia cada call (`calldatas[i].length >= 4`): se `target == TREASURY` ou `target == timelock()` com selector de gestão de roles, marca `Supermajority`. Emite `ProposalTypeSet` sempre (inclusive Standard).
 
-Todas permissionless (após estado apropriado).
+```solidity
+function _voteSucceeded(uint256 proposalId) internal view returns (bool)
+```
+Standard → regra do `GovernorCountingSimple` (For > Against). Supermajority → `forVotes > 0 && forVotes >= 3 * againstVotes`.
 
-- **Eventos**: `ProposalQueued`, `ProposalExecuted`, `ProposalCanceled`.
+### Views / setters herdados relevantes
 
-### Views
-
-- `state(uint256 proposalId) → ProposalState` — enum 0..7.
-- `proposalSnapshot(proposalId) → uint256` — bloco de snapshot.
-- `proposalDeadline(proposalId) → uint256` — bloco de encerramento.
-- `proposalProposer(proposalId) → address`.
-- `proposalNeedsQueuing(proposalId) → bool`.
-- `proposalEta(proposalId) → uint256` — timestamp estimado de execução.
-- `proposalVotes(proposalId) → (against, for, abstain)`.
-- `hasVoted(proposalId, account) → bool`.
-- `votingDelay() → uint256`.
-- `votingPeriod() → uint256`.
-- `proposalThreshold() → uint256`.
-- `quorum(uint256 timepoint) → uint256`.
-- `quorumNumerator() → uint256`.
-- `quorumDenominator() → uint256` — `100`.
-- `token() → IERC5805`.
-- `timelock() → address`.
-
-### Setters (onlyGovernance)
-
-Chamados apenas via proposta executada pelo Timelock:
-
-- `setVotingDelay(uint48 newDelay)`.
-- `setVotingPeriod(uint32 newPeriod)`.
-- `setProposalThreshold(uint256 newThreshold)`.
-- `updateQuorumNumerator(uint256 newNumerator)`.
-- `updateTimelock(TimelockController newTimelock)` — raro, mudança crítica.
-- `relay(target, value, data)` — executa chamada arbitrária como se fosse o Governor.
+- **Governança (via propostas):** `castVote`, `castVoteWithReason`, `castVoteBySig`, `queue`, `execute`, `cancel`, `state`, `proposalVotes`, `proposalSnapshot`, `proposalDeadline`, `proposalProposer`, `hashProposal`, `proposalNeedsQueuing`.
+- **Parâmetros (`onlyGovernance`):** `setVotingDelay`, `setVotingPeriod`, `setProposalThreshold`, `updateQuorumNumerator`.
+- **Config views:** `votingDelay()`, `votingPeriod()`, `proposalThreshold()`, `quorum(timepoint)`, `token()`, `timelock()`, `clock()`, `CLOCK_MODE()`, `COUNTING_MODE()`.
 
 ## Eventos
 
-| Evento | Descrição |
-|---|---|
-| `ProposalCreated(id, proposer, targets, values, signatures, calldatas, voteStart, voteEnd, description)` | — |
-| `VoteCast(voter, proposalId, support, weight, reason)` | Voto emitido |
-| `VoteCastWithParams(voter, proposalId, support, weight, reason, params)` | Voto com params |
-| `ProposalQueued(id, etaSeconds)` | Queued no Timelock |
-| `ProposalExecuted(id)` | Executado |
-| `ProposalCanceled(id)` | Cancelado |
-| `VotingDelaySet(old, new)` | — |
-| `VotingPeriodSet(old, new)` | — |
-| `ProposalThresholdSet(old, new)` | — |
-| `QuorumNumeratorUpdated(old, new)` | — |
+| Evento | Emitido em | Indexados |
+|---|---|---|
+| `ProposalTypeSet(uint256 proposalId, ProposalType proposalType)` | `propose` (sempre) | `proposalId` |
+| `ProposalCreated`, `ProposalQueued`, `ProposalExecuted`, `ProposalCanceled`, `VoteCast`, `VoteCastWithParams` | herdados OZ | conforme OZ |
+
+## Erros
+
+Herdados do stack OZ: `GovernorInvalidVotingPeriod`, `GovernorInvalidQuorumFraction`, `GovernorInsufficientProposerVotes`, `GovernorUnexpectedProposalState`, `GovernorNonexistentProposal`, `GovernorAlreadyCastVote`, `GovernorOnlyProposer`, `GovernorRestrictedProposer`, entre outros.
+
+## Roles
+
+Sem roles próprias. Autoridade dos setters é `onlyGovernance` (resolvida para o Timelock via `_executor()`). No Timelock, o Governor detém `PROPOSER_ROLE` + `CANCELLER_ROLE`.
 
 ## Invariantes
 
-- **I4**: voting power isolada em `token()`; execução via Timelock; nenhuma função bypass.
-- **I5 (Anti-flashloan)**: `IERC5805.getPastVotes` via ERC20Votes — snapshot imune.
-- **I7**: o Governor é o único autorizado a propor ações que o Timelock executa contra `ProjectRegistry`.
-- **Domain separator imutável**: `name = "CommunityGovernor"` no EIP-712. Alterar quebraria todas as assinaturas passadas (`castVoteBySig`, `delegateBySig` via token, etc.).
-- **Clock em blocos**: `GovernanceToken` não sobrescreve `clock()`. Fallback retorna `block.number`. Delay/period em blocos.
+- **I4:** voting power isolada em `token()`; execução via Timelock; nenhuma função de bypass admin.
+- **I5:** `getPastVotes` via ERC20Votes — snapshot imune a flash loan no bloco do voto. `quorum` usa `getPastTotalSupply`.
+- **I7:** o Governor é o único autorizado a propor ações que o Timelock executa contra o `ProjectRegistry`.
+- **Supermaioria em gestão de roles:** qualquer `grantRole`/`revokeRole`/`renounceRole` sobre o Treasury ou o Timelock exige For ≥ 75% (`forVotes >= 3 * againstVotes` e `forVotes > 0`). Com `TREASURY == address(0)` o scan é pulado.
+- **Anti-bypass:** o Timelock só executa exatamente os calldatas registrados na proposta aprovada; batch misto contamina a proposta inteira como Supermajority; nested calls falham no `AccessControl` (o intermediário nunca é o Timelock). `calldatas[i].length >= 4` evita falso-positivo de conversão `bytes4` sobre calldata curta.
+- **Domain separator:** `name` `"CommunityGovernor"` é fixo — renomear invalida assinaturas de voto por sig.
 
-## Observações importantes
+## Ver também
 
-### Overrides obrigatórios (múltipla herança)
-
-O contrato resolve conflitos Governor vs extensões em:
-
-- `votingDelay`, `votingPeriod`, `proposalThreshold` (Governor vs GovernorSettings).
-- `quorum` (Governor vs GovernorVotesQuorumFraction).
-- `state`, `proposalNeedsQueuing`, `_queueOperations`, `_executeOperations`, `_cancel`, `_executor` (Governor vs GovernorTimelockControl).
-
-### `proposalEta` para UI
-
-Retorna `block.timestamp + timelockMinDelay` após queue. Útil para mostrar "executa em X segundos".
-
-### Se precisar mudar quorum
-
-```
-governor.updateQuorumNumerator(5);  // muda de 4% para 5%
-```
-
-Só via proposta aprovada.
-
-### Se precisar mudar voting delay
-
-```
-governor.setVotingDelay(14400);  // ~2 dias a 12s/bloco
-```
-
-Só via proposta.
-
-### Quorum é sobre supply no snapshot
-
-```solidity
-uint256 quorumNecessario = (getPastTotalSupply(snapshot) * quorumNumerator) / 100;
-```
-
-Atende quorum quando `forVotes + abstainVotes >= quorumNecessario`. Usa `getPastTotalSupply` para imunidade a manipulação de supply pós-proposta.
-
-### Inalterabilidade do `name`
-
-O `name` é fixo no constructor do Governor OZ. Ele vai no domain separator do EIP-712. Se renomear em upgrade, todas as assinaturas off-chain prévias viram inválidas. **Nunca renomear sem migração explícita.**
-
----
-
-**Ver também**: [CommunityTimelock](09-CommunityTimelock.md), [GovernanceToken](01-GovernanceToken.md).
+[CommunityTimelock](09-CommunityTimelock.md) · [Treasury](08-Treasury.md) · [GovernanceToken](01-GovernanceToken.md)

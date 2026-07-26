@@ -1,199 +1,65 @@
 # FAQ
 
-**Para quem é:** qualquer pessoa com uma pergunta específica.
-**Pré-requisitos:** nenhum.
+**Para quem é:** qualquer leitor com uma pergunta direta.
+**Pré-requisitos:** nenhum. Cada resposta aponta para a página com o detalhe.
 
-## Geral
+## Por que um app usaria o FeeRouterV2 em vez de cobrar sozinho?
 
-### O que é a web3community?
+Dois motivos concretos:
 
-Uma plataforma multi-aplicativos governada por DAO. Os apps aceitam CREDIT como pagamento; 95% do pagamento é queimado, 5% vai para o app. Stakers de GOV em projetos específicos recebem CREDIT emitido na próxima rodada em função do burn total. Detalhe em [O que é](../01-getting-started/01-what-is-web3community.md).
+1. **Fee competitiva (2,5%).** O [`FeeRouterV2`](../08-contracts-reference/06-FeeRouterV2.md) cobra 2,5% (teto duro de 5% que nem a governança ultrapassa) e o app fica com ~89,5–97,5% de cada pagamento **na hora** — comparável ou melhor que gateways tradicionais, sem custódia intermediária. O pagamento é atômico e o app recebe CREDIT resgatável 1:1 em USDC no PSM quando quiser.
+2. **Capital antecipado via rev-share.** Ao abrir uma rodada no [`ProjectFunding`](../08-contracts-reference/07-ProjectFunding.md), o app vende uma fatia (1%–30%) da receita bruta futura e recebe capital adiantado. É funding sem dívida e sem diluir equity — paga-se com receita real, à medida que ela chega.
 
-### Qual a diferença entre GOV e CREDIT?
+Além disso, o app entra num ecossistema com moeda de uso compartilhada e base de usuários agregada. Ver [Visão geral de integração](../05-for-developers/01-integration-overview.md).
 
-GOV é governança (supply fixo 100M, vota). CREDIT é utilitário (supply elástico, queimado no uso). Detalhes em [Dual-token](../02-core-concepts/01-dual-token-economy.md).
+## O CREDIT valoriza? Vale a pena "investir" em CREDIT?
 
-### Onde estão os contratos?
+**Não.** O CREDIT é **estável 1:1 com USDC** por construção. Você compra no [`CreditPSM`](../08-contracts-reference/03-CreditPSM.md) (`buy`, sem taxa) e resgata a qualquer momento (`sell`, sem taxa), sempre 1:1. Cada CREDIT em circulação tem 1 USDC de lastro guardado no PSM (verificável em `backing()`), e não há função de saque desse lastro — nem para governança.
 
-12 contratos de produção em `contracts/*.sol`. Referência individual em [08-contracts-reference](../08-contracts-reference/). Endereços on-chain em [Contract addresses](../05-for-developers/02-contract-addresses.md).
+Comprar CREDIT é como **carregar um cartão pré-pago**: 10 CREDIT valem 10 USDC hoje, amanhã e daqui a um ano. Quem quer exposição à valorização do ecossistema deve olhar o **GOV**, não o CREDIT.
 
-### Qual rede está rodando?
+## Então como se captura valor?
 
-Ver [Contract addresses](../05-for-developers/02-contract-addresses.md). Rede de produção principal será definida pós-auditoria externa.
+Duas vias, ambas dependentes de uso real (ver [Value accrual](../06-for-investors/02-value-accrual.md)):
 
-## Uso
+- **GOV valoriza via buyback.** 40% da fee (≈ 1% do GMV) é destinada a recomprar GOV, cujo supply tem cap imutável de 100M. Mais volume nos apps → mais demanda estrutural por GOV.
+- **Rev-share paga receita real.** Uma posição numa rodada financiada recebe uma % da receita bruta do app, descontada automaticamente a cada pagamento.
 
-### Preciso saber programar?
+## Como eu invisto?
 
-Não. O hub tem UI para todas as operações. Você assina transações na sua wallet.
+O gate de investimento tem dois passos (ver [Staking em projetos](../04-for-users/03-staking-in-projects.md) e [ProjectFunding](../08-contracts-reference/07-ProjectFunding.md)):
 
-### Quanto custa participar?
+1. **Stake GOV no projeto.** Você precisa ter GOV stakeado **naquele projeto** ([`Staking`](../08-contracts-reference/05-Staking.md)) para investir — é o gate `getWeight(investor, projectId) > 0`. O stake também dá peso (curadoria) e é exigido para sacar o rev-share depois.
+2. **Invista CREDIT na rodada.** Com o stake ativo, deposite CREDIT via `invest(projectId, amount)` enquanto a rodada está aberta. All-or-nothing: bateu o alvo, o dono recebe e o rev-share ativa; venceu sem bater, você saca 100% via `refund`.
 
-Gas da rede + tokens necessários (GOV para stakar, CREDIT para pagar apps). Em testnet (Sepolia), gas é quase zero.
+Depois, saque a receita acumulada com `claim(projectId)` (exige manter o GOV stakeado; o valor nunca expira).
 
-### Como recebo CREDIT?
+## Isso é um Ponzi?
 
-- Compra em DEX externa (Uniswap, etc.).
-- Recebe como reward se stakou em projeto que gerou burn.
-- Recebe via `UserSubsidy` se era elegível em uma campanha.
+**Não.** Um Ponzi paga participantes com o aporte de novos participantes. Aqui (ver [Value accrual → Por que não é Ponzi](../06-for-investors/02-value-accrual.md#por-que-não-é-um-ponzi)):
 
-### Como recebo GOV?
+- **A renda vem de receita real** — rev-share é fatia de pagamentos que usuários fazem para **usar os apps**, não de novos investidores entrando. Sem uso, não há renda; o sistema desacelera em vez de exigir mais entrantes.
+- **Nenhum token é emitido como reward.** GOV tem cap fixo; CREDIT só é mintado contra USDC.
+- **O CREDIT é lastreado 1:1.** Não é uma "moeda que sobe" — é meio de pagamento com resgate garantido.
 
-- Compra em DEX externa.
-- Recebe via alocação aprovada pela DAO (public sale, airdrop, vesting se é equipe).
+A honestidade da resposta: **tokenomics não salva produto ruim.** Se os apps não geram utilidade, o GMV é baixo e o retorno seca. O valor é derivado do uso, não prometido.
 
-### Como voto?
+## O CREDIT pode perder o peg?
 
-1. Delegue voting power a si: `gov.delegate(you)`.
-2. Espere proposta abrir.
-3. Chame `governor.castVote(proposalId, support)` via UI ou direto.
+O CREDIT é resgatável 1:1 no PSM enquanto houver lastro — e o lastro é **integral por invariante** (`backing >= mintedOutstanding`), sem função de saque. O risco residual é a **solvência do USDC** de reserva: se o próprio USDC perder o peg, o CREDIT herda esse risco. É um risco do ativo externo de lastro, não do desenho do PSM. Ver [Riscos e segurança](../06-for-investors/03-risk-and-security.md).
 
-Detalhe em [Votar em propostas](../04-for-users/04-voting.md).
+## Quem controla os contratos?
 
-### A DAO pode confiscar meu GOV stakado?
+A DAO, via [`CommunityGovernor`](../08-contracts-reference/10-CommunityGovernor.md) + [`CommunityTimelock`](../08-contracts-reference/09-CommunityTimelock.md). Toda mudança governável passa por proposta + voto + delay de 2 dias. Nenhuma EOA tem poder unilateral em produção; gestão de roles do cofre exige supermaioria de 75%. Ver [Modelo de segurança](../09-advanced/03-security-model.md).
 
-**Não.** O lock do staking protege mesmo contra a própria governança. Enquanto o lock está vigente, proposta aprovada **não destrava** seu stake. A única exceção é se o projeto for `Removed` — aí é liberação antecipada, pro-usuário (não contra).
+## Já dá para usar em mainnet?
 
-### E se o protocolo morrer?
+**Ainda não.** O protocolo roda em rede local (31337) e Sepolia (11155111). Mainnet depende de dois bloqueadores: **auditoria externa** e **parecer jurídico** sobre o enquadramento do rev-share (que tem semelhança econômica com um valor mobiliário). Ver [Riscos e segurança](../06-for-investors/03-risk-and-security.md).
 
-Se o uso cair a quase zero, emissão colapsa, APR vai a quase zero, stakers saem. A DAO pode intervir (ajustar α, abrir subsídio via Treasury, contratar novos apps). Mas tokenomics não salva produto ruim.
+## Onde vejo os números reais?
 
-## Staking
-
-### Qual o lock mínimo?
-
-14 dias. Lock abaixo reverte com `LockTooShort`.
-
-### Qual o lock máximo?
-
-Não há máximo programático. Mas o multiplier satura em 4x a partir de 365 dias — lockar mais que isso imobiliza capital sem ganhar peso adicional.
-
-### Posso sair antes do lock?
-
-**Não**, exceto se o projeto for `Removed`. `Probation` (punitiva ou inicial) não bypassa lock.
-
-### Posso stakar em múltiplos projetos?
-
-Sim. Cada `projectId` é uma posição independente.
-
-### Se eu increase_stake, o lock reseta?
-
-**Não.** `increaseStake` preserva `lockStartAt` e `lockDuration`. Só `stake` numa posição existente reseta.
-
-### Extend lock muda amount?
-
-**Não.** `extendLock` só muda `lockDuration`.
-
-## Rewards
-
-### Quando posso reivindicar?
-
-Após a rodada fechar (`closeRound` via governança) e ser finalizada (`finalizeRound` — permissionless). Detalhe em [Reivindicar rewards](../04-for-users/05-claiming-rewards.md).
-
-### Perco reward se esquecer?
-
-**Não.** Não há deadline. Uma vez finalizada, seu direito de claim persiste indefinidamente.
-
-### Por que meu claim é zero?
-
-Possíveis razões:
-
-- Rodada não finalizada (`RoundNotFinalized`).
-- Você já reivindicou (`AlreadyClaimed`).
-- Seu peso era zero no `snapshotBlock`.
-- Projeto não gerou burn nem tinha peso global.
-
-Use `previewClaim(you, round, projectId)` para diagnosticar.
-
-### Quanto vou receber?
-
-Depende do burn do projeto × seu peso × total da rodada. Fórmula em [Rewards distribution](../02-core-concepts/04-rewards-distribution.md).
-
-## Projetos / Apps
-
-### Como listar meu app?
-
-- Prepare metadata off-chain (IPFS).
-- Consiga 10.000 GOV para colateral.
-- Alguém com ≥ 10.000 GOV delegados propõe `registerProject` no Governor.
-- Após aprovação e execução, `activateProject` (segunda proposta, pode ser batch).
-
-Detalhe em [Submeter um projeto](../05-for-developers/03-submitting-a-project.md).
-
-### Quanto recebo por pagamento?
-
-5% por default. Ajustável por projeto via proposta (`setProjectSplit`).
-
-### Se eu stakar no meu próprio projeto, ganho mais?
-
-Sim. Você captura fatia da emissão proporcional ao peso do seu stake. Detalhe em [Fluxo de valor](../03-protocol-overview/03-economic-flows.md).
-
-### Perco meu colateral se eu sair?
-
-Não, se remoção for sem slash. Proposta `removeProject(id, slash=false, _)` devolve colateral ao owner.
-
-Se remoção com slash (`slash=true`), colateral vai para Treasury.
-
-## Governança
-
-### Quanto de GOV preciso para propor?
-
-10.000 GOV delegados (produção). Ajustável via proposta dentro de `[0, ilimitado]`.
-
-### Quanto tempo leva uma proposta?
-
-~10 dias em produção: 1d delay + 7d votação + 2d timelock.
-
-### Posso cancelar minha proposta?
-
-Sim, enquanto está `Pending` ou `Active`. Após `Succeeded`, precisa proposta contrária.
-
-### Minha proposta foi aprovada mas ninguém queue/execute?
-
-Qualquer um pode chamar `queue` e `execute`. Basta alguém fazer — tipicamente um holder engajado ou o proposer.
-
-### Posso votar por delegação?
-
-Sim. `gov.delegate(trustedAddress)` transfere voting power para quem você confia. Seu balance continua seu.
-
-## Técnico
-
-### Solidity qual versão?
-
-0.8.24 com `viaIR: true`.
-
-### Qual OpenZeppelin?
-
-5.0.2 pinado exato.
-
-### Tem upgrade path?
-
-**Não.** Contratos são imutáveis. Substituição exige deploy novo + migração de roles.
-
-### Tem pause?
-
-**Não.** Decisão consciente — qualquer pause seria vetor de captura.
-
-### Tem guardian multisig?
-
-**Não no v1.** Timelock é self-administered. `CANCELLER_ROLE` é só do Governor (cancel via proposta). Guardian multisig pode ser adicionado em futura proposta da DAO.
-
-### Há um bug bounty?
-
-Previsto via Immunefi logo após mainnet. Faixa critical: $50k-$250k.
-
-### Como testar localmente?
-
-```bash
-npm install
-npx hardhat node                       # terminal 1
-npx hardhat ignition deploy ./ignition/modules/Dao.ts \
-  --parameters ignition/parameters/dev.json \
-  --network localhost                  # terminal 2
-```
-
-Detalhe em [Ambiente local](../05-for-developers/05-local-dev.md).
+Tudo é on-chain (ver [Métricas que importam](../06-for-investors/04-metrics-that-matter.md)): `grossVolumeOf` (GMV por projeto), `totalRevenueDistributed`/`pendingRevenue` (rev-share), `backing`/`mintedOutstanding` (lastro). Se a doc e o código divergirem, **o código ganha**.
 
 ---
 
-**Próximo →** [Recursos](02-resources.md)
+**Próximo →** [Referência de contratos](../08-contracts-reference/)

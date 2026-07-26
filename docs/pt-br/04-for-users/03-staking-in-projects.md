@@ -1,178 +1,98 @@
 # Staking em projetos
 
-**Para quem é:** quem já tem GOV e quer receber CREDIT como reward.
-**Pré-requisitos:** [Directed staking (conceito)](../02-core-concepts/02-directed-staking.md), [Ter GOV](02-holding-gov.md).
+**Para quem é:** quem quer investir em apps e receber rev-share da receita real.
+**Pré-requisitos:** [Ter GOV](02-holding-gov.md) e [Directed staking](../02-core-concepts/02-directed-staking.md).
 
-## O mental model em 3 linhas
+O staking aqui é **direcionado**: você trava GOV num projeto específico. No modelo vigente, o stake **não rende emissão** — ele é o **pré-requisito para investir** na rodada de captação do projeto e para **sacar** o rev-share depois.
 
-1. Você escolhe **um** projeto (`projectId`).
-2. Você trava GOV por **14 a 365+ dias** — multiplier 1x a 4x.
-3. Rodadas depois, você reivindica CREDIT proporcional ao burn que aquele projeto gerou × o quanto seu peso pesa dentro do projeto.
+```
+   1. stake GOV no projeto  ->  2. invest CREDIT na rodada  ->  3. claim rev-share
+   (Staking.stake)              (ProjectFunding.invest)         (ProjectFunding.claim)
+        |                            exige peso > 0                 exige peso > 0
+        +-- gera peso no projeto ----------+------------------------+
+```
 
-## Escolhendo um projeto
+## Passo 1: Stakar GOV no projeto
 
-Antes de stakar, verifique no Registry:
-
-- Status = `Active` (projetos `Pending`/`Probation`/`Removed` bloqueiam stake novo).
-- Idade do projeto (se está em probation inicial por tempo, share é /4).
-- Burn histórico nas últimas rodadas (sinal de tração real).
-
-Ferramentas (via UI do hub):
+Escolha um projeto `Active` no [Registry](../08-contracts-reference/04-ProjectRegistry.md) e trave GOV nele:
 
 ```solidity
-// status
-registry.getProject(projectId);            // struct completa
-registry.isActive(projectId);              // bool
-registry.isInProbation(projectId);         // probation inicial por tempo
-
-// burn historico
-burnTracker.getBurnForProjectInRound(round, projectId);
-
-// concorrencia
-staking.getTotalWeight(projectId);         // quanto peso ja tem no projeto
+GovernanceToken.approve(staking, amount);
+Staking.stake(projectId, amount, lockDuration);   // lockDuration em segundos
 ```
 
-## Escolhendo o lock
+O **lock** determina o multiplier do seu peso:
 
-Função em `Staking._multiplier`:
+| Lock | Multiplier |
+|---|---|
+| 14 dias (`MIN_LOCK`) | 1x |
+| entre 14 e 365 dias | linear |
+| 365 dias (`MAX_LOCK`) ou mais | 4x (satura) |
 
-- `< 14 dias`: reverte (`LockTooShort`).
-- `14 dias`: multiplier = 1x.
-- `365 dias`: multiplier = 4x.
-- Entre 14 e 365 dias: linear.
-- `> 365 dias`: aceito, multiplier satura em 4x (e o lock real é respeitado).
+`peso = amount * multiplier / 1e18`. Lock abaixo de 14 dias reverte. O peso é o que habilita `invest` e `claim` — qualquer peso `> 0` já abre o gate, mas mais peso = mais sinal de confiança no projeto.
 
-```
-  multiplier
-       ^
-   4x  |-----______________________
-       |          _ _ _
-   3x  |     ___-
-       |   _-
-   2x  | _-
-       |_-
-   1x  |
-       +-------------------------------->  lockDuration
-      14d                 365d
-```
+Operações relacionadas:
 
-**Regras de bolso:**
+- **`increaseStake(projectId, amount)`** — adiciona GOV mantendo o lock atual.
+- **`extendLock(projectId, novoLock)`** — aumenta a duração (nunca encurta) → aumenta o multiplier.
+- **`stake` de novo no mesmo projeto** — consolida: soma o amount e **reseta** o início do lock para agora (re-compromisso temporal sobre toda a posição).
 
-- Menor lock possível (14d, 1x): só vale se você tem certeza que vai sair cedo. APR efetivo baixo.
-- Lock médio (90-180d, 1.6x–2.4x): flexibilidade vs peso, bom padrão.
-- Lock máximo (365d, 4x): maximiza peso por GOV. Use se está confiante no projeto por um ano.
-- Lock > 365d: não adiciona peso, só adiciona imobilização. Raramente vantajoso a menos que você queira sinalizar commitment extremo.
+## Passo 2: Investir na rodada
 
-## A operação de `stake`
+Com peso `> 0` no projeto, você pode entrar na rodada de captação dele no [`ProjectFunding`](../08-contracts-reference/07-ProjectFunding.md), enquanto ela estiver `Open` e dentro do prazo:
 
 ```solidity
-// Pré-requisito: você tem GOV e já aprovou o Staking
-GOV.approve(staking, amount);
-
-// Staking
-staking.stake(
-    uint256 projectId,     // o projeto escolhido
-    uint256 amount,        // wei de GOV
-    uint64 lockDuration    // segundos, >= 14 dias
-);
+CreditToken.approve(projectFunding, amount);
+ProjectFunding.invest(projectId, amount);   // amount em CREDIT
 ```
 
-A função reverte se:
+- Você investe **CREDIT** (não GOV — o GOV está stakeado, é só o gate).
+- Suas **shares = CREDIT investido** (1:1). Elas definem sua fatia pro-rata do rev-share.
+- **All-or-nothing**: se a rodada bate o alvo (`Funded`), o dono recebe o captado e o rev-share ativa. Se o prazo vence sem bater o alvo (`Failed`), você recupera 100% com `refund(projectId)`.
+- Sem GOV stakeado, `invest` reverte com `NoGovStaked`.
 
-- `amount == 0` — `ZeroAmount`.
-- `lockDuration < 14 days` — `LockTooShort`.
-- Projeto não é `Active` — `ProjectNotActive`.
-- Allowance insuficiente — `ERC20InsufficientAllowance`.
-- Balance insuficiente — `ERC20InsufficientBalance`.
+## Passo 3: Sacar o rev-share
 
-Em caso de sucesso:
-
-- GOV vai para o contrato Staking.
-- `positions[you][projectId]` grava `{amount, lockStartAt=now, lockDuration}`.
-- Três checkpoints são escritos em `block.number`.
-- Peso é calculado como `amount * multiplier(lockDuration) / 1e18`.
-
-## Operações subsequentes
-
-### `increaseStake(projectId, amount)`
-
-Aumenta o amount **sem resetar o lock**. `lockStartAt` e `lockDuration` ficam iguais.
-
-Consequência: peso aumenta proporcionalmente. Se o lock já expirou, você pode imediatamente chamar `unstake` com o novo amount — o `increaseStake` não reabre o lock.
-
-### `extendLock(projectId, newLockDuration)`
-
-Aumenta o `lockDuration` (sempre estritamente maior que o atual). `lockStartAt` **não** muda. Aumenta o peso.
-
-Útil quando seu lock está perto de expirar e você quer estender a posição sem perder o peso.
-
-### `stake` quando já há posição (consolidação)
-
-Se você chama `stake` e já tem posição em `(user, projectId)`:
-
-- `newAmount = old.amount + amount`.
-- `newLockDuration = max(remaining, lockDuration)` — o maior entre "o que sobrava do lock antigo" e "o novo lock pedido".
-- **`lockStartAt` é resetado** para `block.timestamp`.
-
-Isso é diferente do `increaseStake` — `stake` reseta o lock. Escolha consciente:
-
-- `stake`: quando você quer re-comprometer o tempo.
-- `increaseStake`: quando você só quer aumentar o principal.
-
-## Unstake
+Depois que a rodada é `Funded`, cada pagamento no app desconta o rev-share e o distribui pro-rata às shares. Você saca com:
 
 ```solidity
-staking.unstake(projectId, amount);     // parcial
-staking.unstakeAll(projectId);          // total
+ProjectFunding.claim(projectId);
 ```
 
-Condições:
+- **Exige GOV ainda stakeado** no projeto (skin in the game). Se você retirou o stake, `claim` reverte — mas o valor **não é perdido**: fica acruado até você voltar a stakear.
+- Consulte o pendente a qualquer momento: `ProjectFunding.pendingRevenue(projectId, você)`.
+- **Claims nunca expiram.**
 
-- `amount > 0` e `amount <= position.amount`.
-- **Lock expirado**: `block.timestamp >= lockStartAt + lockDuration`.
-- **OU projeto é `Removed`** — bypass do lock.
+Detalhe completo em [Sacar rev-share](05-claiming-revenue.md).
 
-Se o lock ainda está vigente e o projeto não é `Removed`, reverte com `LockNotExpired`.
+## Retirar o stake (unstake)
 
-**Observação importante**: probation punitiva (`Status.Probation`) **NÃO** bypassa o lock. Só `Status.Removed` bypassa.
+Quando o lock expira:
 
-## O que você ganha
-
-Após cada rodada R ser `finalizeRound`ada, você pode reivindicar reward:
-
-```
-amount = projectShare(round, projectId)
-       × seuPeso(round)
-       ÷ pesoTotal(round)
-
-projectShare = totalEmission × burn_do_projeto_em_R-1 ÷ burn_total_R-1
-             (se não houve burn: via peso global)
-
-Se projeto em probation inicial: projectShare /= 4.
+```solidity
+Staking.unstake(projectId, amount);     // ou unstakeAll(projectId)
 ```
 
-A fórmula completa está em [Rewards distribution](../02-core-concepts/04-rewards-distribution.md).
+Antes do lock expirar, o unstake reverte com `LockNotExpired` — **exceto** se o projeto foi `Removed` pela governança, caso em que o lock é ignorado e você recupera o GOV imediatamente.
 
-## Simulação hipotética
+> **Cuidado com o timing.** Se você fizer unstake e ainda tiver rev-share pendente, o `claim` vai reverter até você re-stakear. O valor não some, mas você precisa de stake vivo no momento do saque.
 
-Alice stakou 50.000 GOV no `projectId=42` com lock de 365 dias (peso = 200k). O projeto gerou 600k de burn na rodada R-1, o total da rodada foi 950k, emissão da rodada R é 902k CREDIT. Peso total no projeto (incluindo Alice) é 400k.
+## Fluxo completo em um exemplo
 
 ```
-projectShare = 902_000 × 600_000 / 950_000 = 569.684 CREDIT
-aliceShare   = 569.684 × 200.000 / 400.000 = 284.842 CREDIT
+Alice quer financiar o ChatApp (projectId 7), rev-share 8%:
+
+1. GOV.approve(staking, 1000e18); Staking.stake(7, 1000e18, 180 dias)
+      -> peso no ChatApp (multiplier ~2,5x para 180d)
+
+2. Rodada do ChatApp esta Open (alvo 10.000 CREDIT):
+   CREDIT.approve(funding, 2000e18); ProjectFunding.invest(7, 2000e18)
+      -> shares = 2000; se a rodada bate 10.000, ChatApp recebe e rev-share ativa
+
+3. Usuarios pagam no ChatApp. Alice tem 20% das shares (2000/10000):
+   ProjectFunding.claim(7)  -> saca 20% do rev-share acumulado
+      (enquanto mantiver os 1000 GOV stakeados no projeto 7)
 ```
-
-Alice reivindica 284.842 CREDIT no round R. Se a rodada é semanal e ela mantém a posição por um ano com burn similar, captura ~14.8M CREDIT em 52 rodadas (ilustrativo — realidade depende de dinâmica do uso).
-
-## Edge cases úteis
-
-**Stake em mais de um projeto**: cada `projectId` é uma posição independente. Você pode stakar em 5 projetos diferentes se tiver GOV suficiente.
-
-**Emergency exit por Remoção**: se a DAO remove o projeto via proposta, seu lock é bypassed. Emite evento `EarlyUnstakeAllowed` alem de `Unstaked` — você pode sacar imediatamente.
-
-**Extend vs stake**: `extendLock` **não** muda o amount. `stake` numa posição existente **soma ao amount** e pode aumentar o lock. Use de acordo.
-
-**Lock expirou e você não sacou**: sua posição ainda gera peso com multiplier original. Se quer parar de gerar peso, faça `unstake` ou `unstakeAll`. Simplesmente ignorar = peso continua acumulando.
 
 ---
 

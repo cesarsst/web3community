@@ -1,99 +1,51 @@
 # Ter GOV
 
-**Para quem é:** usuário que quer entender o que o token GOV representa e como usá-lo.
-**Pré-requisitos:** [Dual-token](../02-core-concepts/01-dual-token-economy.md).
+**Para quem é:** quem quer participar da governança e/ou investir em projetos — os dois exigem GOV.
+**Pré-requisitos:** [Como participar](01-participate.md).
 
 ## O que GOV faz por você
 
-Ter GOV na wallet te dá três capacidades:
+[`GOV`](../08-contracts-reference/01-GovernanceToken.md) é o token político do protocolo (ERC-20 com `ERC20Votes`), com cap **imutável de 100M**. Segurar GOV te habilita a três coisas — mas cada uma exige uma ação além de simplesmente ter o token:
 
-1. **Votar em propostas** (se você delegar voting power a si mesmo).
-2. **Stakar em projetos** (trava GOV e gera peso de rewards em CREDIT).
-3. **Registrar um projeto** como owner (se você tiver `minCollateral` disponível e conseguir aprovação da governança).
+| Poder | O que exige |
+|---|---|
+| **Votar em propostas** | GOV **delegado** (a si mesmo ou a outra conta) |
+| **Investir em projetos** | GOV **stakeado** naquele projeto |
+| **Capturar valorização** | apenas segurar (buyback financiado pela fee valoriza o GOV) |
 
-Sem GOV, você ainda pode ser usuário (gastar CREDIT em apps), mas não participa das decisões nem do staking.
+## Delegar: o passo que a maioria esquece
 
-## Ativando voting power com `delegate`
-
-GOV é ERC-20 com extensão ERC20Votes. Para votar, você precisa **delegar voting power**. Ter balance não basta.
-
-```
-GovernanceToken.delegate(yourAddress)
-```
-
-Se você quer votar você mesmo, delegue para si. Se você quer que alguém vote no seu lugar (um delegate que você confia), delegue para o endereço dele.
-
-A delegação:
-
-- É **gratuita** (só paga gas).
-- Pode ser **transferida** a qualquer momento (`delegate(newDelegatee)`).
-- Segue seu balance automaticamente — se você recebe mais GOV, seu delegate ganha mais peso.
-- Se você vende GOV, seu delegate perde peso na mesma proporção.
-
-**Importante**: a mudança de delegação entra em vigor no bloco seguinte. Propostas que já tinham snapshot anterior usam a delegação vigente **no bloco do snapshot**.
-
-## Snapshot e anti-flashloan
-
-Quando uma proposta abre, o Governor grava o bloco de snapshot. A função de voto consulta:
+No `ERC20Votes`, **ter GOV não te dá voto automaticamente**. O poder de voto só existe depois que você **delega** — inclusive quando delega a si mesmo:
 
 ```solidity
-uint256 votingPower = GovernanceToken.getPastVotes(account, snapshotBlock);
+GovernanceToken.delegate(suaPropriaConta);   // ativa seu voto
+// ou
+GovernanceToken.delegate(outraConta);        // delega a um representante
 ```
 
-`getPastVotes` é histórico — imune a flash-loans. Quem pegar empréstimo relâmpago de GOV **após** o snapshot não tem voting power na proposta.
+Sem delegação, seu `getVotes` é zero e você não conta para quorum nem consegue votar. Delegue **antes** do snapshot da proposta que você quer votar (o snapshot é tirado no bloco de referência da proposta — voto delegado depois não vale para ela).
 
-## Como adquirir GOV
+## Como obter GOV
 
-GOV em circulação vem de:
+- **Mercado** — GOV é um ERC-20 negociável.
+- **Distribuição da DAO** — mints controlados pela governança (o `owner` do token, em produção, é o Timelock; cada mint passa por proposta).
+- **Vesting do time** — membros do time recebem GOV liberado gradualmente via [`TeamVesting`](../08-contracts-reference/11-TeamVesting.md) (cliff + linear).
 
-- Alocações iniciais aprovadas pela DAO (genesis distribution: treasury, team, public sale, community rewards, liquidity).
-- Staking rewards (fora do escopo do v1 — a emissão de CREDIT como reward não cunha GOV).
-- Compra em DEX externa.
+Não há inflação além do cap de 100M — o `_update` do token reverte qualquer mint que ultrapasse o cap.
 
-Detalhes da distribuição em [Tokenomics](../06-for-investors/01-tokenomics.md).
+## Segurar vs. stakar: não confunda
 
-## Usar GOV como colateral para listar projeto
+Segurar GOV na carteira e **stakar** GOV são coisas diferentes:
 
-Se você é dono de um app e quer listá-lo no Registry:
+- **Segurar (+ delegar)** → mantém o token na sua carteira, te dá **voto**.
+- **Stakar** → transfere o GOV para o contrato [`Staking`](../08-contracts-reference/05-Staking.md), gera **peso num projeto** (gate de investimento). Enquanto stakeado, o GOV **não está na sua carteira**.
 
-1. Aguarde a DAO aceitar a proposta de listagem.
-2. Faça `GovernanceToken.approve(registry, collateralAmount)` (mínimo 10.000 GOV em produção).
-3. Quando a proposta de `registerProject` executar, o `registerProject` vai puxar o GOV via `transferFrom`.
+> **Atenção à delegação ao stakar.** Ao stakar, a custódia do GOV vai para o contrato `Staking`, o que afeta seu poder de voto (o token deixa sua carteira). Se você quer votar **e** stakar, planeje: mantenha uma parcela de GOV delegada na carteira para governança e stake o restante nos projetos que quer financiar. As duas funções não compartilham o mesmo GOV ao mesmo tempo.
 
-O GOV fica **travado no Registry** até o projeto ser `Removed`:
+## O que segurar GOV NÃO te dá
 
-- Se remoção for sem slash: volta para você.
-- Se remoção for com slash: vai para a tesouraria.
-
-Mais detalhe em [Submeter um projeto](../05-for-developers/03-submitting-a-project.md).
-
-## Transferindo GOV
-
-GOV é ERC-20 padrão. Transferências seguem o fluxo normal:
-
-```
-gov.transfer(recipient, amount)
-gov.approve(spender, amount)
-gov.transferFrom(owner, recipient, amount)
-```
-
-**Atenção à delegação quando transfere**: se você delega para X e depois transfere todo seu GOV para Y, o voting power de X cai a zero. Y **não** recebe automaticamente voting power — precisa delegar explicitamente.
-
-## Permit (EIP-2612)
-
-GOV herda `ERC20Permit`. Você pode assinar um "approve sem tx" via `permit(owner, spender, value, deadline, v, r, s)`. Útil para UX em que você quer aprovar e usar numa tx única (gasless approve).
-
-## Supply cap
-
-100M GOV é o teto absoluto, imutável. Quando `totalSupply() == 100M`, chamadas `mint` revertem com `CapExceeded`. Isso significa que **a emissão de GOV é previsível** — tudo que existe ou já existirá de GOV sai do processo de aprovação da DAO até atingir o cap.
-
-Verificar o supply atual: `GovernanceToken.totalSupply()` / `GovernanceToken.cap()`.
-
-## Sobre yield (não) garantido
-
-Ter GOV **não paga yield por si só**. Você ganha reward em CREDIT **apenas se stakar em um projeto que gera burn**. Manter GOV parado na wallet te dá apenas direito de voto — não distribui CREDIT.
-
-Se você quer participar do incentivo econômico, precisa ir para [Staking em projetos](03-staking-in-projects.md).
+- **Não rende juros nem emissão.** Não há reward por simplesmente ter (ou stakar) GOV. A valorização vem do buyback financiado pela fee, não de emissão.
+- **Não dá rev-share sozinho.** Rev-share exige stakar num projeto **e** investir na rodada dele — ver [Staking em projetos](03-staking-in-projects.md).
 
 ---
 

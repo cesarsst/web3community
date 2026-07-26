@@ -1,144 +1,137 @@
 # Visão geral de integração
 
-**Para quem é:** dev que quer listar um app no ecossistema e aceitar CREDIT como pagamento.
-**Pré-requisitos:** [Arquitetura](../03-protocol-overview/01-architecture.md), [Treasury e fees](../02-core-concepts/07-treasury-and-fees.md).
+**Para quem é:** dev que quer aceitar pagamentos em CREDIT dentro do próprio app usando o ecossistema web3community.
+**Pré-requisitos:** [Dual-token economy](../02-core-concepts/01-dual-token-economy.md), Node ≥ 18, familiaridade com [viem](https://viem.sh).
 
-## O contrato que você precisa conhecer
+Integrar um app significa duas coisas: **cobrar pagamentos** através do [`FeeRouterV2`](../08-contracts-reference/06-FeeRouterV2.md) e **verificar** esses pagamentos no seu backend. O SDK `@cesarsst/web3community-sdk` (v0.2.0) faz as duas pontas com viem puro — não há API HTTP a chamar, a "API" são as funções on-chain dos contratos.
 
-Para aceitar pagamentos em CREDIT, você vai interagir com **um** contrato principal:
+## O modelo em uma frase
 
-- [`FeeRouter`](../08-contracts-reference/08-FeeRouter.md) — função `pay(projectId, user, amount)`.
-
-Tudo o mais (burn, treasury, rebate, status do projeto) é tratado automaticamente dentro dele.
-
-## O ciclo completo de integração
+O usuário paga em CREDIT via `FeeRouterV2.pay(projectId, amount)`; o router cobra a fee de 2,5%, desconta o rev-share do projeto (se houver rodada financiada) e envia o resto pro seu app — tudo numa transação. Cada `pay` emite um evento `PaymentRouted` que seu backend usa como recibo verificável.
 
 ```
-1. Desenvolva seu app (fora do protocolo — qualquer stack)
-   A lógica do app sabe: "servico X custa N CREDIT"
-
-2. Registre o projeto via proposta (requer 10.000 GOV como colateral)
-   Resultado: projectId atribuido (ex: 42)
-
-3. Apos ativacao, seu app pode chamar FeeRouter.pay em nome do usuario
-   (com approve previo do usuario)
-
-4. (Opcional) Stake no proprio projectId para capturar emissao via (B)
-
-5. Monitore eventos e metricas
+carteira do usuario                         seu backend
+       |                                         |
+   payActivation(sdk, wallet, {…})               |
+       |  approve(CREDIT -> FeeRouterV2)          |
+       |  FeeRouterV2.pay(projectId, amount)      |
+       |  ---> tx minerada, PaymentRouted emitido |
+       |                                          |
+       |  envia txHash pro backend  ------------> |
+       |                          verifyActivationPayment(sdk, {txHash, …})
+       |                          <--- {valid, payment, blockTimestamp}
 ```
 
-## O que o app chama
+## Instalação
 
-Do ponto de vista do backend/contrato do seu app, o fluxo é:
+O SDK é publicado no GitHub Packages (registry privado). Pin de semver, nunca `file:`.
 
-```solidity
-// Passo 1 (off-chain): UI do seu app mostra preco ao usuario
-// Passo 2: UI pede approve
-IERC20(creditToken).approve(feeRouter, amount);
-
-// Passo 3: UI/app chama pay (ou o usuario chama direto)
-(uint256 burned, uint256 toTreasury, uint256 toApp) =
-    feeRouter.pay(projectId, user, amount);
-
-// Passo 4: app verifica sucesso (via evento Paid ou return values)
-// Passo 5: app entrega o servico ao usuario
+```bash
+# .npmrc do seu projeto
+@cesarsst:registry=https://npm.pkg.github.com
 ```
 
-`pay` é **pública** — qualquer um pode chamar, desde que `user` tenha `allowance`. Isso permite:
-
-- **O próprio usuário** chamando `pay` (paga o gas ele mesmo).
-- **O app** chamando `pay` em nome do usuário (gas sponsorship — app paga gas, usuário só aprovou antes).
-- **Um relayer / smart wallet** chamando `pay` em nome do usuário (meta-tx-like).
-
-O "payer econômico" é sempre `user` (pago via `transferFrom`).
-
-## Quanto o app recebe
-
-Dado o split default em produção (95% burn, 0% treasury, 5% rebate):
-
-- Imediato: **5%** vai para o `appRecipient` (default é o `owner` do projeto no Registry).
-- Indiretamente, via `RewardDistributor` da próxima rodada: **share de emissão proporcional ao burn do projeto**, que o app pode capturar se stakar.
-
-Detalhamento das 3 fontes de receita (rebate + stake + apreciação do CREDIT retido) em [Fluxo de valor](../03-protocol-overview/03-economic-flows.md).
-
-## Aviso para UIs de claim — sempre checar `previewClaim` antes
-
-`RewardDistributor.claim` com `amount == 0` é **no-op silencioso no contrato** (não marca `claimed[round][projectId][user]`), mas **gasta gas do caller** e não emite `Claimed`. Pior: `claimMany` aceita arrays grandes com todas as entries zeradas, desperdiçando gas sem efeito.
-
-Se você integra uma UI de claim (dashboard de staker, app de consumo que também mostra rewards, etc.), **sempre chame `previewClaim(user, round, projectId)` antes** e só permita a tx se o retorno for `> 0`. Isso evita:
-
-- Usuários pagando gas em transações que não fazem nada.
-- Loops de retry inúteis quando o usuário não entende por que nada muda.
-- Vetor de DoS leve onde alguém submete `claimMany` com 1000 entries todas com `amount = 0` — contrato aceita, gasta gas do caller, não marca nada.
-
-```solidity
-// Padrão recomendado pela UI:
-uint256 preview = distributor.previewClaim(user, round, projectId);
-if (preview == 0) return; // não habilitar botão
-// senão, habilitar claim
+```jsonc
+// package.json — pin exato
+"dependencies": {
+  "@cesarsst/web3community-sdk": "0.2.0",
+  "viem": "^2.23.0"
+}
 ```
 
-Para `claimMany`, filtre pares `(round, projectId)` com `previewClaim > 0` antes de montar os arrays.
+## Configuração de runtime
 
-## Eventos que você quer monitorar
+O SDK não hardcoda endereços. Ele recebe um `RuntimeConfig` `{ chainId, rpcUrl, addresses }` — o mesmo shape que o backend web3community exporta em `scripts/export-runtime-config.ts` e que o frontend serve em `GET /config.json`.
 
-Do `FeeRouter`:
+```ts
+import { createWeb3CommunitySdk, loadRuntimeConfig } from '@cesarsst/web3community-sdk'
 
-- `Paid(projectId, user, payer, amount, burned, toTreasury, toApp, recipient)` — a cada pagamento do seu projeto.
-
-Do `BurnTracker`:
-
-- `BurnRecorded(round, projectId, from, amount, newTotalForProject)` — burn do seu projeto em cada rodada.
-- `RoundClosed(round, totalBurn, projectsCount, closedAt, earlyClose)` — para saber quando uma rodada fecha.
-
-Do `RewardDistributor`:
-
-- `RoundFinalized(round, totalEmission, totalBurnAtFinalize, snapshotBlock)` — quando você pode começar a reivindicar.
-- `Claimed(user, round, projectId, amount)` — cada claim feito por stakers do seu projeto.
-
-## Configurando destino do rebate
-
-Por default, o rebate vai para `ProjectRegistry.getProject(projectId).owner`. Se você quer direcionar para outro endereço (por exemplo, um contrato de distribuição interna do app, um multisig operacional, etc.):
-
-```solidity
-// Chamável pelo owner atual do projeto
-feeRouter.setAppRecipient(projectId, newRecipient);
+// carrega de uma URL (ex.: /config.json do hub, ou seu próprio endpoint)
+const config = await loadRuntimeConfig('https://hub.web3community.example/config.json')
+const sdk = createWeb3CommunitySdk(config)
 ```
 
-Passar `address(0)` reseta para lookup dinâmico (volta a seguir o owner do Registry).
+`addresses` precisa conter no mínimo `CreditToken`, `FeeRouterV2` e `ProjectRegistry` (validado em `parseRuntimeConfig`). Em ambiente local, gere o config a partir do deploy Ignition — ver [Ambiente local](05-local-dev.md).
 
-Esta função é **owner-gated**, não governance-gated — rotação operacional não exige proposta.
+## Cobrar um pagamento (lado da carteira)
 
-## Cota e limites
+`payActivation` faz o fluxo completo `approve` + `pay` a partir da carteira do usuário. **O pagador é sempre `msg.sender`** (a conta do `walletClient`) — não há custódia intermediária.
 
-- **Sanity cap por rodada**: em produção 10M CREDIT de burn por projeto por rodada. Se seu app explodir em volume em uma rodada, tx que ultrapasse o cap reverte com `SanityCapExceeded`. Use batch scheduling off-chain se esperar volume absurdo (split em múltiplas rodadas).
-- **Projeto precisa estar `Active`**. Se virar `Probation` (punitiva) ou `Removed`, `pay` reverte com `ProjectNotActive`.
+```ts
+import { payActivation } from '@cesarsst/web3community-sdk'
+import { parseEther } from 'viem'
 
-## Testando
+const { approveHash, payHash } = await payActivation(sdk, walletClient, {
+  projectId: 1n,
+  amount: parseEther('10'),          // 10 CREDIT (18 decimais)
+  onStep: (step) => console.log(step) // 'approve' | 'approve-wait' | 'pay' | 'pay-wait'
+})
+```
 
-Desenvolvimento local via Hardhat + Ignition (veja [Ambiente local](05-local-dev.md)).
+O que acontece por baixo:
 
-Para testnet Sepolia, a equipe do protocolo fornece endereços após deploy. Sua UI aponta para esses endereços usando a configuração apropriada.
+1. Lê `allowance(payer, FeeRouterV2)`. Se `< amount`, envia `approve` **exato** e espera minerar.
+2. Simula `FeeRouterV2.pay` (reverts viram erros decodificados) e envia a transação.
+3. Espera a tx e retorna `payHash` (e `approveHash`, se o approve foi necessário).
 
-## O que o app **não** precisa fazer
+Se a allowance já cobre o valor, o approve é pulado — só o `pay` acontece. Envie o `payHash` resultante pro seu backend.
 
-- **Não** chame `BurnTracker.burnAndRecord` diretamente do seu app. O `FeeRouter.pay` faz isso por você. Apenas o `FeeRouter` tem `RECORDER_ROLE` no bootstrap.
-- **Não** chame `CreditToken.burnByRole` diretamente. O caminho oficial de burn é via `FeeRouter`.
-- **Não** precisa se preocupar com o splitting. Ele é feito pelo `FeeRouter` automaticamente.
+### Preview do detalhamento (opcional, pra UI)
 
-## Segurança
+Antes de cobrar, mostre ao usuário quanto vai pra fee e quanto sobra pro app:
 
-Seu app deve:
+```ts
+const { fee, revShare, toApp } = await sdk.feeRouterV2.previewPay(1n, parseEther('10'))
+// fee = 2,5% * amount; revShare = revShareBps do projeto * amount; toApp = amount - fee - revShare
+```
 
-- Verificar que o `user` na chamada `pay` é quem você espera (não passe `user = msg.sender` cegamente se o fluxo é meta-tx).
-- Confiar no retorno de `pay` — se a tx não reverteu, o pagamento foi processado com sucesso.
-- Tratar `ProjectNotActive` e `SanityCapExceeded` como sinais de erro irrecuperáveis naquela tx.
+## Verificar um pagamento (lado do backend)
 
-Seu app **não precisa**:
+Nunca confie no cliente. No servidor, valide o `txHash` contra o evento on-chain:
 
-- Guardar CREDIT intermediário — `pay` é atômico.
-- Gerenciar allowance infinita — a UX mais limpa é approve por quantia, não infinita, mas depende do seu UX.
+```ts
+import { verifyActivationPayment } from '@cesarsst/web3community-sdk'
+import { parseEther } from 'viem'
+
+const result = await verifyActivationPayment(sdk, {
+  txHash,
+  projectId: 1n,
+  payer: userWalletAddress,   // deve bater com PaymentRouted.payer
+  minAmount: parseEther('10') // valor mínimo aceito
+})
+
+if (result.valid) {
+  // result.payment: { projectId, payer, amount, feeToTreasury, feeToBuyback, feeToGrants, revShare, toApp }
+  // result.blockTimestamp: âncora da janela de ativação (segundos)
+  ativarServico(result.payment, result.blockTimestamp)
+} else {
+  console.warn('pagamento inválido:', result.reason)
+}
+```
+
+`verifyActivationPayment` confere que:
+
+- a transação minerou com **sucesso** (`receipt.status === 'success'`);
+- ela emitiu `PaymentRouted` **do `FeeRouterV2` oficial** (filtra por `log.address`, ignorando eventos de contratos impostores);
+- o evento bate com `projectId`, `payer` e `amount >= minAmount`.
+
+Retorna o `blockTimestamp` do bloco para você ancorar janelas de ativação (ex.: assinatura válida por N segundos).
+
+> **Anti-replay é responsabilidade sua.** O SDK não guarda estado. Marque cada `txHash` como consumido no seu banco para impedir que o mesmo recibo ative o serviço duas vezes.
+
+## Checklist de integração
+
+1. Registrar seu app como projeto no Registry e ativá-lo via governança — ver [Submeter um projeto](03-submitting-a-project.md). Sem projeto `Active`, `pay` reverte com `ProjectNotActive`.
+2. Instalar o SDK (pin de semver) e carregar o `RuntimeConfig`.
+3. Front: `payActivation` a partir da carteira do usuário.
+4. Backend: `verifyActivationPayment` + anti-replay por `txHash`.
+5. (Opcional) definir um `appRecipient` dedicado com `FeeRouterV2.setAppRecipient(projectId, recipient)` — por padrão o destino é o `owner` do projeto.
+
+## Referências
+
+- SDK completo (client, activation, walletLink): `@cesarsst/web3community-sdk`.
+- Contrato de cobrança: [FeeRouterV2](../08-contracts-reference/06-FeeRouterV2.md).
+- Consulta de estado on-chain: [Consultar estado](04-querying-state.md).
 
 ---
 

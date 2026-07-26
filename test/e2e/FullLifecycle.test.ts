@@ -7,101 +7,98 @@ import {
   time,
 } from "@nomicfoundation/hardhat-network-helpers";
 
-import CommunityDAOModule from "../../ignition/modules/Dao";
-
 /**
- * E2E — FullLifecycle
+ * E2E — FullLifecycle (remodel 2026-07-08: payment rail + rev-share funding)
  *
  * Cenario: simula o ciclo economico completo da Web3Community passando por
- * TODOS os 10 contratos em uso coordenado. A fixture:
- *   1. Deploya via Ignition (perfil DEV — defaults).
- *   2. `impersonateAccount(timelock)` para `acceptOwnership` do GovernanceToken
- *      e para mintar GOV para os atores do teste (opcao B do briefing — teste
- *      controlado, sem modificar o Ignition que ficaria impuro).
- *   3. Registra dois projetos ("Chat App" e "Game App") via impersonate do
- *      Timelock, ativa ambos.
- *   4. Transfere CREDIT do Treasury para usuarios finais (simulacao da
- *      distribuicao do genesis via proposta aprovada — novamente via
- *      impersonate para teste controlado).
+ * TODOS os contratos do modelo vigente em uso coordenado:
+ *   GOV / CREDIT / Timelock / Registry / Treasury / Staking / USDC mock /
+ *   CreditPSM / ProjectFunding / FeeRouterV2 / Governor.
  *
- * O teste nao usa o Governor para cada acao — isso ja e coberto em
- * `test/ignition/Dao.test.ts` (smoke test). Aqui validamos as invariantes
- * economicas ponta-a-ponta assumindo governanca ja ratificou o necessario.
+ * Fixture (perfil DEV via Ignition, com `DEPLOY_USDC_MOCK=true`):
+ *   1. Deploya via Ignition.
+ *   2. `impersonateAccount(timelock)` para `acceptOwnership` do GovernanceToken,
+ *      mintar GOV para os atores e registrar/ativar os projetos (opcao B do
+ *      briefing — teste controlado, sem tocar no Ignition).
+ *   3. Semeia USDC para os atores comprarem CREDIT no PSM.
  *
- * Fluxo E2E testado:
- *   - Alice stake em Chat App com lock 30d.
- *   - Bob stake em Game App com lock 90d.
- *   - Charlie paga 1000 CREDIT em Chat App (95/0/5 — 950 burn, 50 rebate).
- *   - David paga 500 CREDIT em Game App (95/0/5 — 475 burn, 25 rebate).
- *   - Avanca tempo > roundDuration.
- *   - Timelock fecha rodada 0 via BurnTracker.closeRound().
- *   - Qualquer um finaliza rodada 0 via RewardDistributor.finalizeRound(0).
- *   - Alice e Bob claim seus rewards.
- *   - Alice tenta unstake cedo — revert (lock 30d).
- *   - Avanca tempo > 30d. Alice unstake — sucesso.
- *   - Checa invariantes globais: soma de balanceOf(CREDIT) == totalSupply,
- *     nenhum contrato vazou valor, etc.
- *
- * Asserções chave:
- *   - CREDIT.totalSupply() diminuiu em exatamente (950 + 475) = 1425 pelos
- *     burns, e subiu em (aliceReward + bobReward) pelos mints do finalize.
- *   - BurnTracker.totalBurnByRound[0] == 1425.
- *   - Alice claim > 0 e Bob claim > 0, ambos <= totalEmission da rodada.
- *   - Lock de Alice bloqueou unstake cedo e liberou apos 30d.
+ * Fluxo E2E testado (modelo novo — sem burn/emissao):
+ *   - Alice e Bob compram CREDIT no PSM (USDC 1:1) e stakeiam GOV no Chat App.
+ *   - Chat App abre rodada de captacao (rev-share 10%); Alice (60%) e Bob (40%)
+ *     investem ate bater o alvo -> rodada Funded, dono recebe o captado.
+ *   - Um pagador (payer) paga CREDIT no Chat App via FeeRouterV2.pay:
+ *       fee 2,5% (split 40/40/20 treasury/buyback/grants), rev-share 10% aos
+ *       investidores, resto ao appRecipient (dono do projeto).
+ *   - Alice e Bob sacam o rev-share pro-rata (60/40).
+ *   - Bob paga tambem no Game App (sem rodada de funding -> rev-share 0).
+ *   - Alice tenta unstake cedo (revert por lock) e depois consegue apos o lock.
+ *   - Invariantes globais: conservacao de CREDIT (supply == soma dos saldos),
+ *     lastro integral do PSM, nada preso no FeeRouterV2, conservacao de GOV.
  */
-describe("E2E: FullLifecycle — ciclo economico completo passando por todos os contratos", function () {
-  // Fluxo tem muitos transacoes — bumpa timeout pra CI mais lenta.
+describe("E2E: FullLifecycle — ciclo economico completo (payment rail + funding)", function () {
   this.timeout(180_000);
 
-  const DEV_ROUND_DURATION = 86_400n; // 1d
+  const E18 = 10n ** 18n;
+  const E6 = 10n ** 6n;
+  const SCALE = 10n ** 12n;
 
-  // Montantes do cenario (em wei).
-  const ALICE_GOV_AMOUNT = 100_000n * 10n ** 18n; // 100k GOV
-  const BOB_GOV_AMOUNT = 50_000n * 10n ** 18n; // 50k GOV
-  const PROJECT_OWNER_COLLATERAL = 5_000n * 10n ** 18n; // 5k GOV (>= minCollateral)
-
-  const ALICE_STAKE_AMOUNT = 80_000n * 10n ** 18n;
-  const BOB_STAKE_AMOUNT = 40_000n * 10n ** 18n;
-
-  const ALICE_LOCK_30D = 30n * 86_400n; // 30 dias em seg (>= MIN_LOCK 14d)
+  const MAX_LOCK = 365n * 86_400n;
+  const ALICE_LOCK_30D = 30n * 86_400n; // >= MIN_LOCK 14d
   const BOB_LOCK_90D = 90n * 86_400n;
 
-  const CHARLIE_CREDIT = 10_000n * 10n ** 18n; // saldo inicial de CREDIT
-  const DAVID_CREDIT = 5_000n * 10n ** 18n;
-  const CHARLIE_PAYMENT = 1_000n * 10n ** 18n; // gasta 1000 CREDIT no Chat App
-  const DAVID_PAYMENT = 500n * 10n ** 18n; // gasta 500 CREDIT no Game App
+  // Montantes GOV.
+  const ALICE_GOV_AMOUNT = 100_000n * E18;
+  const BOB_GOV_AMOUNT = 50_000n * E18;
+  const PROJECT_OWNER_COLLATERAL = 5_000n * E18; // >= minCollateral (1k DEV)
+
+  const ALICE_STAKE_AMOUNT = 80_000n * E18;
+  const BOB_STAKE_AMOUNT = 40_000n * E18;
+
+  // Rodada de funding do Chat App.
+  const REV_SHARE_BPS = 1000n; // 10%
+  const TARGET = 50_000n * E18;
+  const ROUND_DURATION = 30n * 86_400n;
+  const ALICE_INVEST = (TARGET * 60n) / 100n; // 30k
+  const BOB_INVEST = (TARGET * 40n) / 100n; // 20k
+
+  // Pagamentos via FeeRouterV2.
+  const PAYER_PAYMENT = 10_000n * E18; // paga no Chat App
+  const BOB_GAME_PAYMENT = 1_000n * E18; // paga no Game App (sem funding)
+
+  const FEE_BPS = 250n; // 2,5%
 
   async function deployFullEcosystemFixture() {
-    const deployed = await hre.ignition.deploy(CommunityDAOModule);
+    const original = process.env.DEPLOY_USDC_MOCK;
+    process.env.DEPLOY_USDC_MOCK = "true";
+    let deployed;
+    try {
+      const path = require.resolve("../../ignition/modules/Dao");
+      delete require.cache[path];
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      const mod = require("../../ignition/modules/Dao");
+      deployed = await hre.ignition.deploy(mod.default);
+    } finally {
+      if (original === undefined) delete process.env.DEPLOY_USDC_MOCK;
+      else process.env.DEPLOY_USDC_MOCK = original;
+    }
 
-    const [deployer, alice, bob, charlie, david, chatAppOwner, gameAppOwner] =
-      await ethers.getSigners();
+    const [deployer, alice, bob, payer, chatAppOwner, gameAppOwner] = await ethers.getSigners();
 
-    const [
-      gov,
-      credit,
-      timelock,
-      registry,
-      treasury,
-      staking,
-      burnTracker,
-      distributor,
-      feeRouter,
-      governor,
-    ] = await Promise.all([
-      ethers.getContractAt("GovernanceToken", await deployed.gov.getAddress()),
-      ethers.getContractAt("CreditToken", await deployed.credit.getAddress()),
-      ethers.getContractAt("CommunityTimelock", await deployed.timelock.getAddress()),
-      ethers.getContractAt("ProjectRegistry", await deployed.registry.getAddress()),
-      ethers.getContractAt("Treasury", await deployed.treasury.getAddress()),
-      ethers.getContractAt("Staking", await deployed.staking.getAddress()),
-      ethers.getContractAt("BurnTracker", await deployed.burnTracker.getAddress()),
-      ethers.getContractAt("RewardDistributor", await deployed.distributor.getAddress()),
-      ethers.getContractAt("FeeRouter", await deployed.feeRouter.getAddress()),
-      ethers.getContractAt("CommunityGovernor", await deployed.governor.getAddress()),
-    ]);
+    const [gov, credit, timelock, registry, treasury, staking, usdc, psm, funding, feeRouterV2] =
+      await Promise.all([
+        ethers.getContractAt("GovernanceToken", await deployed.gov.getAddress()),
+        ethers.getContractAt("CreditToken", await deployed.credit.getAddress()),
+        ethers.getContractAt("CommunityTimelock", await deployed.timelock.getAddress()),
+        ethers.getContractAt("ProjectRegistry", await deployed.registry.getAddress()),
+        ethers.getContractAt("Treasury", await deployed.treasury.getAddress()),
+        ethers.getContractAt("Staking", await deployed.staking.getAddress()),
+        ethers.getContractAt("ERC20DecimalsMock", await deployed.usdc.getAddress()),
+        ethers.getContractAt("CreditPSM", await deployed.psm.getAddress()),
+        ethers.getContractAt("ProjectFunding", await deployed.funding.getAddress()),
+        ethers.getContractAt("FeeRouterV2", await deployed.feeRouterV2.getAddress()),
+      ]);
 
-    // Impersonate Timelock — o unico owner/admin pos-deploy.
+    // Impersonate Timelock — unico owner/admin pos-deploy.
     const tlAddr = await timelock.getAddress();
     await impersonateAccount(tlAddr);
     const tlSigner = await ethers.getSigner(tlAddr);
@@ -110,9 +107,7 @@ describe("E2E: FullLifecycle — ciclo economico completo passando por todos os 
     // Bootstrap 1: Timelock aceita ownership do GOV (necessario pra mintar).
     await gov.connect(tlSigner).acceptOwnership();
 
-    // Bootstrap 2: Mint GOV para atores do teste.
-    // Total minted: alice + bob + chat + game = 100k + 50k + 5k + 5k = 160k GOV
-    // (longe do cap 100M, sem risco de CapExceeded).
+    // Bootstrap 2: Mint GOV para atores.
     await gov.connect(tlSigner).mint(alice.address, ALICE_GOV_AMOUNT, "e2e:alice");
     await gov.connect(tlSigner).mint(bob.address, BOB_GOV_AMOUNT, "e2e:bob");
     await gov
@@ -122,21 +117,16 @@ describe("E2E: FullLifecycle — ciclo economico completo passando por todos os 
       .connect(tlSigner)
       .mint(gameAppOwner.address, PROJECT_OWNER_COLLATERAL, "e2e:gameApp:collateral");
 
-    // Bootstrap 3: Treasury transfere CREDIT do genesis pra Charlie e David
-    // (simulando venda direta / distribuicao via proposta).
-    await treasury
-      .connect(tlSigner)
-      .transfer(await credit.getAddress(), charlie.address, CHARLIE_CREDIT);
-    await treasury
-      .connect(tlSigner)
-      .transfer(await credit.getAddress(), david.address, DAVID_CREDIT);
+    // Bootstrap 3: Semeia USDC para os atores comprarem CREDIT no PSM.
+    for (const s of [alice, bob, payer]) {
+      await usdc.mint(s.address, 1_000_000n * E6);
+      await usdc.connect(s).approve(await psm.getAddress(), ethers.MaxUint256);
+    }
 
-    // Bootstrap 4: Owners dos projetos aprovam o Registry para transferir
-    // o colateral no registerProject.
+    // Bootstrap 4: Owners aprovam Registry pro colateral; Timelock registra + ativa.
     await gov.connect(chatAppOwner).approve(await registry.getAddress(), PROJECT_OWNER_COLLATERAL);
     await gov.connect(gameAppOwner).approve(await registry.getAddress(), PROJECT_OWNER_COLLATERAL);
 
-    // Bootstrap 5: Timelock registra + ativa os dois projetos.
     await registry
       .connect(tlSigner)
       .registerProject(chatAppOwner.address, "ipfs://chat-app-metadata", PROJECT_OWNER_COLLATERAL);
@@ -156,15 +146,14 @@ describe("E2E: FullLifecycle — ciclo economico completo passando por todos os 
       registry,
       treasury,
       staking,
-      burnTracker,
-      distributor,
-      feeRouter,
-      governor,
+      usdc,
+      psm,
+      funding,
+      feeRouterV2,
       deployer,
       alice,
       bob,
-      charlie,
-      david,
+      payer,
       chatAppOwner,
       gameAppOwner,
       tlSigner,
@@ -173,283 +162,228 @@ describe("E2E: FullLifecycle — ciclo economico completo passando por todos os 
     };
   }
 
-  it("executa o ciclo economico completo: stake -> pay -> closeRound -> finalize -> claim -> unstake", async () => {
+  it("executa o ciclo completo: buy -> stake -> openRound -> invest -> pay -> claim -> unstake", async () => {
     const {
       gov,
       credit,
       treasury,
       registry,
       staking,
-      burnTracker,
-      distributor,
-      feeRouter,
+      psm,
+      funding,
+      feeRouterV2,
       alice,
       bob,
-      charlie,
-      david,
+      payer,
       chatAppOwner,
       gameAppOwner,
-      tlSigner,
       chatAppId,
       gameAppId,
     } = await loadFixture(deployFullEcosystemFixture);
 
     const stakingAddr = await staking.getAddress();
-    const feeRouterAddr = await feeRouter.getAddress();
+    const routerAddr = await feeRouterV2.getAddress();
     const treasuryAddr = await treasury.getAddress();
+    const fundingAddr = await funding.getAddress();
+    const psmAddr = await psm.getAddress();
 
-    // Snapshot economico inicial — invariantes globais cobram zerar no fim.
-    const supplyAtStart = await credit.totalSupply();
-    expect(supplyAtStart).to.equal(10_000_000n * 10n ** 18n); // genesis 10M
+    // Snapshot inicial: sem genesis, supply de CREDIT comeca em zero.
+    expect(await credit.totalSupply()).to.equal(0n);
 
-    // ---------------- Passo 1: Alice stake em Chat App ----------------
+    // ---------------- Passo 1: Alice e Bob compram CREDIT no PSM -------------
+    // Alice compra o suficiente pro investimento; Bob idem.
+    await psm.connect(alice).buy(100_000n * E6); // 100k CREDIT
+    await psm.connect(bob).buy(100_000n * E6); // 100k CREDIT
+    expect(await credit.balanceOf(alice.address)).to.equal(100_000n * E18);
+    expect(await credit.balanceOf(bob.address)).to.equal(100_000n * E18);
+    // Lastro integral: USDC retido == CREDIT mintado (normalizado).
+    expect(await psm.backingNormalized()).to.equal(await psm.mintedOutstanding());
+
+    // ---------------- Passo 2: Alice e Bob stakeiam GOV no Chat App ---------
     await gov.connect(alice).approve(stakingAddr, ALICE_STAKE_AMOUNT);
     await staking.connect(alice).stake(chatAppId, ALICE_STAKE_AMOUNT, ALICE_LOCK_30D);
-
     const alicePosition = await staking.getPosition(alice.address, chatAppId);
     expect(alicePosition.amount).to.equal(ALICE_STAKE_AMOUNT);
-    expect(alicePosition.lockDuration).to.equal(ALICE_LOCK_30D);
+    expect(await staking.getWeight(alice.address, chatAppId)).to.be.gt(0n);
 
-    // Peso = amount * multiplier(30d). 30d = MIN_LOCK + 16d — multiplier um
-    // pouco acima de 1x. Assertamos positivo; valor exato eh irrelevante pro E2E.
-    const aliceWeight = await staking.getWeight(alice.address, chatAppId);
-    expect(aliceWeight).to.be.gt(0n);
-
-    // ---------------- Passo 2: Bob stake em Game App ------------------
     await gov.connect(bob).approve(stakingAddr, BOB_STAKE_AMOUNT);
-    await staking.connect(bob).stake(gameAppId, BOB_STAKE_AMOUNT, BOB_LOCK_90D);
+    await staking.connect(bob).stake(chatAppId, BOB_STAKE_AMOUNT, BOB_LOCK_90D);
+    expect((await staking.getPosition(bob.address, chatAppId)).amount).to.equal(BOB_STAKE_AMOUNT);
 
-    const bobPosition = await staking.getPosition(bob.address, gameAppId);
-    expect(bobPosition.amount).to.equal(BOB_STAKE_AMOUNT);
+    // ---------------- Passo 3: Chat App abre rodada de captacao -------------
+    await funding
+      .connect(chatAppOwner)
+      .openRound(chatAppId, TARGET, REV_SHARE_BPS, ROUND_DURATION);
+    const openRound = await funding.rounds(chatAppId);
+    expect(openRound.status).to.equal(1n); // Open
 
-    const bobWeight = await staking.getWeight(bob.address, gameAppId);
-    expect(bobWeight).to.be.gt(0n);
+    // ---------------- Passo 4: Alice (60%) e Bob (40%) investem -------------
+    const ownerCreditBeforeFund = await credit.balanceOf(chatAppOwner.address);
+    await credit.connect(alice).approve(fundingAddr, ALICE_INVEST);
+    await funding.connect(alice).invest(chatAppId, ALICE_INVEST);
+    await credit.connect(bob).approve(fundingAddr, BOB_INVEST);
+    await funding.connect(bob).invest(chatAppId, BOB_INVEST); // completa o alvo -> Funded
 
-    // ---------------- Passo 3: Charlie paga no Chat App ----------------
-    await credit.connect(charlie).approve(feeRouterAddr, CHARLIE_PAYMENT);
-    const chatAppOwnerCreditBefore = await credit.balanceOf(chatAppOwner.address);
-    const supplyBeforeCharlie = await credit.totalSupply();
+    const fundedRound = await funding.rounds(chatAppId);
+    expect(fundedRound.status).to.equal(2n); // Funded
+    // Dono recebeu o captado (target inteiro).
+    expect((await credit.balanceOf(chatAppOwner.address)) - ownerCreditBeforeFund).to.equal(TARGET);
+    // Rev-share ativo.
+    expect(await funding.revShareBpsOf(chatAppId)).to.equal(REV_SHARE_BPS);
+    expect(await funding.sharesOf(chatAppId, alice.address)).to.equal(ALICE_INVEST);
+    expect(await funding.sharesOf(chatAppId, bob.address)).to.equal(BOB_INVEST);
 
-    const chatPayTx = await feeRouter
-      .connect(charlie)
-      .pay(chatAppId, charlie.address, CHARLIE_PAYMENT);
-    await chatPayTx.wait();
+    // ---------------- Passo 5: payer paga no Chat App via FeeRouterV2 ------
+    await psm.connect(payer).buy(20_000n * E6); // 20k CREDIT
+    await credit.connect(payer).approve(routerAddr, ethers.MaxUint256);
 
-    // Split 95/0/5 — 950 burned, 0 treasury, 50 rebate.
-    const chatAppOwnerCreditAfter = await credit.balanceOf(chatAppOwner.address);
-    expect(chatAppOwnerCreditAfter - chatAppOwnerCreditBefore).to.equal(50n * 10n ** 18n);
-    const supplyAfterCharlie = await credit.totalSupply();
-    expect(supplyBeforeCharlie - supplyAfterCharlie).to.equal(950n * 10n ** 18n);
+    const fee = (PAYER_PAYMENT * FEE_BPS) / 10_000n; // 250
+    const toTreasury = (fee * 4000n) / 10_000n; // 100
+    const toBuyback = (fee * 4000n) / 10_000n; // 100
+    const toGrants = fee - toTreasury - toBuyback; // 50
+    const revShare = (PAYER_PAYMENT * REV_SHARE_BPS) / 10_000n; // 1000
+    const toApp = PAYER_PAYMENT - fee - revShare; // 8750
 
-    // BurnTracker deve ter registrado o burn.
-    const burnChatRound0 = await burnTracker.getBurnForProjectInRound(0, chatAppId);
-    expect(burnChatRound0).to.equal(950n * 10n ** 18n);
+    // Recipients treasury/buyback/grants = Treasury (todos apontam pro cofre no DEV).
+    const treasuryCreditBeforePay = await credit.balanceOf(treasuryAddr);
+    const ownerCreditBeforePay = await credit.balanceOf(chatAppOwner.address);
 
-    // ---------------- Passo 4: David paga no Game App ------------------
-    await credit.connect(david).approve(feeRouterAddr, DAVID_PAYMENT);
-    const gameAppOwnerCreditBefore = await credit.balanceOf(gameAppOwner.address);
-    const supplyBeforeDavid = await credit.totalSupply();
+    await expect(feeRouterV2.connect(payer).pay(chatAppId, PAYER_PAYMENT))
+      .to.emit(feeRouterV2, "PaymentRouted")
+      .withArgs(chatAppId, payer.address, PAYER_PAYMENT, toTreasury, toBuyback, toGrants, revShare, toApp, false);
 
-    await feeRouter.connect(david).pay(gameAppId, david.address, DAVID_PAYMENT);
+    // Treasury recebeu as 3 parcelas da fee (todas apontam pro cofre).
+    expect((await credit.balanceOf(treasuryAddr)) - treasuryCreditBeforePay).to.equal(fee);
+    // App (dono) recebeu o resto.
+    expect((await credit.balanceOf(chatAppOwner.address)) - ownerCreditBeforePay).to.equal(toApp);
+    // Volume bruto registrado.
+    expect(await feeRouterV2.grossVolumeOf(chatAppId)).to.equal(PAYER_PAYMENT);
 
-    const gameAppOwnerCreditAfter = await credit.balanceOf(gameAppOwner.address);
-    expect(gameAppOwnerCreditAfter - gameAppOwnerCreditBefore).to.equal(25n * 10n ** 18n);
-    const supplyAfterDavid = await credit.totalSupply();
-    expect(supplyBeforeDavid - supplyAfterDavid).to.equal(475n * 10n ** 18n);
+    // ---------------- Passo 6: Alice e Bob sacam rev-share pro-rata --------
+    // Pool de rev-share = 1000 CREDIT, dividido 60/40.
+    const aliceExpected = (revShare * 60n) / 100n; // 600
+    const bobExpected = (revShare * 40n) / 100n; // 400
+    expect(await funding.pendingRevenue(chatAppId, alice.address)).to.equal(aliceExpected);
+    expect(await funding.pendingRevenue(chatAppId, bob.address)).to.equal(bobExpected);
 
-    // Total burnado na rodada 0 = 1425 CREDIT.
-    const totalBurnRound0 = await burnTracker.getTotalBurnForRound(0);
-    expect(totalBurnRound0).to.equal(1_425n * 10n ** 18n);
-    const burnGameRound0 = await burnTracker.getBurnForProjectInRound(0, gameAppId);
-    expect(burnGameRound0).to.equal(475n * 10n ** 18n);
+    const aliceBeforeClaim = await credit.balanceOf(alice.address);
+    await funding.connect(alice).claim(chatAppId);
+    expect((await credit.balanceOf(alice.address)) - aliceBeforeClaim).to.equal(aliceExpected);
 
-    // Supply diminuiu em 1425 CREDIT total desde o inicio.
-    expect(supplyAtStart - (await credit.totalSupply())).to.equal(1_425n * 10n ** 18n);
-
-    // ---------------- Passo 5: Avanca tempo > roundDuration ------------
-    await time.increase(DEV_ROUND_DURATION + 1n);
-    expect(await burnTracker.isRoundReadyToClose()).to.be.true;
-
-    // ---------------- Passo 6: Timelock fecha rodada 0 ------------------
-    // Em prod seria via proposta Governor; aqui impersonate direto conforme
-    // decisao B do briefing.
-    await burnTracker.connect(tlSigner).closeRound();
-    expect(await burnTracker.currentRound()).to.equal(1n);
-
-    // ---------------- Passo 7: Finalize rodada 0 (permissionless) ------
-    // Qualquer um pode chamar — Alice mesmo.
-    const finalizeTx = await distributor.connect(alice).finalizeRound(0);
-    await finalizeTx.wait();
-
-    const round0Data = await distributor.roundData(0);
-    expect(round0Data.finalized).to.be.true;
-    // Round 0: totalBurnPrev = 0 (nao ha round -1), entao emissao vem do floor[0].
-    // floor[0] = 400_000e18. totalEmission deve ser exatamente isso
-    // (capMax = 1M, floor[0] < capMax, alphaBurn = 0).
-    const expectedFloor0 = 400_000n * 10n ** 18n;
-    expect(round0Data.totalEmission).to.equal(expectedFloor0);
-    expect(round0Data.totalBurnAtFinalize).to.equal(0n);
-
-    // ---------------- Passo 8: Fecha rodada 1 + finalize 1 --------------
-    // Rodada 1 e a que efetivamente acopla com o burn de 1425 CREDIT da rodada 0.
-    // Precisamos avancar tempo, fechar rodada 1, e finalizar. Sem isso, claim
-    // nao reflete o burn que os apps registraram.
-    await time.increase(DEV_ROUND_DURATION + 1n);
-    await burnTracker.connect(tlSigner).closeRound();
-    expect(await burnTracker.currentRound()).to.equal(2n);
-
-    await distributor.connect(alice).finalizeRound(1);
-    const round1Data = await distributor.roundData(1);
-    expect(round1Data.finalized).to.be.true;
-    // emissao = min(max(alpha * 1425e18, floor[1]), capMax)
-    //         = max(0.95 * 1425e18, ~383_333e18) = floor[1] (muito maior).
-    // floor[1] = 400_000e18 - 400_000e18/24 = ~383_333e18.
-    const expectedFloor1 = 400_000n * 10n ** 18n - (400_000n * 10n ** 18n) / 24n;
-    expect(round1Data.totalEmission).to.equal(expectedFloor1);
-    expect(round1Data.totalBurnAtFinalize).to.equal(1_425n * 10n ** 18n);
-
-    // ---------------- Passo 9: Alice e Bob claim rodada 1 ---------------
-    // Round 1 usa burn do round 0 (Chat + Game tiveram burn). Probation inicial
-    // por tempo NAO deve ainda ter acabado (probationDuration = 86_400s = 1d;
-    // ja avancamos 2 * DEV_ROUND_DURATION = 2d desde activate). Entao probation
-    // POR TEMPO deve ter expirado e nao ha penalty.
-    //
-    // Alice tem peso em Chat App; Bob tem peso em Game App. Ambos recebem
-    // share proporcional ao burn do projeto.
-
-    const aliceCreditBeforeClaim = await credit.balanceOf(alice.address);
-    const bobCreditBeforeClaim = await credit.balanceOf(bob.address);
-
-    const alicePreview = await distributor.previewClaim(alice.address, 1, chatAppId);
-    const bobPreview = await distributor.previewClaim(bob.address, 1, gameAppId);
-    expect(alicePreview).to.be.gt(0n);
-    expect(bobPreview).to.be.gt(0n);
-
-    await distributor.connect(alice).claim(1, chatAppId);
-    await distributor.connect(bob).claim(1, gameAppId);
-
-    const aliceCreditAfterClaim = await credit.balanceOf(alice.address);
-    const bobCreditAfterClaim = await credit.balanceOf(bob.address);
-
-    const aliceReward = aliceCreditAfterClaim - aliceCreditBeforeClaim;
-    const bobReward = bobCreditAfterClaim - bobCreditBeforeClaim;
-
-    expect(aliceReward).to.equal(alicePreview);
-    expect(bobReward).to.equal(bobPreview);
-
-    // Soma dos rewards <= totalEmission da rodada.
-    expect(aliceReward + bobReward).to.be.lte(round1Data.totalEmission);
-
-    // Share Chat App = emissao * 950 / 1425 = ~66.66% de 383_333e18 ≈ 255_555e18.
-    // Como Alice e a unica staker no Chat, recebe 100% do share do projeto.
-    // Vamos validar proporcionalidade: shareChatApp / shareGameApp ≈ 950/475 = 2.
-    // Pequena diferença por divisoes inteiras é esperada.
-    // aliceReward / bobReward ≈ 2 (ambas 100% do share do proprio projeto).
-    expect(aliceReward * 1_000n).to.be.gte(bobReward * 1_990n);
-    expect(aliceReward * 1_000n).to.be.lte(bobReward * 2_010n);
+    const bobBeforeClaim = await credit.balanceOf(bob.address);
+    await funding.connect(bob).claim(chatAppId);
+    expect((await credit.balanceOf(bob.address)) - bobBeforeClaim).to.equal(bobExpected);
 
     // Claim duplo reverte.
-    await expect(distributor.connect(alice).claim(1, chatAppId)).to.be.revertedWithCustomError(
-      distributor,
-      "AlreadyClaimed",
+    await expect(funding.connect(alice).claim(chatAppId)).to.be.revertedWithCustomError(
+      funding,
+      "NothingToClaim",
     );
 
-    // ---------------- Passo 10: Alice tenta unstake cedo (revert) -------
-    // Alice lockou 30d no passo 1. Ja passamos ~2d de tempo — lock vigente.
+    // ---------------- Passo 7: Bob paga no Game App (sem funding) ----------
+    // Sem rodada de funding, rev-share = 0; app recebe 97,5%.
+    await credit.connect(bob).approve(routerAddr, BOB_GAME_PAYMENT);
+    const gameOwnerBefore = await credit.balanceOf(gameAppOwner.address);
+    await feeRouterV2.connect(bob).pay(gameAppId, BOB_GAME_PAYMENT);
+    const gameToApp = (BOB_GAME_PAYMENT * (10_000n - FEE_BPS)) / 10_000n; // 97,5%
+    expect((await credit.balanceOf(gameAppOwner.address)) - gameOwnerBefore).to.equal(gameToApp);
+
+    // ---------------- Passo 8: Alice tenta unstake cedo (revert) -----------
     await expect(staking.connect(alice).unstakeAll(chatAppId)).to.be.revertedWithCustomError(
       staking,
       "LockNotExpired",
     );
 
-    // ---------------- Passo 11: Avanca tempo + 30d, Alice unstake -------
-    // Ja se passaram ~2 * roundDuration = 2d desde stake. Avanca 30d mais
-    // (folga ao lock de 30d).
-    await time.increase(30n * 86_400n);
-
-    const aliceGovBeforeUnstake = await gov.balanceOf(alice.address);
+    // ---------------- Passo 9: Avanca > lock, Alice unstake ---------------
+    await time.increase(ALICE_LOCK_30D + 1n);
+    const aliceGovBefore = await gov.balanceOf(alice.address);
     await staking.connect(alice).unstakeAll(chatAppId);
-    const aliceGovAfterUnstake = await gov.balanceOf(alice.address);
+    expect((await gov.balanceOf(alice.address)) - aliceGovBefore).to.equal(ALICE_STAKE_AMOUNT);
+    expect((await staking.getPosition(alice.address, chatAppId)).amount).to.equal(0n);
 
-    expect(aliceGovAfterUnstake - aliceGovBeforeUnstake).to.equal(ALICE_STAKE_AMOUNT);
-    // Posicao zerada.
-    const alicePosAfter = await staking.getPosition(alice.address, chatAppId);
-    expect(alicePosAfter.amount).to.equal(0n);
+    // ---------------- Invariantes globais finais --------------------------
 
-    // ---------------- Invariantes globais finais ------------------------
+    // Conservacao de CREDIT: supply == soma de todos os saldos relevantes.
+    // Nao ha burn no fluxo (nenhum sell no PSM), entao supply == total mintado
+    // via PSM.buy = (100k + 100k + 20k) * 1e18.
+    const totalBought = (100_000n + 100_000n + 20_000n) * E18;
+    expect(await credit.totalSupply()).to.equal(totalBought);
 
-    // Conservacao de CREDIT:
-    // supplyFinal = supplyAtStart - totalBurned + totalMinted(rewards).
-    const supplyFinal = await credit.totalSupply();
-    const totalBurned = 1_425n * 10n ** 18n;
-    const totalMinted = aliceReward + bobReward;
-    expect(supplyFinal).to.equal(supplyAtStart - totalBurned + totalMinted);
+    // Lastro integral do PSM permanece (nenhum sell): backing == outstanding.
+    expect(await psm.backingNormalized()).to.equal(await psm.mintedOutstanding());
+    expect(await psm.mintedOutstanding()).to.equal(totalBought);
 
-    // Conservacao de GOV:
-    // Alice recebeu todo stake de volta; Bob ainda tem stake travado no Staking.
-    const stakingGovBalance = await gov.balanceOf(stakingAddr);
-    expect(stakingGovBalance).to.equal(BOB_STAKE_AMOUNT);
+    // Nada de CREDIT preso no FeeRouterV2 (sem custodia — zera a cada pay).
+    expect(await credit.balanceOf(routerAddr)).to.equal(0n);
 
-    // Nenhum CREDIT deveria ter ficado preso no FeeRouter (deve ficar zerado
-    // apos cada pay — sem custodia).
-    expect(await credit.balanceOf(feeRouterAddr)).to.equal(0n);
+    // ProjectFunding nao retem CREDIT nao-contabilizado: apos claims completos
+    // do rev-share, o saldo residual e apenas a poeira de divisao inteira
+    // (aqui zero — 1000 divide 60/40 exato) mais nada (raised foi pago ao dono).
+    expect(await credit.balanceOf(fundingAddr)).to.equal(0n);
 
-    // Treasury continua com o saldo apos as transferencias iniciais:
-    // genesisAmount - CHARLIE_CREDIT - DAVID_CREDIT.
-    const expectedTreasuryCredit = 10_000_000n * 10n ** 18n - CHARLIE_CREDIT - DAVID_CREDIT;
-    expect(await credit.balanceOf(treasuryAddr)).to.equal(expectedTreasuryCredit);
+    // Conservacao de GOV: Alice recebeu todo stake de volta; Bob ainda travado.
+    expect(await gov.balanceOf(stakingAddr)).to.equal(BOB_STAKE_AMOUNT);
 
-    // Conservacao de GOV: soma das posicoes de todos os atores + contratos
-    // custodiadores == total mintado nos bootstraps.
+    // Colateral dos projetos permanece no Registry.
     const registryAddr = await registry.getAddress();
+    expect(await gov.balanceOf(registryAddr)).to.equal(2n * PROJECT_OWNER_COLLATERAL);
+
+    // Conservacao total de GOV mintado nos bootstraps.
     const totalGovHeld =
       (await gov.balanceOf(alice.address)) +
       (await gov.balanceOf(bob.address)) +
       (await gov.balanceOf(chatAppOwner.address)) +
       (await gov.balanceOf(gameAppOwner.address)) +
       (await gov.balanceOf(stakingAddr)) +
-      (await gov.balanceOf(feeRouterAddr)) +
-      (await gov.balanceOf(treasuryAddr)) +
       (await gov.balanceOf(registryAddr));
-    // Total mintado via bootstrap: alice + bob + 2 * collateral = 160k GOV.
-    // Registry detem 2 * collateral dos apps (10k GOV).
-    // Distribuicao final: alice recebeu de volta (100k), bob ainda lockado no
-    // staking (40k) + resto (10k nao stakeado), owners 0 (deram collateral),
-    // registry 10k. Total = 100k + 10k + 40k + 10k = 160k. Match com mint.
     const expectedTotalGov = ALICE_GOV_AMOUNT + BOB_GOV_AMOUNT + 2n * PROJECT_OWNER_COLLATERAL;
     expect(totalGovHeld).to.equal(expectedTotalGov);
+
+    // O lastro USDC do PSM nunca vaza pro Treasury (segregado por construcao).
+    void psmAddr; // referencia explicita
   });
 
-  it("rejeita wash-burn catastrofico (SanityCapExceeded) — projeto malicioso", async () => {
-    // Cenario de guarda: projeto tenta queimar acima do sanityCap
-    // (maxBurnPerRoundPerProject = 1M CREDIT no DEV). FeeRouter recebe o
-    // valor total, tenta queimar via BurnTracker, e BurnTracker reverte.
-    //
-    // Isso valida que o limite protege o modelo economico de ataques de
-    // inflacao de share (quebra a invariante I3 da distribuicao proporcional
-    // se nao for barrado).
-    const { credit, feeRouter, burnTracker, treasury, tlSigner, chatAppId } = await loadFixture(
-      deployFullEcosystemFixture,
+  it("rev-share so ativa apos a rodada bater o alvo (rodada aberta nao paga investidor)", async () => {
+    // Guarda: enquanto a rodada esta apenas Open (alvo nao batido), revShareBpsOf
+    // = 0 e um pagamento via FeeRouterV2 NAO gera rev-share — o valor vai
+    // integralmente pro app (menos a fee). Protege o modelo: rev-share so vale
+    // sobre projeto efetivamente financiado.
+    const {
+      gov,
+      credit,
+      staking,
+      psm,
+      funding,
+      feeRouterV2,
+      alice,
+      payer,
+      chatAppOwner,
+      chatAppId,
+    } = await loadFixture(deployFullEcosystemFixture);
+
+    // Alice stakeia e investe PARCIALMENTE (nao bate o alvo).
+    await gov.connect(alice).approve(await staking.getAddress(), ALICE_STAKE_AMOUNT);
+    await staking.connect(alice).stake(chatAppId, ALICE_STAKE_AMOUNT, MAX_LOCK);
+
+    await funding.connect(chatAppOwner).openRound(chatAppId, TARGET, REV_SHARE_BPS, ROUND_DURATION);
+    await psm.connect(alice).buy(50_000n * E6);
+    await credit.connect(alice).approve(await funding.getAddress(), ethers.MaxUint256);
+    await funding.connect(alice).invest(chatAppId, 10_000n * E18); // < TARGET, segue Open
+
+    expect((await funding.rounds(chatAppId)).status).to.equal(1n); // Open
+    expect(await funding.revShareBpsOf(chatAppId)).to.equal(0n);
+
+    // Pagamento: rev-share = 0, app recebe 97,5%.
+    await psm.connect(payer).buy(1_000n * E6);
+    await credit.connect(payer).approve(await feeRouterV2.getAddress(), ethers.MaxUint256);
+    const amount = 1_000n * E18;
+    const ownerBefore = await credit.balanceOf(chatAppOwner.address);
+    await feeRouterV2.connect(payer).pay(chatAppId, amount);
+    expect((await credit.balanceOf(chatAppOwner.address)) - ownerBefore).to.equal(
+      (amount * (10_000n - FEE_BPS)) / 10_000n,
     );
 
-    // Precisa de um saldo grande de CREDIT para tentar burn > sanityCap.
-    // sanityCap DEV = 1M CREDIT. Vamos tentar queimar 2M (acima do cap,
-    // dentro da limitacao de 95/0/5 — burn nominal ~ 1.9M).
-    //
-    // Primeiro o Treasury manda 2M pro charlie (via impersonate do Timelock).
-    const [, , , charlie] = await ethers.getSigners();
-    const ATTACK_AMOUNT = 2_000_000n * 10n ** 18n;
-    await treasury
-      .connect(tlSigner)
-      .transfer(await credit.getAddress(), charlie.address, ATTACK_AMOUNT);
-
-    // Charlie aprova e tenta pagar.
-    await credit.connect(charlie).approve(await feeRouter.getAddress(), ATTACK_AMOUNT);
-    await expect(
-      feeRouter.connect(charlie).pay(chatAppId, charlie.address, ATTACK_AMOUNT),
-    ).to.be.revertedWithCustomError(burnTracker, "SanityCapExceeded");
-
-    // Agregado da rodada nao foi corrompido — burn 0.
-    expect(await burnTracker.getBurnForProjectInRound(0, chatAppId)).to.equal(0n);
-    expect(await burnTracker.getTotalBurnForRound(0)).to.equal(0n);
+    // Investidor nao tem receita pendente (rodada nunca foi Funded).
+    expect(await funding.pendingRevenue(chatAppId, alice.address)).to.equal(0n);
   });
 });

@@ -7,45 +7,39 @@ import {AccessControl} from "@openzeppelin/contracts/access/AccessControl.sol";
 
 /**
  * @title CreditToken (CREDIT)
- * @notice Token utilitario ERC-20 da Web3Community. Queimado no consumo dentro da
- *         plataforma (pagamentos de features, fees dos apps) e cunhado pelo
- *         `RewardDistributor` em rodadas. Sem supply cap hardcoded: a inflacao
- *         e controlada economicamente por quem detem `MINTER_ROLE` (o distributor,
- *         que por sua vez aplica cap por rodada — invariante I3 vive la, nao aqui).
+ * @notice Moeda de pagamento ERC-20 da Web3Community (remodel 2026-07-08).
+ *         CREDIT e ESTAVEL 1:1 com USDC: todo o supply em circulacao nasce e
+ *         morre no {CreditPSM}, que minta contra deposito de USDC e queima
+ *         contra resgate. No modelo vigente o PSM e o UNICO detentor
+ *         operacional de `MINTER_ROLE` e `BURNER_ROLE` — logo o supply e
+ *         sempre 100% lastreado por construcao.
  * @dev Invariantes atendidas nesta unidade:
- *      - I2: Burn no consumo e suportado em 3 caminhos complementares:
- *            (a) {burn}            — holder queima o proprio saldo;
- *            (b) {burnFrom}        — terceiros queimam com allowance (ERC20Burnable);
- *            (c) {burnByRole}      — portadores de {BURNER_ROLE} queimam SEM allowance.
- *            O caminho (c) existe para permitir que o futuro `BurnTracker` execute
- *            `burnAndRecord` atomicamente em um unico tx, no contexto de um app
- *            pago pelo usuario (UX: usuario assina 1 tx no app, nao um approve + burn).
- *            Ele e seguro porque `BURNER_ROLE` so e concedido via TimelockController
- *            apos proposta aprovada na DAO (invariante I7 do registry), e a role
- *            pode ser revogada pelo admin (eventualmente o proprio Timelock) a
- *            qualquer momento.
- *      - Supply elastico: nao ha cap. Mints adicionais sao sempre possiveis desde
- *            que quem chama tenha `MINTER_ROLE`. O cap por rodada e do distributor.
+ *      - Mint/burn gated por role: {mint} exige `MINTER_ROLE`, {burnByRole}
+ *        exige `BURNER_ROLE` (queima SEM allowance, sempre sobre o saldo que
+ *        o PSM ja recolheu no resgate). Em producao ambas as roles sao
+ *        concedidas exclusivamente ao PSM; o admin (Timelock) pode
+ *        revoga-las/reatribui-las se a governanca trocar o modulo de peg.
+ *      - Caminhos de burn do holder: {burn} (proprio saldo) e {burnFrom}
+ *        (com allowance) vem do {ERC20Burnable} e permanecem disponiveis,
+ *        mas nao fazem parte do fluxo padrao (o usuario resgata via PSM.sell,
+ *        que devolve USDC — em vez de queimar sem contrapartida).
  *      Nao herda {ERC20Votes}: CREDIT nao vota (so GOV vota). Nao herda
- *      {ERC20Permit}: no v1 optamos por superficie minima. Consumo via
- *      `FeeRouter.pay()` usa ou (1) allowance + `burnFrom`, ou (2) `burnByRole`
- *      atomico pelo `BurnTracker`. Se permit virar necessario em v2, basta
- *      adicionar a extensao mantendo storage layout.
- *      Genesis de 10M pre-cunhado NAO acontece no constructor. Em vez disso
- *      expomos {mintGenesis}, chamada uma unica vez pelo admin durante o deploy
- *      (flag {genesisMinted} one-shot). Isso mantem o constructor puro, permite
- *      que o deploy script escolha o destinatario (tesouraria) sem hardcode e
- *      deixa o contrato auditavel sem depender de parametros de construtor.
+ *      {ERC20Permit}: superficie minima.
+ *      {mintGenesis} existe como capacidade one-shot de bootstrap (flag
+ *      {genesisMinted}) mas NAO e usada no deploy padrao — o peg exige que
+ *      todo CREDIT tenha lastro, entao a via normal e o PSM. Mantida para
+ *      cenarios de migracao/testes onde o admin precise semear um saldo
+ *      controlado antes do PSM assumir.
  * @custom:security-contact security@web3community.example
  */
 contract CreditToken is ERC20, ERC20Burnable, AccessControl {
     /// @notice Role autorizada a cunhar CREDIT via {mint}. Concedida pelo admin
-    ///         ao `RewardDistributor` na fase 4 do deploy.
+    ///         ao {CreditPSM} na fase B do deploy (unico minter operacional).
     bytes32 public constant MINTER_ROLE = keccak256("MINTER_ROLE");
 
-    /// @notice Role autorizada a queimar CREDIT de qualquer holder via
-    ///         {burnByRole} SEM consumir allowance. Concedida pelo admin
-    ///         (idealmente o Timelock) ao `BurnTracker` / `FeeRouter` da fase 3.
+    /// @notice Role autorizada a queimar CREDIT via {burnByRole} SEM consumir
+    ///         allowance. Concedida pelo admin ao {CreditPSM} (queima o saldo
+    ///         recolhido no resgate). Revogavel pelo Timelock.
     bytes32 public constant BURNER_ROLE = keccak256("BURNER_ROLE");
 
     /// @notice `true` apos a primeira execucao bem-sucedida de {mintGenesis}.
@@ -62,15 +56,15 @@ contract CreditToken is ERC20, ERC20Burnable, AccessControl {
     /// @param to Destinatario dos tokens cunhados.
     /// @param amount Quantidade cunhada (em unidades minimas).
     /// @param tag Rotulo off-chain para rastrear a origem economica
-    ///            (ex.: "rewardRound:42", "retroActive:q2", "airdrop:launch").
+    ///            (ex.: "psm:buy").
     event Minted(address indexed to, uint256 amount, string tag);
 
     /// @notice Emitido em todo {burnByRole} bem-sucedido.
     /// @param operator Endereco com `BURNER_ROLE` que executou a queima.
     /// @param from Endereco cujo saldo foi queimado (usuario final).
     /// @param amount Quantidade queimada.
-    /// @param tag Rotulo off-chain para rastreio (ex.: "feeRouter:pay",
-    ///            "subscription:renew").
+    /// @param tag Rotulo off-chain para rastreio (ex.: "psm:sell",
+    ///            "burn:manual").
     event BurnedByRole(address indexed operator, address indexed from, uint256 amount, string tag);
 
     /// @notice Endereco zero nao e valido como destinatario/alvo.
@@ -133,12 +127,11 @@ contract CreditToken is ERC20, ERC20Burnable, AccessControl {
 
     /**
      * @notice Cunha `amount` tokens para `to`. Restrita a `MINTER_ROLE`.
-     * @dev Em producao o unico endereco com `MINTER_ROLE` e o `RewardDistributor`,
-     *      que aplica cap por rodada antes de chamar. Este contrato NAO valida
-     *      cap — supply elastico por design (invariante I3 fica no distributor).
-     *      O parametro `tag` e so registro off-chain (via evento) e serve para
-     *      auditar a origem economica de cada mint (ex.: id da rodada, nome do
-     *      airdrop). Nao afeta contabilidade on-chain.
+     * @dev Em producao o unico endereco com `MINTER_ROLE` e o {CreditPSM},
+     *      que so minta contra deposito de USDC de igual valor — o lastro
+     *      integral e garantido no PSM, nao aqui. O parametro `tag` e so
+     *      registro off-chain (via evento) para auditar a origem de cada mint
+     *      (ex.: "psm:buy"). Nao afeta contabilidade on-chain.
      *      Reverte com {ZeroAddress} se `to == address(0)` e {ZeroAmount} se
      *      `amount == 0`.
      * @param to Destinatario dos tokens.
@@ -159,25 +152,21 @@ contract CreditToken is ERC20, ERC20Burnable, AccessControl {
     /**
      * @notice Queima `amount` tokens do saldo de `from` SEM consumir allowance.
      *         Restrita a `BURNER_ROLE`.
-     * @dev *Por que nao usar {burnFrom} com allowance aqui?* Porque o consumo
-     *      dentro da plataforma acontece em um unico tx disparado pelo app
-     *      (ex.: `FeeRouter.pay()` que chama `BurnTracker.burnAndRecord()` que
-     *      chama `CreditToken.burnByRole()`). Exigir approve previo quebraria
-     *      atomicidade (2 txs do usuario) e criaria janela de front-run entre
-     *      approve e burn. A mitigacao desta escolha e o gating por role:
-     *      `BURNER_ROLE` so e concedido a contratos especificos apos proposta
-     *      aprovada na DAO (via Timelock), e a role pode ser revogada a
-     *      qualquer momento se um contrato com a role for descoberto
-     *      comprometido. Usuarios que quiserem o fluxo "consinto queima
-     *      explicitamente" usam {burnFrom} com allowance — esse caminho
-     *      continua disponivel via ERC20Burnable.
+     * @dev *Por que nao usar {burnFrom} com allowance aqui?* Porque o resgate
+     *      no {CreditPSM} acontece em um unico tx: o PSM ja recolheu o CREDIT
+     *      do vendedor (safeTransferFrom) e queima do PROPRIO saldo — nunca de
+     *      terceiro. Exigir approve interno quebraria atomicidade sem ganho de
+     *      seguranca. A mitigacao e o gating por role: `BURNER_ROLE` so e
+     *      concedido ao PSM (revogavel pelo Timelock). Usuarios que quiserem
+     *      queimar sem contrapartida usam {burnFrom}/{burn} do ERC20Burnable —
+     *      caminho disponivel, mas fora do fluxo padrao.
      *      CEI aplicada: checagens primeiro, efeito (_burn) depois, sem
      *      interacoes externas. `_burn` do ERC-20 ja decrementa balance e
      *      totalSupply, e reverte com {ERC20InsufficientBalance} se o saldo
      *      for menor que `amount`.
      * @param from Endereco cujo saldo sera queimado.
      * @param amount Quantidade a queimar.
-     * @param tag Rotulo off-chain (ex.: "feeRouter:pay", "sub:monthly").
+     * @param tag Rotulo off-chain (ex.: "psm:sell").
      */
     function burnByRole(address from, uint256 amount, string calldata tag) external onlyRole(BURNER_ROLE) {
         if (from == address(0)) {

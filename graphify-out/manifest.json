@@ -1,0 +1,1162 @@
+{
+  ".claude/settings.local.json": {
+    "mtime": 1777132716.0050397,
+    "ast_hash": "176cb3f9eb8e3d87dec4975cd67308b9",
+    "semantic_hash": "176cb3f9eb8e3d87dec4975cd67308b9"
+  },
+  ".prettierrc.json": {
+    "mtime": 1776503342.4440498,
+    "ast_hash": "b278e75b9b94b8bf19ea317edd9b930d",
+    "semantic_hash": "b278e75b9b94b8bf19ea317edd9b930d"
+  },
+  ".solhint.json": {
+    "mtime": 1776619781.1373007,
+    "ast_hash": "8b3f4a525873708e07f486d56648732e",
+    "semantic_hash": "8b3f4a525873708e07f486d56648732e"
+  },
+  "audit/economist/sim/feerouter-bypass-sim.js": {
+    "mtime": 1783534341.6390452,
+    "ast_hash": "0354c6f41922ef9c4d0b6174062033c8",
+    "semantic_hash": "0354c6f41922ef9c4d0b6174062033c8"
+  },
+  "contracts/CommunityGovernor.sol": {
+    "mtime": 1783583087.5743673,
+    "ast_hash": "17af5a10cd94de86bc11740225ed4c52",
+    "semantic_hash": "17af5a10cd94de86bc11740225ed4c52"
+  },
+  "contracts/CommunityTimelock.sol": {
+    "mtime": 1776523024.7529972,
+    "ast_hash": "b6e26a627821aa224fee0a35d5f691a3",
+    "semantic_hash": "b6e26a627821aa224fee0a35d5f691a3"
+  },
+  "contracts/CreditPSM.sol": {
+    "mtime": 1783537865.6467433,
+    "ast_hash": "bc31f57efdfd3f73128b2cd10cf09047",
+    "semantic_hash": "bc31f57efdfd3f73128b2cd10cf09047"
+  },
+  "contracts/CreditToken.sol": {
+    "mtime": 1776514536.873517,
+    "ast_hash": "277265bebad3eb20f8a90a4902042f70",
+    "semantic_hash": "277265bebad3eb20f8a90a4902042f70"
+  },
+  "contracts/FeeRouterV2.sol": {
+    "mtime": 1783537981.7768805,
+    "ast_hash": "30c784dc7953aa46c439113ad72b0368",
+    "semantic_hash": "30c784dc7953aa46c439113ad72b0368"
+  },
+  "contracts/GovernanceToken.sol": {
+    "mtime": 1776513235.2549205,
+    "ast_hash": "d32f1e930b3a0f3cd834ee4d1d0d5f36",
+    "semantic_hash": "d32f1e930b3a0f3cd834ee4d1d0d5f36"
+  },
+  "contracts/ProjectFunding.sol": {
+    "mtime": 1783539861.1704895,
+    "ast_hash": "7e243fbd526799babc2b4e5de737a2c6",
+    "semantic_hash": "7e243fbd526799babc2b4e5de737a2c6"
+  },
+  "contracts/ProjectRegistry.sol": {
+    "mtime": 1777132567.125512,
+    "ast_hash": "438abe9c8b8dc8c16c365c05904f15ae",
+    "semantic_hash": "438abe9c8b8dc8c16c365c05904f15ae"
+  },
+  "contracts/Staking.sol": {
+    "mtime": 1776520688.9144619,
+    "ast_hash": "b5f81837a1c4f63fb595facbee11ad6a",
+    "semantic_hash": "b5f81837a1c4f63fb595facbee11ad6a"
+  },
+  "contracts/TeamVesting.sol": {
+    "mtime": 1776619644.5582998,
+    "ast_hash": "ade8d4ea929b43e004827b05ced4c04e",
+    "semantic_hash": "ade8d4ea929b43e004827b05ced4c04e"
+  },
+  "contracts/Treasury.sol": {
+    "mtime": 1783582925.4579482,
+    "ast_hash": "45a4ac166f1c0b6dd7c2b1e79e9c147c",
+    "semantic_hash": "45a4ac166f1c0b6dd7c2b1e79e9c147c"
+  },
+  "contracts/dev/DevFaucet.sol": {
+    "mtime": 1783582967.635252,
+    "ast_hash": "b999550b9b4fa0007f0281cfa019ac6b",
+    "semantic_hash": "b999550b9b4fa0007f0281cfa019ac6b"
+  },
+  "contracts/test/ERC20DecimalsMock.sol": {
+    "mtime": 1783238222.6245103,
+    "ast_hash": "eed17a9afba379dc223deec5e620b361",
+    "semantic_hash": "eed17a9afba379dc223deec5e620b361"
+  },
+  "contracts/test/ERC20Mock.sol": {
+    "mtime": 1776515654.817433,
+    "ast_hash": "6134350c36e814cb16f08862ac8e689e",
+    "semantic_hash": "6134350c36e814cb16f08862ac8e689e"
+  },
+  "contracts/test/ReentrantCallMock.sol": {
+    "mtime": 1776640316.285555,
+    "ast_hash": "5c0441d417f2faf5802cf72fb43fad24",
+    "semantic_hash": "5c0441d417f2faf5802cf72fb43fad24"
+  },
+  "contracts/test/ReentrantCreditMock.sol": {
+    "mtime": 1776640320.449553,
+    "ast_hash": "15c0a71105b4160ca7bd37f7f273343c",
+    "semantic_hash": "15c0a71105b4160ca7bd37f7f273343c"
+  },
+  "contracts/test/ReentrantERC20Mock.sol": {
+    "mtime": 1776616448.719989,
+    "ast_hash": "65f842093b57268a35182a2ce70e78f0",
+    "semantic_hash": "65f842093b57268a35182a2ce70e78f0"
+  },
+  "contracts/test/ReentrantETHReceiver.sol": {
+    "mtime": 1776516006.0063932,
+    "ast_hash": "e008c1876254bc9d563b01cc4b66d910",
+    "semantic_hash": "e008c1876254bc9d563b01cc4b66d910"
+  },
+  "contracts/test/ReentrantStakingERC20Mock.sol": {
+    "mtime": 1776616463.6739857,
+    "ast_hash": "b067cd0fb5d8cd5a02d6aa9e7fd58f70",
+    "semantic_hash": "b067cd0fb5d8cd5a02d6aa9e7fd58f70"
+  },
+  "docker/boot-node.sh": {
+    "mtime": 1783583268.040064,
+    "ast_hash": "1dfeaab6dbd099423910a93fb340c9c6",
+    "semantic_hash": "1dfeaab6dbd099423910a93fb340c9c6"
+  },
+  "docs/apresentacao/gerar_apresentacao.py": {
+    "mtime": 1783275627.6204584,
+    "ast_hash": "70f3695d8f9f47eefce72c46afce9678",
+    "semantic_hash": "70f3695d8f9f47eefce72c46afce9678"
+  },
+  "hardhat.config.ts": {
+    "mtime": 1776639808.6609004,
+    "ast_hash": "dfa8b3db61751f6e1af5ba8add9f835d",
+    "semantic_hash": "dfa8b3db61751f6e1af5ba8add9f835d"
+  },
+  "ignition/deployments/TeamVesting-alice/build-info/83e6de439e599939f174365aaba3ebe7.json": {
+    "mtime": 1776624466.8836644,
+    "ast_hash": "264e28ae7d33f1fa8f9f7e5b782e8ea4",
+    "semantic_hash": "264e28ae7d33f1fa8f9f7e5b782e8ea4"
+  },
+  "ignition/deployments/TeamVesting-alice/deployed_addresses.json": {
+    "mtime": 1776624466.9836645,
+    "ast_hash": "131049f8403ab32989260a579b9c1cce",
+    "semantic_hash": "131049f8403ab32989260a579b9c1cce"
+  },
+  "ignition/modules/Dao.ts": {
+    "mtime": 1783583200.8533297,
+    "ast_hash": "ed8efe1a15c9f0b5bdfa0efdffb5687b",
+    "semantic_hash": "ed8efe1a15c9f0b5bdfa0efdffb5687b"
+  },
+  "ignition/modules/TeamVesting.ts": {
+    "mtime": 1776622194.8115335,
+    "ast_hash": "d3c3692755c5da320391d516aa68863f",
+    "semantic_hash": "d3c3692755c5da320391d516aa68863f"
+  },
+  "ignition/parameters/dev.json": {
+    "mtime": 1783583231.6643994,
+    "ast_hash": "220be0a812f6065b2ec02c2c44804ad4",
+    "semantic_hash": "220be0a812f6065b2ec02c2c44804ad4"
+  },
+  "ignition/parameters/production.json": {
+    "mtime": 1783583241.681014,
+    "ast_hash": "21bc07f87427ba2d429959de1c886c7d",
+    "semantic_hash": "21bc07f87427ba2d429959de1c886c7d"
+  },
+  "ignition/parameters/teamVesting.example.json": {
+    "mtime": 1776622209.072526,
+    "ast_hash": "45a82c28307e28af1fcf0d14d24fe5a5",
+    "semantic_hash": "45a82c28307e28af1fcf0d14d24fe5a5"
+  },
+  "package.json": {
+    "mtime": 1783599581.8699455,
+    "ast_hash": "f073b4e04cbe278bbd12e01424432631",
+    "semantic_hash": "f073b4e04cbe278bbd12e01424432631"
+  },
+  "scripts/deploy-dev.ts": {
+    "mtime": 1776617211.0978255,
+    "ast_hash": "d9a4fe5f0e3e603d876da16357ca7f09",
+    "semantic_hash": "d9a4fe5f0e3e603d876da16357ca7f09"
+  },
+  "scripts/deploy-prod-sim.ts": {
+    "mtime": 1783583404.3931081,
+    "ast_hash": "1ec12ebf71fea9f0545657cca185a757",
+    "semantic_hash": "1ec12ebf71fea9f0545657cca185a757"
+  },
+  "scripts/dev-approve.ts": {
+    "mtime": 1776618109.9025917,
+    "ast_hash": "17afd207aaceb6b2a156f044d88889ab",
+    "semantic_hash": "17afd207aaceb6b2a156f044d88889ab"
+  },
+  "scripts/dev-bootstrap.ts": {
+    "mtime": 1776618109.9500656,
+    "ast_hash": "a637338b83c2128af4cb939e38c4f923",
+    "semantic_hash": "a637338b83c2128af4cb939e38c4f923"
+  },
+  "scripts/dev-tick.ts": {
+    "mtime": 1776618109.9788272,
+    "ast_hash": "48b893e2f4555211e15cd45469cd0c40",
+    "semantic_hash": "48b893e2f4555211e15cd45469cd0c40"
+  },
+  "scripts/export-runtime-config.ts": {
+    "mtime": 1783583315.562484,
+    "ast_hash": "658cff97cae7ccc6e506eb5b551e77dc",
+    "semantic_hash": "658cff97cae7ccc6e506eb5b551e77dc"
+  },
+  "scripts/governance/execute-fase0-default-split.ts": {
+    "mtime": 1777132567.1609747,
+    "ast_hash": "3edc60ac0f3ea448340a13b20469ad70",
+    "semantic_hash": "3edc60ac0f3ea448340a13b20469ad70"
+  },
+  "scripts/governance/propose-fase0-default-split.ts": {
+    "mtime": 1777132567.1619747,
+    "ast_hash": "ca1d884ca649b628bcb128ba006c3392",
+    "semantic_hash": "ca1d884ca649b628bcb128ba006c3392"
+  },
+  "scripts/lint-sol.sh": {
+    "mtime": 1776503842.6620622,
+    "ast_hash": "e39301a7b1f8a52eb83dacc31e130957",
+    "semantic_hash": "e39301a7b1f8a52eb83dacc31e130957"
+  },
+  "scripts/proposals/_shared.ts": {
+    "mtime": 1776628705.7345173,
+    "ast_hash": "6cd34e004ce6169719fcde4b28b9c668",
+    "semantic_hash": "6cd34e004ce6169719fcde4b28b9c668"
+  },
+  "scripts/proposals/configs/subsidyCampaign.example.json": {
+    "mtime": 1776624341.4717078,
+    "ast_hash": "8000987c4532e9fe0e70a031c8143e02",
+    "semantic_hash": "8000987c4532e9fe0e70a031c8143e02"
+  },
+  "scripts/proposals/configs/teamVesting.example.json": {
+    "mtime": 1776624329.834712,
+    "ast_hash": "cf778122befd3801fe9d318d332e7b6f",
+    "semantic_hash": "cf778122befd3801fe9d318d332e7b6f"
+  },
+  "scripts/proposals/deploy-user-subsidy.ts": {
+    "mtime": 1776624255.2307384,
+    "ast_hash": "00c0451e2143f578a8d34610fea1fe12",
+    "semantic_hash": "00c0451e2143f578a8d34610fea1fe12"
+  },
+  "scripts/proposals/propose-subsidy-campaign.ts": {
+    "mtime": 1776624316.0778599,
+    "ast_hash": "738e8b431ade3e642de05aebf7d70490",
+    "semantic_hash": "738e8b431ade3e642de05aebf7d70490"
+  },
+  "scripts/proposals/propose-team-vesting.ts": {
+    "mtime": 1776628705.7716117,
+    "ast_hash": "4d2e09bfa282a3432a565f7830025f2b",
+    "semantic_hash": "4d2e09bfa282a3432a565f7830025f2b"
+  },
+  "scripts/sync-frontend.sh": {
+    "mtime": 1783364582.97281,
+    "ast_hash": "6fe0085c187e14ad44fa8d2c5d26da55",
+    "semantic_hash": "6fe0085c187e14ad44fa8d2c5d26da55"
+  },
+  "test/CommunityGovernor.supermajority.test.ts": {
+    "mtime": 1783253749.424461,
+    "ast_hash": "e6ebb4e9ad0102eb3a408781751a2478",
+    "semantic_hash": "e6ebb4e9ad0102eb3a408781751a2478"
+  },
+  "test/CommunityGovernor.test.ts": {
+    "mtime": 1783255050.7174757,
+    "ast_hash": "6c78d5296e95d185ec0c2500ead8acae",
+    "semantic_hash": "6c78d5296e95d185ec0c2500ead8acae"
+  },
+  "test/CommunityTimelock.test.ts": {
+    "mtime": 1776523447.6686897,
+    "ast_hash": "6d2a8dccfeadbb4c7e6400d40857f2ed",
+    "semantic_hash": "6d2a8dccfeadbb4c7e6400d40857f2ed"
+  },
+  "test/CreditToken.test.ts": {
+    "mtime": 1776514467.4405398,
+    "ast_hash": "418606aac07cae0028de3eb971c66c85",
+    "semantic_hash": "418606aac07cae0028de3eb971c66c85"
+  },
+  "test/GovernanceToken.test.ts": {
+    "mtime": 1776509084.2012005,
+    "ast_hash": "56b4c9dcca2244b850926944a6d4cf32",
+    "semantic_hash": "56b4c9dcca2244b850926944a6d4cf32"
+  },
+  "test/ProjectRegistry.test.ts": {
+    "mtime": 1776515257.7254305,
+    "ast_hash": "9a180d06df48e063e2a8cfa18bb5d3ee",
+    "semantic_hash": "9a180d06df48e063e2a8cfa18bb5d3ee"
+  },
+  "test/ProjectRegistry.timelock.test.ts": {
+    "mtime": 1777132567.1676142,
+    "ast_hash": "dd5fb32e73aff982d69d6a30d1f89542",
+    "semantic_hash": "dd5fb32e73aff982d69d6a30d1f89542"
+  },
+  "test/Remodel.test.ts": {
+    "mtime": 1783538119.9453235,
+    "ast_hash": "cc1ce363f04ba09f2cd3dee96784db8c",
+    "semantic_hash": "cc1ce363f04ba09f2cd3dee96784db8c"
+  },
+  "test/Staking.test.ts": {
+    "mtime": 1776520729.5664535,
+    "ast_hash": "c326c299bc3d502f434365bc108a7a6b",
+    "semantic_hash": "c326c299bc3d502f434365bc108a7a6b"
+  },
+  "test/TeamVesting.test.ts": {
+    "mtime": 1776628761.8327336,
+    "ast_hash": "7068e724cccd516cc34b5ca4e8746f3a",
+    "semantic_hash": "7068e724cccd516cc34b5ca4e8746f3a"
+  },
+  "test/Treasury.test.ts": {
+    "mtime": 1777132567.1733334,
+    "ast_hash": "d68d1c4f724c9ea4676d82a8ddf32be3",
+    "semantic_hash": "d68d1c4f724c9ea4676d82a8ddf32be3"
+  },
+  "test/e2e/FullLifecycle.test.ts": {
+    "mtime": 1783255050.720753,
+    "ast_hash": "72ecb6df3c4395f64f06ce1ca140420f",
+    "semantic_hash": "72ecb6df3c4395f64f06ce1ca140420f"
+  },
+  "test/e2e/governanceFlow.e2e.test.ts": {
+    "mtime": 1783255050.721753,
+    "ast_hash": "74d6afbf9c5a5b578236818f32da77f6",
+    "semantic_hash": "74d6afbf9c5a5b578236818f32da77f6"
+  },
+  "test/e2e/projectLifecycle.e2e.test.ts": {
+    "mtime": 1783255050.7250698,
+    "ast_hash": "30539161fb1c58de9c6bb00f8285fd1a",
+    "semantic_hash": "30539161fb1c58de9c6bb00f8285fd1a"
+  },
+  "test/e2e/stakingRewards.e2e.test.ts": {
+    "mtime": 1783255050.7264528,
+    "ast_hash": "bb8e945ddf93362e3f3e76150664a91a",
+    "semantic_hash": "bb8e945ddf93362e3f3e76150664a91a"
+  },
+  "test/ignition/Dao.test.ts": {
+    "mtime": 1783255050.7287908,
+    "ast_hash": "e82115999f16ba293a54a1552ac8d00f",
+    "semantic_hash": "e82115999f16ba293a54a1552ac8d00f"
+  },
+  "tsconfig.json": {
+    "mtime": 1776503309.0930488,
+    "ast_hash": "d9e4774a4339748391c67d39aa2adf88",
+    "semantic_hash": "d9e4774a4339748391c67d39aa2adf88"
+  },
+  ".claude/agents/dao-dev.md": {
+    "mtime": 1777132716.0040398,
+    "ast_hash": "a4ec4009cfe007b8974b13ca828db73b",
+    "semantic_hash": "a4ec4009cfe007b8974b13ca828db73b"
+  },
+  ".claude/agents/dao-docs.md": {
+    "mtime": 1777132716.0040398,
+    "ast_hash": "297211413398e2322c1145873ce07a28",
+    "semantic_hash": "297211413398e2322c1145873ce07a28"
+  },
+  ".claude/agents/dao-economist.md": {
+    "mtime": 1777132716.0050397,
+    "ast_hash": "071c3580f07e19d479da065d3626fbf3",
+    "semantic_hash": "071c3580f07e19d479da065d3626fbf3"
+  },
+  ".claude/protocol-state.md": {
+    "mtime": 1777132494.3649397,
+    "ast_hash": "cef323311495e2053bfc9f8cecda4231",
+    "semantic_hash": "cef323311495e2053bfc9f8cecda4231"
+  },
+  ".github/workflows/deploy.yml": {
+    "mtime": 1776931990.1649454,
+    "ast_hash": "4e982e70370778a1eeb95f9139e5a974",
+    "semantic_hash": "4e982e70370778a1eeb95f9139e5a974"
+  },
+  "BRAIN.md": {
+    "mtime": 1783543738.017279,
+    "ast_hash": "0992a83b26908a1a5168ad9562239ff7",
+    "semantic_hash": "0992a83b26908a1a5168ad9562239ff7"
+  },
+  "CHANGELOG.md": {
+    "mtime": 1783538963.3545146,
+    "ast_hash": "419889fee7b2bb49bcf340998bdbf9c2",
+    "semantic_hash": "419889fee7b2bb49bcf340998bdbf9c2"
+  },
+  "CLAUDE.md": {
+    "mtime": 1783539609.335156,
+    "ast_hash": "eb7207886b7d37596a0770cdb63940c1",
+    "semantic_hash": "eb7207886b7d37596a0770cdb63940c1"
+  },
+  "README.md": {
+    "mtime": 1783539000.9735258,
+    "ast_hash": "6a39dfd8780de0bc65eb38b8642e06aa",
+    "semantic_hash": "6a39dfd8780de0bc65eb38b8642e06aa"
+  },
+  "audit/economist/2026-04-22-consistency-audit.md": {
+    "mtime": 1776892420.9742258,
+    "ast_hash": "04a10309118cc91c9e4944d627880c0d",
+    "semantic_hash": "04a10309118cc91c9e4944d627880c0d"
+  },
+  "audit/economist/2026-04-24-clp-pivot.md": {
+    "mtime": 1777132567.1206448,
+    "ast_hash": "a33bb69fc187547792a209d0e7d4d871",
+    "semantic_hash": "a33bb69fc187547792a209d0e7d4d871"
+  },
+  "audit/economist/2026-04-24-credit-peg.md": {
+    "mtime": 1777132567.1218886,
+    "ast_hash": "7d6545cb127fd9df3d1eafbff39c1175",
+    "semantic_hash": "7d6545cb127fd9df3d1eafbff39c1175"
+  },
+  "audit/economist/2026-04-24-pol-params.md": {
+    "mtime": 1777132567.1219747,
+    "ast_hash": "867221837570fcf5299f10f5ee85a9fa",
+    "semantic_hash": "867221837570fcf5299f10f5ee85a9fa"
+  },
+  "audit/economist/2026-07-08-feerouter-bypass.md": {
+    "mtime": 1783534354.551503,
+    "ast_hash": "0e29f3343aa18928aceeeec2633f3820",
+    "semantic_hash": "0e29f3343aa18928aceeeec2633f3820"
+  },
+  "audit/slither/BurnTracker-projectonly.txt": {
+    "mtime": 1776520263.8545494,
+    "ast_hash": "2a165bcadc441626541e19dd0780f02f",
+    "semantic_hash": "2a165bcadc441626541e19dd0780f02f"
+  },
+  "audit/slither/BurnTracker.txt": {
+    "mtime": 1776520249.7175524,
+    "ast_hash": "4dd90795894aea2e517d807d1a750022",
+    "semantic_hash": "4dd90795894aea2e517d807d1a750022"
+  },
+  "audit/slither/CommunityGovernor-projectonly.txt": {
+    "mtime": 1776523858.4606988,
+    "ast_hash": "d4c19e86dc136d0a51b96710abac2ee8",
+    "semantic_hash": "d4c19e86dc136d0a51b96710abac2ee8"
+  },
+  "audit/slither/CommunityGovernor.txt": {
+    "mtime": 1776523868.8866956,
+    "ast_hash": "a8cee24adb0c6aa5723c6e64ba943df1",
+    "semantic_hash": "a8cee24adb0c6aa5723c6e64ba943df1"
+  },
+  "audit/slither/CommunityTimelock-projectonly.txt": {
+    "mtime": 1776523851.3577013,
+    "ast_hash": "b98063b2bebe3fbbe26dc546fb8e8a60",
+    "semantic_hash": "b98063b2bebe3fbbe26dc546fb8e8a60"
+  },
+  "audit/slither/CommunityTimelock.txt": {
+    "mtime": 1776523861.558698,
+    "ast_hash": "ebdfad5508785db9cad1ab372bbdb3a1",
+    "semantic_hash": "ebdfad5508785db9cad1ab372bbdb3a1"
+  },
+  "audit/slither/CreditToken-projectonly.txt": {
+    "mtime": 1776514625.0744886,
+    "ast_hash": "6a8de1507f33c2230c1da69ba5587820",
+    "semantic_hash": "6a8de1507f33c2230c1da69ba5587820"
+  },
+  "audit/slither/CreditToken.txt": {
+    "mtime": 1776514616.1954916,
+    "ast_hash": "f070740d98a77338d37631d01477dce8",
+    "semantic_hash": "f070740d98a77338d37631d01477dce8"
+  },
+  "audit/slither/FeeRouter-projectonly.txt": {
+    "mtime": 1776522670.0310698,
+    "ast_hash": "75226799e5132ad64d49bc8128b195d7",
+    "semantic_hash": "75226799e5132ad64d49bc8128b195d7"
+  },
+  "audit/slither/FeeRouter.txt": {
+    "mtime": 1776522661.8560712,
+    "ast_hash": "647a69726d6ad60d17239976d5c21142",
+    "semantic_hash": "647a69726d6ad60d17239976d5c21142"
+  },
+  "audit/slither/GovernanceToken-projectonly.txt": {
+    "mtime": 1776514223.8176222,
+    "ast_hash": "fb7f7198d72761a3317ea920f49bb889",
+    "semantic_hash": "fb7f7198d72761a3317ea920f49bb889"
+  },
+  "audit/slither/GovernanceToken.txt": {
+    "mtime": 1776514208.9886274,
+    "ast_hash": "3da2185a3066e9e55f5f7d72dd824a4f",
+    "semantic_hash": "3da2185a3066e9e55f5f7d72dd824a4f"
+  },
+  "audit/slither/ProjectRegistry-projectonly.txt": {
+    "mtime": 1776515330.7824366,
+    "ast_hash": "4393c4fdedc52d198dc16c29f76c8a24",
+    "semantic_hash": "4393c4fdedc52d198dc16c29f76c8a24"
+  },
+  "audit/slither/ProjectRegistry.txt": {
+    "mtime": 1776515321.925436,
+    "ast_hash": "2bf65639c8a8a06aecea655d0631cf36",
+    "semantic_hash": "2bf65639c8a8a06aecea655d0631cf36"
+  },
+  "audit/slither/RewardDistributor-projectonly.txt": {
+    "mtime": 1776521857.6422331,
+    "ast_hash": "2b5b7217331a1f2bb07f4f42abd1e273",
+    "semantic_hash": "2b5b7217331a1f2bb07f4f42abd1e273"
+  },
+  "audit/slither/RewardDistributor.txt": {
+    "mtime": 1776521852.2632341,
+    "ast_hash": "4f030a807c5dc1c15d46cacf6135dd97",
+    "semantic_hash": "4f030a807c5dc1c15d46cacf6135dd97"
+  },
+  "audit/slither/Staking-projectonly.txt": {
+    "mtime": 1776519257.7967463,
+    "ast_hash": "0f8c55f05af7faa31753ec1bc9123c4b",
+    "semantic_hash": "0f8c55f05af7faa31753ec1bc9123c4b"
+  },
+  "audit/slither/Staking.txt": {
+    "mtime": 1776519246.8707483,
+    "ast_hash": "9bb799ea0a4e5fedb4a7370065797db5",
+    "semantic_hash": "9bb799ea0a4e5fedb4a7370065797db5"
+  },
+  "audit/slither/TeamVesting-projectonly.txt": {
+    "mtime": 1776622306.5684772,
+    "ast_hash": "a9ea6fb61e703180334b4c67a56c74e2",
+    "semantic_hash": "a9ea6fb61e703180334b4c67a56c74e2"
+  },
+  "audit/slither/TeamVesting.txt": {
+    "mtime": 1776622250.2955048,
+    "ast_hash": "5a0f8bdc74af7fdbdebe926e7197bdec",
+    "semantic_hash": "5a0f8bdc74af7fdbdebe926e7197bdec"
+  },
+  "audit/slither/Treasury-projectonly.txt": {
+    "mtime": 1776516108.2353773,
+    "ast_hash": "d04c3d148a3c3b9c64fefeb219a543b1",
+    "semantic_hash": "d04c3d148a3c3b9c64fefeb219a543b1"
+  },
+  "audit/slither/Treasury.txt": {
+    "mtime": 1776516102.6103783,
+    "ast_hash": "fd51092005811d76e5bcd28d141c6676",
+    "semantic_hash": "fd51092005811d76e5bcd28d141c6676"
+  },
+  "audit/slither/UserSubsidy-projectonly.txt": {
+    "mtime": 1776622318.5378888,
+    "ast_hash": "0df5ad1ecf61592cf7da22f587fb93cf",
+    "semantic_hash": "0df5ad1ecf61592cf7da22f587fb93cf"
+  },
+  "audit/slither/UserSubsidy.txt": {
+    "mtime": 1776622282.8114886,
+    "ast_hash": "6d4d08feb0b5a4afcc59656e7ae8480b",
+    "semantic_hash": "6d4d08feb0b5a4afcc59656e7ae8480b"
+  },
+  "command.txt": {
+    "mtime": 1776507326.5864954,
+    "ast_hash": "d41d8cd98f00b204e9800998ecf8427e",
+    "semantic_hash": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  "docs/en/01-getting-started/01-what-is-web3community.md": {
+    "mtime": 1783542976.5069942,
+    "ast_hash": "b7b20456ee3929cdcef3ff8796a2e165",
+    "semantic_hash": "b7b20456ee3929cdcef3ff8796a2e165"
+  },
+  "docs/en/01-getting-started/02-mental-model.md": {
+    "mtime": 1783539297.8236172,
+    "ast_hash": "a78bdef1e0f8d81b4f06a75c8ee23429",
+    "semantic_hash": "a78bdef1e0f8d81b4f06a75c8ee23429"
+  },
+  "docs/en/01-getting-started/03-glossary.md": {
+    "mtime": 1783539468.3076718,
+    "ast_hash": "bd80663e56c393bcbc5d1e4c9f72b5e3",
+    "semantic_hash": "bd80663e56c393bcbc5d1e4c9f72b5e3"
+  },
+  "docs/en/01-getting-started/04-reading-paths.md": {
+    "mtime": 1783546139.2332804,
+    "ast_hash": "e670283417986ebc9024b1468f7ebe4a",
+    "semantic_hash": "e670283417986ebc9024b1468f7ebe4a"
+  },
+  "docs/en/02-core-concepts/01-dual-token-economy.md": {
+    "mtime": 1783543853.5829856,
+    "ast_hash": "97e7a821c5954a6bc1c943c50d00a90b",
+    "semantic_hash": "97e7a821c5954a6bc1c943c50d00a90b"
+  },
+  "docs/en/02-core-concepts/02-directed-staking.md": {
+    "mtime": 1783543936.5424309,
+    "ast_hash": "9123f65fc91dc62eb7449ffa19da95e9",
+    "semantic_hash": "9123f65fc91dc62eb7449ffa19da95e9"
+  },
+  "docs/en/02-core-concepts/03-burn-to-mint.md": {
+    "mtime": 1783543981.5764623,
+    "ast_hash": "f97325c491a535b6ed930ee7827a82a3",
+    "semantic_hash": "f97325c491a535b6ed930ee7827a82a3"
+  },
+  "docs/en/02-core-concepts/04-rewards-distribution.md": {
+    "mtime": 1783544020.380939,
+    "ast_hash": "7d7c5ff5ae9d221201e55973df87ba27",
+    "semantic_hash": "7d7c5ff5ae9d221201e55973df87ba27"
+  },
+  "docs/en/02-core-concepts/05-governance.md": {
+    "mtime": 1776894883.1687877,
+    "ast_hash": "1ccc6de7489a04fe7db647c59b845e1b",
+    "semantic_hash": "1ccc6de7489a04fe7db647c59b845e1b"
+  },
+  "docs/en/02-core-concepts/06-project-whitelist.md": {
+    "mtime": 1776894775.732806,
+    "ast_hash": "13cde152e5e4970f3df8871d77edf76a",
+    "semantic_hash": "13cde152e5e4970f3df8871d77edf76a"
+  },
+  "docs/en/02-core-concepts/07-treasury-and-fees.md": {
+    "mtime": 1783544229.0686185,
+    "ast_hash": "a43b7753c72d5a700c30b555594b37b5",
+    "semantic_hash": "a43b7753c72d5a700c30b555594b37b5"
+  },
+  "docs/en/03-protocol-overview/01-architecture.md": {
+    "mtime": 1783539597.950714,
+    "ast_hash": "6d67d0f2dfa1ca19a723ece95d7c3fdd",
+    "semantic_hash": "6d67d0f2dfa1ca19a723ece95d7c3fdd"
+  },
+  "docs/en/03-protocol-overview/02-user-flows.md": {
+    "mtime": 1783539733.0537791,
+    "ast_hash": "7e07d3292185aec3c82bb78389182243",
+    "semantic_hash": "7e07d3292185aec3c82bb78389182243"
+  },
+  "docs/en/03-protocol-overview/03-economic-flows.md": {
+    "mtime": 1783539970.4998887,
+    "ast_hash": "217c87da5ecf48cf92f7b39dd5e55120",
+    "semantic_hash": "217c87da5ecf48cf92f7b39dd5e55120"
+  },
+  "docs/en/04-for-users/01-participate.md": {
+    "mtime": 1783544762.830812,
+    "ast_hash": "4a44bc894e6183a123b51faf95680ae4",
+    "semantic_hash": "4a44bc894e6183a123b51faf95680ae4"
+  },
+  "docs/en/04-for-users/02-holding-gov.md": {
+    "mtime": 1776782920.035885,
+    "ast_hash": "29a9504165c68fc5414036b9b15db0e8",
+    "semantic_hash": "29a9504165c68fc5414036b9b15db0e8"
+  },
+  "docs/en/04-for-users/03-staking-in-projects.md": {
+    "mtime": 1783544876.4219565,
+    "ast_hash": "63f1ab4ac82c4a2cce9edf275eb456d8",
+    "semantic_hash": "63f1ab4ac82c4a2cce9edf275eb456d8"
+  },
+  "docs/en/04-for-users/04-voting.md": {
+    "mtime": 1776783012.9958854,
+    "ast_hash": "850d78ff0ea931f6569e9a0ee392a33e",
+    "semantic_hash": "850d78ff0ea931f6569e9a0ee392a33e"
+  },
+  "docs/en/04-for-users/05-claiming-rewards.md": {
+    "mtime": 1783544968.148,
+    "ast_hash": "f57cc9adba7c1a7190c67fe362648b7f",
+    "semantic_hash": "f57cc9adba7c1a7190c67fe362648b7f"
+  },
+  "docs/en/05-for-developers/01-integration-overview.md": {
+    "mtime": 1783545431.6822128,
+    "ast_hash": "28a7c79ba9bdf9a24c36e61f44abbf60",
+    "semantic_hash": "28a7c79ba9bdf9a24c36e61f44abbf60"
+  },
+  "docs/en/05-for-developers/02-contract-addresses.md": {
+    "mtime": 1783545592.0092847,
+    "ast_hash": "1160a4f7a5cd09ba36ec68ac31912abc",
+    "semantic_hash": "1160a4f7a5cd09ba36ec68ac31912abc"
+  },
+  "docs/en/05-for-developers/03-submitting-a-project.md": {
+    "mtime": 1776783162.9208865,
+    "ast_hash": "5f27ed1db40aadf46bbb881aec6bb311",
+    "semantic_hash": "5f27ed1db40aadf46bbb881aec6bb311"
+  },
+  "docs/en/05-for-developers/04-querying-state.md": {
+    "mtime": 1783545637.3733048,
+    "ast_hash": "a3c54bff5b4387264e0d0235e54506ed",
+    "semantic_hash": "a3c54bff5b4387264e0d0235e54506ed"
+  },
+  "docs/en/05-for-developers/05-local-dev.md": {
+    "mtime": 1776783252.4568875,
+    "ast_hash": "ca5f5d4fb883dab1bfca313f8d47a23c",
+    "semantic_hash": "ca5f5d4fb883dab1bfca313f8d47a23c"
+  },
+  "docs/en/06-for-investors/01-tokenomics.md": {
+    "mtime": 1783540112.0138175,
+    "ast_hash": "6bd1926dd5e6dc1eefbeada725ee1143",
+    "semantic_hash": "6bd1926dd5e6dc1eefbeada725ee1143"
+  },
+  "docs/en/06-for-investors/02-value-accrual.md": {
+    "mtime": 1783540293.1130238,
+    "ast_hash": "9c57d69e3a9da77f6cdf672dbdadc279",
+    "semantic_hash": "9c57d69e3a9da77f6cdf672dbdadc279"
+  },
+  "docs/en/06-for-investors/03-risk-and-security.md": {
+    "mtime": 1783545832.183546,
+    "ast_hash": "37fbb1b72aa3a071d61c005e3479afbd",
+    "semantic_hash": "37fbb1b72aa3a071d61c005e3479afbd"
+  },
+  "docs/en/06-for-investors/04-metrics-that-matter.md": {
+    "mtime": 1783540413.4950714,
+    "ast_hash": "9e6b7b93332e956adc2f9c4c87473849",
+    "semantic_hash": "9e6b7b93332e956adc2f9c4c87473849"
+  },
+  "docs/en/07-governance/01-proposal-lifecycle.md": {
+    "mtime": 1776783553.5992253,
+    "ast_hash": "20ce962b16f6be3de4a2efbea27a4597",
+    "semantic_hash": "20ce962b16f6be3de4a2efbea27a4597"
+  },
+  "docs/en/07-governance/02-voting-power.md": {
+    "mtime": 1776783586.9362628,
+    "ast_hash": "1e27f48809839b0be03cf200d16d0a48",
+    "semantic_hash": "1e27f48809839b0be03cf200d16d0a48"
+  },
+  "docs/en/07-governance/03-parameters.md": {
+    "mtime": 1783545966.998297,
+    "ast_hash": "539a83e7964a5c06d7d038ed0e3a31ac",
+    "semantic_hash": "539a83e7964a5c06d7d038ed0e3a31ac"
+  },
+  "docs/en/08-contracts-reference/01-GovernanceToken.md": {
+    "mtime": 1776783697.1183755,
+    "ast_hash": "06f3b3f5fa080fbf69c4c1987aaefb24",
+    "semantic_hash": "06f3b3f5fa080fbf69c4c1987aaefb24"
+  },
+  "docs/en/08-contracts-reference/02-CreditToken.md": {
+    "mtime": 1783272080.5502164,
+    "ast_hash": "5102b297ed2a4ca42ce5a987972fc979",
+    "semantic_hash": "5102b297ed2a4ca42ce5a987972fc979"
+  },
+  "docs/en/08-contracts-reference/03-ProjectRegistry.md": {
+    "mtime": 1777132567.1419747,
+    "ast_hash": "3f4327d28f2fa3ee8214fa47ecca5b07",
+    "semantic_hash": "3f4327d28f2fa3ee8214fa47ecca5b07"
+  },
+  "docs/en/08-contracts-reference/04-Treasury.md": {
+    "mtime": 1783271811.6686304,
+    "ast_hash": "1212f87111fdc70c8bff9a0720598ec8",
+    "semantic_hash": "1212f87111fdc70c8bff9a0720598ec8"
+  },
+  "docs/en/08-contracts-reference/05-Staking.md": {
+    "mtime": 1777066409.3826334,
+    "ast_hash": "45d4fa06f5181478be882ac403a3898e",
+    "semantic_hash": "45d4fa06f5181478be882ac403a3898e"
+  },
+  "docs/en/08-contracts-reference/06-BurnTracker.md": {
+    "mtime": 1783539153.6945722,
+    "ast_hash": "c1c38f89179ba888208403433c647395",
+    "semantic_hash": "c1c38f89179ba888208403433c647395"
+  },
+  "docs/en/08-contracts-reference/07-RewardDistributor.md": {
+    "mtime": 1783539155.563573,
+    "ast_hash": "3abcf46444bc95ffc7cec8a0d2d9a6d4",
+    "semantic_hash": "3abcf46444bc95ffc7cec8a0d2d9a6d4"
+  },
+  "docs/en/08-contracts-reference/07b-RewardDistributorV2.md": {
+    "mtime": 1783539157.8915734,
+    "ast_hash": "7836c83bbad63161f2c9bf9d67c59e9a",
+    "semantic_hash": "7836c83bbad63161f2c9bf9d67c59e9a"
+  },
+  "docs/en/08-contracts-reference/08-FeeRouter.md": {
+    "mtime": 1783539160.249945,
+    "ast_hash": "83f08ad85222f71bd9be8bfae852cdca",
+    "semantic_hash": "83f08ad85222f71bd9be8bfae852cdca"
+  },
+  "docs/en/08-contracts-reference/08b-FeeRouterV2.md": {
+    "mtime": 1783539053.0725415,
+    "ast_hash": "545d0871e217cd0b8ca8f5356dee94f9",
+    "semantic_hash": "545d0871e217cd0b8ca8f5356dee94f9"
+  },
+  "docs/en/08-contracts-reference/09-CommunityTimelock.md": {
+    "mtime": 1776784027.3256302,
+    "ast_hash": "7994f727d69bedecc4672e4f3139ca09",
+    "semantic_hash": "7994f727d69bedecc4672e4f3139ca09"
+  },
+  "docs/en/08-contracts-reference/10-CommunityGovernor.md": {
+    "mtime": 1783271915.3795922,
+    "ast_hash": "3d1b20f754cd1382b10fcdff3f3a0d9e",
+    "semantic_hash": "3d1b20f754cd1382b10fcdff3f3a0d9e"
+  },
+  "docs/en/08-contracts-reference/11-TeamVesting.md": {
+    "mtime": 1776784115.9216838,
+    "ast_hash": "3607f6954c6c22b670df7d2ef75f9405",
+    "semantic_hash": "3607f6954c6c22b670df7d2ef75f9405"
+  },
+  "docs/en/08-contracts-reference/12-UserSubsidy.md": {
+    "mtime": 1777066409.3826334,
+    "ast_hash": "31fc9bcad782fd7c1c53cf5babf11a23",
+    "semantic_hash": "31fc9bcad782fd7c1c53cf5babf11a23"
+  },
+  "docs/en/08-contracts-reference/13-LiquidityGauge.md": {
+    "mtime": 1783539162.0495749,
+    "ast_hash": "0c860c66845c702e46cc351d4e235149",
+    "semantic_hash": "0c860c66845c702e46cc351d4e235149"
+  },
+  "docs/en/08-contracts-reference/14-CreditPriceOracle.md": {
+    "mtime": 1783270365.300354,
+    "ast_hash": "c6d34f8f9062ae1552b575a4c54c730f",
+    "semantic_hash": "c6d34f8f9062ae1552b575a4c54c730f"
+  },
+  "docs/en/08-contracts-reference/15-CreditPSM.md": {
+    "mtime": 1783539017.6345308,
+    "ast_hash": "b9c92b335023b11c705db3611987c39b",
+    "semantic_hash": "b9c92b335023b11c705db3611987c39b"
+  },
+  "docs/en/08-contracts-reference/16-ProjectFunding.md": {
+    "mtime": 1783539094.7149098,
+    "ast_hash": "161f3b74766b8ee19ceb261ab515316f",
+    "semantic_hash": "161f3b74766b8ee19ceb261ab515316f"
+  },
+  "docs/en/09-advanced/01-deep-dives.md": {
+    "mtime": 1783546044.1442864,
+    "ast_hash": "9cb23d9a4ad11e189e2634e2dc8ed5d0",
+    "semantic_hash": "9cb23d9a4ad11e189e2634e2dc8ed5d0"
+  },
+  "docs/en/09-advanced/02-mainnet-deployment.md": {
+    "mtime": 1783546048.009716,
+    "ast_hash": "e3d450071ed3222db8b0dc2a1521eb02",
+    "semantic_hash": "e3d450071ed3222db8b0dc2a1521eb02"
+  },
+  "docs/en/09-advanced/03-security-model.md": {
+    "mtime": 1783546052.0629144,
+    "ast_hash": "0d79cac501b661b6d9fbbda11a26b355",
+    "semantic_hash": "0d79cac501b661b6d9fbbda11a26b355"
+  },
+  "docs/en/10-reference/01-faq.md": {
+    "mtime": 1783542198.3317199,
+    "ast_hash": "7bdfac34edfc72d0b707e7356837adc7",
+    "semantic_hash": "7bdfac34edfc72d0b707e7356837adc7"
+  },
+  "docs/en/10-reference/02-resources.md": {
+    "mtime": 1776784472.8458607,
+    "ast_hash": "82e779347533e6effdececa8d5ccd422",
+    "semantic_hash": "82e779347533e6effdececa8d5ccd422"
+  },
+  "docs/en/10-reference/03-changelog.md": {
+    "mtime": 1776784486.4178665,
+    "ast_hash": "6f59e69406f1c961544291f43c18ae3e",
+    "semantic_hash": "6f59e69406f1c961544291f43c18ae3e"
+  },
+  "docs/en/README.md": {
+    "mtime": 1783542330.523766,
+    "ast_hash": "2f5af30b0b9965f638bac119d8cb1d14",
+    "semantic_hash": "2f5af30b0b9965f638bac119d8cb1d14"
+  },
+  "docs/es/01-getting-started/01-what-is-web3community.md": {
+    "mtime": 1783540237.5317044,
+    "ast_hash": "3615e0fba4df219901dcc4eb6df7bff5",
+    "semantic_hash": "3615e0fba4df219901dcc4eb6df7bff5"
+  },
+  "docs/es/01-getting-started/02-mental-model.md": {
+    "mtime": 1783540290.06758,
+    "ast_hash": "0fa28d0e75b3881d16c64c794a528938",
+    "semantic_hash": "0fa28d0e75b3881d16c64c794a528938"
+  },
+  "docs/es/01-getting-started/03-glossary.md": {
+    "mtime": 1783540392.4750633,
+    "ast_hash": "611db6c864e37f541c3c5ba62a14f1fb",
+    "semantic_hash": "611db6c864e37f541c3c5ba62a14f1fb"
+  },
+  "docs/es/01-getting-started/04-reading-paths.md": {
+    "mtime": 1783542094.6756837,
+    "ast_hash": "49ee62715395e849dc9fa90969dc0464",
+    "semantic_hash": "49ee62715395e849dc9fa90969dc0464"
+  },
+  "docs/es/02-core-concepts/01-dual-token-economy.md": {
+    "mtime": 1783543411.1121488,
+    "ast_hash": "c0bde4e1dfd8f5009afc8e801e30ca09",
+    "semantic_hash": "c0bde4e1dfd8f5009afc8e801e30ca09"
+  },
+  "docs/es/02-core-concepts/02-directed-staking.md": {
+    "mtime": 1783543415.9191504,
+    "ast_hash": "cf9676333ef94c949176655b845c9a27",
+    "semantic_hash": "cf9676333ef94c949176655b845c9a27"
+  },
+  "docs/es/02-core-concepts/03-burn-to-mint.md": {
+    "mtime": 1783543420.9941523,
+    "ast_hash": "490990c2dc6e99f1bc35dc4a93c1fb78",
+    "semantic_hash": "490990c2dc6e99f1bc35dc4a93c1fb78"
+  },
+  "docs/es/02-core-concepts/04-rewards-distribution.md": {
+    "mtime": 1783543425.691154,
+    "ast_hash": "30ba628c131093cf7e3a21e5cc8a11c2",
+    "semantic_hash": "30ba628c131093cf7e3a21e5cc8a11c2"
+  },
+  "docs/es/02-core-concepts/05-governance.md": {
+    "mtime": 1783271991.685169,
+    "ast_hash": "0e2ca5df59cdf1dd2b4d9c7bc90fb377",
+    "semantic_hash": "0e2ca5df59cdf1dd2b4d9c7bc90fb377"
+  },
+  "docs/es/02-core-concepts/06-project-whitelist.md": {
+    "mtime": 1783543437.099158,
+    "ast_hash": "69b06eaff7fa125d993ac322a3971a87",
+    "semantic_hash": "69b06eaff7fa125d993ac322a3971a87"
+  },
+  "docs/es/02-core-concepts/07-treasury-and-fees.md": {
+    "mtime": 1783543431.8420649,
+    "ast_hash": "2689eb26c8f1baa9bf8e8837ae8f502f",
+    "semantic_hash": "2689eb26c8f1baa9bf8e8837ae8f502f"
+  },
+  "docs/es/03-protocol-overview/01-architecture.md": {
+    "mtime": 1783542265.7137434,
+    "ast_hash": "8bca86d9b198ceefe96b2fcbeb55711a",
+    "semantic_hash": "8bca86d9b198ceefe96b2fcbeb55711a"
+  },
+  "docs/es/03-protocol-overview/02-user-flows.md": {
+    "mtime": 1783542331.0147662,
+    "ast_hash": "2a8eda407dcdece3dd99d3ed9c4258f9",
+    "semantic_hash": "2a8eda407dcdece3dd99d3ed9c4258f9"
+  },
+  "docs/es/03-protocol-overview/03-economic-flows.md": {
+    "mtime": 1783542495.657824,
+    "ast_hash": "627b78e5797c102988976ffcbb4d6d31",
+    "semantic_hash": "627b78e5797c102988976ffcbb4d6d31"
+  },
+  "docs/es/04-for-users/01-participate.md": {
+    "mtime": 1783543472.8411708,
+    "ast_hash": "53cabada9562722b4f380b9f7efc17ba",
+    "semantic_hash": "53cabada9562722b4f380b9f7efc17ba"
+  },
+  "docs/es/04-for-users/02-holding-gov.md": {
+    "mtime": 1783543739.9055548,
+    "ast_hash": "fc89864b0e9620508209f9e5cd44f73a",
+    "semantic_hash": "fc89864b0e9620508209f9e5cd44f73a"
+  },
+  "docs/es/04-for-users/03-staking-in-projects.md": {
+    "mtime": 1783543478.5451963,
+    "ast_hash": "2d36bdd8d5903c17a627fadc2ece40bc",
+    "semantic_hash": "2d36bdd8d5903c17a627fadc2ece40bc"
+  },
+  "docs/es/04-for-users/04-voting.md": {
+    "mtime": 1783270501.5484042,
+    "ast_hash": "338b7a7c6193155a15289ec89ad0269f",
+    "semantic_hash": "338b7a7c6193155a15289ec89ad0269f"
+  },
+  "docs/es/04-for-users/05-claiming-rewards.md": {
+    "mtime": 1783543482.6191742,
+    "ast_hash": "4df4e2c862e79f5c39bb9a8e6f856ee9",
+    "semantic_hash": "4df4e2c862e79f5c39bb9a8e6f856ee9"
+  },
+  "docs/es/05-for-developers/01-integration-overview.md": {
+    "mtime": 1783543781.8743148,
+    "ast_hash": "1286a6e1d7382ad3acf71c3bd8358044",
+    "semantic_hash": "1286a6e1d7382ad3acf71c3bd8358044"
+  },
+  "docs/es/05-for-developers/02-contract-addresses.md": {
+    "mtime": 1783543745.5652852,
+    "ast_hash": "4ed96418532d00dd33544e07162807f3",
+    "semantic_hash": "4ed96418532d00dd33544e07162807f3"
+  },
+  "docs/es/05-for-developers/03-submitting-a-project.md": {
+    "mtime": 1776783323.536906,
+    "ast_hash": "cdb9c78f540dadafc43facb2c3992b00",
+    "semantic_hash": "cdb9c78f540dadafc43facb2c3992b00"
+  },
+  "docs/es/05-for-developers/04-querying-state.md": {
+    "mtime": 1783543521.1521878,
+    "ast_hash": "007d18311ebc797abaa368a39959e71b",
+    "semantic_hash": "007d18311ebc797abaa368a39959e71b"
+  },
+  "docs/es/05-for-developers/05-local-dev.md": {
+    "mtime": 1783543525.2951894,
+    "ast_hash": "db32b8335edf45e7117eb5343a11e448",
+    "semantic_hash": "db32b8335edf45e7117eb5343a11e448"
+  },
+  "docs/es/06-for-investors/01-tokenomics.md": {
+    "mtime": 1783542668.5778852,
+    "ast_hash": "18b45dad85550b94e77866de2d861ded",
+    "semantic_hash": "18b45dad85550b94e77866de2d861ded"
+  },
+  "docs/es/06-for-investors/02-value-accrual.md": {
+    "mtime": 1783542723.6590388,
+    "ast_hash": "80d99a701731b6f643df7b7ebced3690",
+    "semantic_hash": "80d99a701731b6f643df7b7ebced3690"
+  },
+  "docs/es/06-for-investors/03-risk-and-security.md": {
+    "mtime": 1783542940.5779815,
+    "ast_hash": "8fe5667daa6249dffd647bc1cb88f46d",
+    "semantic_hash": "8fe5667daa6249dffd647bc1cb88f46d"
+  },
+  "docs/es/06-for-investors/04-metrics-that-matter.md": {
+    "mtime": 1783543010.3120062,
+    "ast_hash": "2752feaa2c118df6cf0538612a14f295",
+    "semantic_hash": "2752feaa2c118df6cf0538612a14f295"
+  },
+  "docs/es/07-governance/01-proposal-lifecycle.md": {
+    "mtime": 1783272754.5139196,
+    "ast_hash": "5ec4c03ce175958e01be774604360f54",
+    "semantic_hash": "5ec4c03ce175958e01be774604360f54"
+  },
+  "docs/es/07-governance/02-voting-power.md": {
+    "mtime": 1776837773.075941,
+    "ast_hash": "7850952379f3ab048e25334f8276d242",
+    "semantic_hash": "7850952379f3ab048e25334f8276d242"
+  },
+  "docs/es/07-governance/03-parameters.md": {
+    "mtime": 1783543554.4129293,
+    "ast_hash": "350b1d39bc855690967a48b8152992a6",
+    "semantic_hash": "350b1d39bc855690967a48b8152992a6"
+  },
+  "docs/es/08-contracts-reference/01-GovernanceToken.md": {
+    "mtime": 1776837765.6659439,
+    "ast_hash": "c62bc417ea1295803f5ce96c999be7f3",
+    "semantic_hash": "c62bc417ea1295803f5ce96c999be7f3"
+  },
+  "docs/es/08-contracts-reference/02-CreditToken.md": {
+    "mtime": 1783543605.0575156,
+    "ast_hash": "e77e9fb254550e5e0eae4aa965cfc88a",
+    "semantic_hash": "e77e9fb254550e5e0eae4aa965cfc88a"
+  },
+  "docs/es/08-contracts-reference/03-ProjectRegistry.md": {
+    "mtime": 1783543749.6802886,
+    "ast_hash": "65ad9c9d2a2c65fb168d684810d5fc61",
+    "semantic_hash": "65ad9c9d2a2c65fb168d684810d5fc61"
+  },
+  "docs/es/08-contracts-reference/04-Treasury.md": {
+    "mtime": 1783543612.1402204,
+    "ast_hash": "5c2934f20b7c56e8d818fc22bd5777d6",
+    "semantic_hash": "5c2934f20b7c56e8d818fc22bd5777d6"
+  },
+  "docs/es/08-contracts-reference/05-Staking.md": {
+    "mtime": 1783543721.1398227,
+    "ast_hash": "20799a9eaa23042d7859edca00bd560a",
+    "semantic_hash": "20799a9eaa23042d7859edca00bd560a"
+  },
+  "docs/es/08-contracts-reference/06-BurnTracker.md": {
+    "mtime": 1783543178.0289774,
+    "ast_hash": "081d3b3e40adbcf04fb36bd37b501314",
+    "semantic_hash": "081d3b3e40adbcf04fb36bd37b501314"
+  },
+  "docs/es/08-contracts-reference/07-RewardDistributor.md": {
+    "mtime": 1783543183.7330678,
+    "ast_hash": "12d13ba656b68d87e6cfa5e6643a679b",
+    "semantic_hash": "12d13ba656b68d87e6cfa5e6643a679b"
+  },
+  "docs/es/08-contracts-reference/07b-RewardDistributorV2.md": {
+    "mtime": 1783543188.3300695,
+    "ast_hash": "9c22d251b9add1387e8ff30e9a561cbb",
+    "semantic_hash": "9c22d251b9add1387e8ff30e9a561cbb"
+  },
+  "docs/es/08-contracts-reference/08-FeeRouter.md": {
+    "mtime": 1783543193.0310712,
+    "ast_hash": "84c09d2e8d263628e5115ce23b115011",
+    "semantic_hash": "84c09d2e8d263628e5115ce23b115011"
+  },
+  "docs/es/08-contracts-reference/08b-FeeRouterV2.md": {
+    "mtime": 1783543100.6840775,
+    "ast_hash": "1e4a03286315a9430328b775376cc5b8",
+    "semantic_hash": "1e4a03286315a9430328b775376cc5b8"
+  },
+  "docs/es/08-contracts-reference/09-CommunityTimelock.md": {
+    "mtime": 1776784269.5407662,
+    "ast_hash": "a86966d3f1439b1f432ae70b505dec99",
+    "semantic_hash": "a86966d3f1439b1f432ae70b505dec99"
+  },
+  "docs/es/08-contracts-reference/10-CommunityGovernor.md": {
+    "mtime": 1776784329.6987958,
+    "ast_hash": "3216a99d2eabbc4bf13f6dadf4a2ad74",
+    "semantic_hash": "3216a99d2eabbc4bf13f6dadf4a2ad74"
+  },
+  "docs/es/08-contracts-reference/11-TeamVesting.md": {
+    "mtime": 1776784367.2568133,
+    "ast_hash": "0eafce33bca80d29e09021eab97cf2e7",
+    "semantic_hash": "0eafce33bca80d29e09021eab97cf2e7"
+  },
+  "docs/es/08-contracts-reference/12-UserSubsidy.md": {
+    "mtime": 1783543615.8597915,
+    "ast_hash": "45aed583074c9cc6eafa2ddbbb0b8b56",
+    "semantic_hash": "45aed583074c9cc6eafa2ddbbb0b8b56"
+  },
+  "docs/es/08-contracts-reference/13-LiquidityGauge.md": {
+    "mtime": 1783543197.7489958,
+    "ast_hash": "811043b6c29d612a74aa55c3e700a721",
+    "semantic_hash": "811043b6c29d612a74aa55c3e700a721"
+  },
+  "docs/es/08-contracts-reference/14-CreditPriceOracle.md": {
+    "mtime": 1783272972.2906349,
+    "ast_hash": "a79aa24862059b93c0bf29aaa88b27a9",
+    "semantic_hash": "a79aa24862059b93c0bf29aaa88b27a9"
+  },
+  "docs/es/08-contracts-reference/15-CreditPSM.md": {
+    "mtime": 1783543054.4218583,
+    "ast_hash": "dcedad5ed7fee97bf6d38e9b15e03620",
+    "semantic_hash": "dcedad5ed7fee97bf6d38e9b15e03620"
+  },
+  "docs/es/08-contracts-reference/16-ProjectFunding.md": {
+    "mtime": 1783543156.7820582,
+    "ast_hash": "357728e96424b7a84b3cd2b25020b8d6",
+    "semantic_hash": "357728e96424b7a84b3cd2b25020b8d6"
+  },
+  "docs/es/09-advanced/01-deep-dives.md": {
+    "mtime": 1783543566.1737342,
+    "ast_hash": "d1450c28c1ed664e30f0bd1da3b7d58d",
+    "semantic_hash": "d1450c28c1ed664e30f0bd1da3b7d58d"
+  },
+  "docs/es/09-advanced/02-mainnet-deployment.md": {
+    "mtime": 1777066409.3896334,
+    "ast_hash": "5b10cf367e539e3047a39f521ce54d17",
+    "semantic_hash": "5b10cf367e539e3047a39f521ce54d17"
+  },
+  "docs/es/09-advanced/03-security-model.md": {
+    "mtime": 1783543562.8012028,
+    "ast_hash": "51c75f8b8a88dbd339df513d490ba693",
+    "semantic_hash": "51c75f8b8a88dbd339df513d490ba693"
+  },
+  "docs/es/10-reference/01-faq.md": {
+    "mtime": 1783543263.4460962,
+    "ast_hash": "ade99b8bdf35cdfef361e352445dbfb7",
+    "semantic_hash": "ade99b8bdf35cdfef361e352445dbfb7"
+  },
+  "docs/es/10-reference/02-resources.md": {
+    "mtime": 1776784765.3699765,
+    "ast_hash": "4f099d6c6c09c3cdf59c0d80264aee3a",
+    "semantic_hash": "4f099d6c6c09c3cdf59c0d80264aee3a"
+  },
+  "docs/es/10-reference/03-changelog.md": {
+    "mtime": 1783543621.8502238,
+    "ast_hash": "256ff5a4add99e838cb06ad938dede5c",
+    "semantic_hash": "256ff5a4add99e838cb06ad938dede5c"
+  },
+  "docs/es/README.md": {
+    "mtime": 1783543377.9241369,
+    "ast_hash": "c066c0ad71c8e6847aaab61ce83f8fa0",
+    "semantic_hash": "c066c0ad71c8e6847aaab61ce83f8fa0"
+  },
+  "docs/governance/fase0-default-split.md": {
+    "mtime": 1783268766.2507591,
+    "ast_hash": "be529358367da93c42296382bbffaa80",
+    "semantic_hash": "be529358367da93c42296382bbffaa80"
+  },
+  "docs/governance/fase1-1-buyback-ffp.md": {
+    "mtime": 1783268943.9348147,
+    "ast_hash": "f22aba470063550ae87ef0409d27d261",
+    "semantic_hash": "f22aba470063550ae87ef0409d27d261"
+  },
+  "docs/governance/fase1-2-pol.md": {
+    "mtime": 1783268828.015778,
+    "ast_hash": "44ab67108e0868ca62df085fd33505ca",
+    "semantic_hash": "44ab67108e0868ca62df085fd33505ca"
+  },
+  "docs/governance/fase1-3-liquidity-gauge.md": {
+    "mtime": 1783268848.6377845,
+    "ast_hash": "3ef08ff15993fc9d38d59fc06b762411",
+    "semantic_hash": "3ef08ff15993fc9d38d59fc06b762411"
+  },
+  "docs/governance/fase1-4-bucket-split.md": {
+    "mtime": 1783269008.0718353,
+    "ast_hash": "a04495ce2d41156428e038c5517b4364",
+    "semantic_hash": "a04495ce2d41156428e038c5517b4364"
+  },
+  "docs/pt-br/01-getting-started/01-what-is-web3community.md": {
+    "mtime": 1783583309.2710774,
+    "ast_hash": "21d071b994d9e2130ed7f0e17bf98874",
+    "semantic_hash": "21d071b994d9e2130ed7f0e17bf98874"
+  },
+  "docs/pt-br/01-getting-started/02-mental-model.md": {
+    "mtime": 1783583346.6069531,
+    "ast_hash": "cd77f63f811d23131b8c03e2736684b0",
+    "semantic_hash": "cd77f63f811d23131b8c03e2736684b0"
+  },
+  "docs/pt-br/01-getting-started/03-glossary.md": {
+    "mtime": 1783583400.942107,
+    "ast_hash": "c155fe63217e6c9fd245e79b79facdfa",
+    "semantic_hash": "c155fe63217e6c9fd245e79b79facdfa"
+  },
+  "docs/pt-br/01-getting-started/04-reading-paths.md": {
+    "mtime": 1783599583.06472,
+    "ast_hash": "def0a71afb77b39b60e349821544db7e",
+    "semantic_hash": "def0a71afb77b39b60e349821544db7e"
+  },
+  "docs/pt-br/README.md": {
+    "mtime": 1783583280.5444653,
+    "ast_hash": "68dea2b8cded33233387f4c44b8c5f3e",
+    "semantic_hash": "68dea2b8cded33233387f4c44b8c5f3e"
+  },
+  "scripts/proposals/README.md": {
+    "mtime": 1776628705.8047917,
+    "ast_hash": "5eea5407f9c3ee4137419a801db499d8",
+    "semantic_hash": "5eea5407f9c3ee4137419a801db499d8"
+  },
+  "docs/assets/ecosystem.png": {
+    "mtime": 1777204393.8837488,
+    "ast_hash": "7e5e8f2da758a215ec209b5aff1ec97d",
+    "semantic_hash": "7e5e8f2da758a215ec209b5aff1ec97d"
+  },
+  "docs/assets/ecosystem.svg": {
+    "mtime": 1777204355.6697488,
+    "ast_hash": "7db8bbfd84800d5e427978a64677a666",
+    "semantic_hash": "7db8bbfd84800d5e427978a64677a666"
+  },
+  "docs/assets/ecosystem@2x.png": {
+    "mtime": 1777204396.809749,
+    "ast_hash": "83912d59754fea1bc0d42d707a7d6ac1",
+    "semantic_hash": "83912d59754fea1bc0d42d707a7d6ac1"
+  }
+}

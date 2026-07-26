@@ -13,8 +13,10 @@ import {ProjectRegistry} from "./ProjectRegistry.sol";
  * @title Staking
  * @notice Cofre de stake direcionado por projeto. O usuario lockeia GOV em um
  *         `projectId` do {ProjectRegistry} e recebe `weight` proporcional ao
- *         amount e a duracao do lock. Peso alimenta o futuro `RewardDistributor`
- *         no calculo de share de rewards por projeto por rodada.
+ *         amount e a duracao do lock. No modelo vigente (remodel 2026-07-08) o
+ *         stake e sinal de curadoria e PRE-REQUISITO para investir e sacar
+ *         rev-share no {ProjectFunding} (`getWeight(user, projectId) > 0`).
+ *         Nao ha emissao/rewards atrelados ao peso.
  * @dev Decisoes economicas fixadas (confirmadas com o user):
  *      - Lock minimo 14 dias, maximo 365 dias (multiplier satura em 4x acima).
  *      - Curva linear 1x (14d) -> 4x (365d). Valores fora do range: < 14d
@@ -34,12 +36,11 @@ import {ProjectRegistry} from "./ProjectRegistry.sol";
  *        amount re-inicia o compromisso temporal sobre TODA a posicao.
  *
  *      Invariantes atendidas nesta unidade:
- *      - I5 (anti-flashloan no voto): aqui nao ha voto, mas o analogo e a
- *        sensibilidade do peso a snapshots. Expomos {getWeightAt} e
- *        {getTotalWeightAt} via `Checkpoints.Trace208`. `RewardDistributor`
- *        deve consultar pelo blockNumber ancorado ao inicio da rodada, e
- *        NUNCA pelo valor corrente, impedindo que flash-staking no mesmo
- *        bloco da distribuicao influencie a fracao de reward alocada.
+ *      - I5 (anti-flashloan): expomos {getWeightAt} e {getTotalWeightAt} via
+ *        `Checkpoints.Trace208` para snapshots historicos imunes a
+ *        flash-stake. Consumidores que ponderem por peso historico devem
+ *        consultar por um blockNumber ancorado no passado, nunca pelo valor
+ *        corrente.
  *      - I6 (lock minimo 14d) — {LockTooShort} revert em {stake} e
  *        {extendLock}; {unstake} reverte com {LockNotExpired} enquanto o lock
  *        esta vigente (excecao de {unstake} documentada para status Removed).
@@ -138,9 +139,9 @@ contract Staking is ReentrancyGuard {
     mapping(address user => mapping(uint256 projectId => Checkpoints.Trace208)) private _userWeight;
 
     /// @dev Historico de peso global (soma de todos os projetos) (chave = block.number).
-    ///      Alimenta o split bootstrap do `RewardDistributor` quando nao ha burn na
-    ///      rodada anterior: share_projeto = projectWeight / globalWeight, evitando
-    ///      iteracao sobre projetos on-chain.
+    ///      Exposto via {getTotalWeightAt} para consumidores que precisem da
+    ///      fracao de um projeto no peso total (projectWeight / globalWeight)
+    ///      sem iterar projetos on-chain.
     Checkpoints.Trace208 private _globalWeightCheckpoints;
 
     // ------------------------------------------------------------------
@@ -308,8 +309,8 @@ contract Staking is ReentrancyGuard {
     /**
      * @notice Peso historico do (user, projectId) no bloco `blockNumber`.
      * @dev Consulta `Checkpoints.Trace208.upperLookupRecent` — retorna o peso
-     *      vigente no ultimo checkpoint com chave <= `blockNumber`. Usado pelo
-     *      `RewardDistributor` para snapshots imunes a flash-stake.
+     *      vigente no ultimo checkpoint com chave <= `blockNumber`. Usado para
+     *      snapshots historicos imunes a flash-stake.
      *      IMPORTANTE: so e confiavel para `blockNumber < block.number`; para
      *      o bloco corrente, o checkpoint pode ainda estar sendo escrito.
      * @param user Staker.
@@ -335,7 +336,7 @@ contract Staking is ReentrancyGuard {
     /**
      * @notice Peso global agregado corrente — soma de {getTotalWeight} para
      *         todos os projetos.
-     * @dev Consultado pelo `RewardDistributor` em rodadas bootstrap (sem burn
+     * @dev Util para computar o share de um projeto no peso global (sem
      *      anterior) para computar o share de cada projeto sem iterar
      *      on-chain: `share_projeto = getTotalWeightAt(projectId, b) /
      *      getGlobalWeightAt(b)`. O agregado e atualizado em O(1) em cada

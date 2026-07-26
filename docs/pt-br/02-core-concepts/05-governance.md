@@ -1,119 +1,96 @@
-# Governança
+# Governança: CommunityGovernor + Timelock
 
-**Para quem é:** quem quer entender **como** a DAO toma decisões.
-**Pré-requisitos:** [Modelo mental](../01-getting-started/02-mental-model.md).
+**Para quem é:** quem quer votar, propor ou entender quem controla os contratos econômicos.
+**Pré-requisitos:** [Dual-token economy](01-dual-token-economy.md).
 
 ## Separação de poderes
 
-A governança da web3community tem **três** componentes com papéis distintos:
+Nenhuma função privilegiada dos contratos econômicos aceita chamada direta de uma EOA. Todas exigem `GOVERNANCE_ROLE`, que em produção **só o [`CommunityTimelock`](../08-contracts-reference/09-CommunityTimelock.md) detém**. E o Timelock só executa o que o [`CommunityGovernor`](../08-contracts-reference/10-CommunityGovernor.md) aprovou por voto e esperou o delay.
 
 ```
-  Detentores de GOV      CommunityGovernor       CommunityTimelock
-  (com delegacao)         (urna eletronica)      (executor com delay)
-
-  - detem voting     ->  - recebe proposta  ->   - segura 2 dias
-    power                - abre janela           - executa contra
-  - delegam pra si       - conta votos             contratos alvo
-    ou pra outrem        - decide resultado
+   Governor          Timelock            Contratos economicos
+   (decide)   --->   (aplica delay) ---> (Treasury, Registry,
+   voto do GOV       minDelay 2 dias      FeeRouterV2, ProjectFunding,
+                                          owner do GovernanceToken)
 ```
 
-Nenhum dos três pode agir sozinho:
+- **Governor** — recebe propostas, conta votos (poder de voto lido do GOV via `ERC20Votes`), decide sucesso.
+- **Timelock** — enfileira a proposta aprovada, espera `minDelay` e executa. É o único portador de `GOVERNANCE_ROLE`/`DEFAULT_ADMIN_ROLE` nos contratos econômicos e o único `owner` do GovernanceToken após o bootstrap.
 
-- **Governor** não executa nada — só agenda no Timelock.
-- **Timelock** não decide nada — só executa o que foi agendado depois do delay.
-- **Detentores de GOV** votam mas não podem chamar funções diretas dos contratos econômicos.
+O `CommunityGovernor` compõe o stack canônico da OpenZeppelin 5.0.x: `Governor` + `GovernorSettings` + `GovernorCountingSimple` + `GovernorVotes` + `GovernorVotesQuorumFraction` + `GovernorTimelockControl`.
 
-## Por que três etapas
+## Parâmetros (produção)
 
-### Threshold (entrada)
+Valores de produção em `ignition/parameters/production.json`, todos ajustáveis depois via governança:
 
-Para criar proposta, o propositor precisa ter pelo menos `proposalThreshold` de voting power delegado. Em produção: `10.000 GOV` (0.01% do cap). Impede spam de propostas por contas sem skin in the game.
+| Parâmetro | Valor produção | Significado |
+|---|---|---|
+| `votingDelay` | **7200 blocos** (~1 dia @ 12s) | espera entre `propose` e a abertura da votação (anti-MEV/anti-flashloan) |
+| `votingPeriod` | **50400 blocos** (~7 dias) | duração da janela de votação |
+| `proposalThreshold` | 10.000 GOV (0,01% do cap) | poder de voto delegado mínimo para propor |
+| `quorumNumerator` | **4%** | fração do supply que precisa participar para valer |
+| `minDelay` (Timelock) | **172800 s** (2 dias) | atraso entre enfileirar e executar |
 
-### Quorum (participação mínima)
+> O clock do Governor é em **blocos** (`GovernanceToken` não sobrescreve `clock()`, então o ERC20Votes usa `block.number`). Toda a aritmética de delay/period é em blocos.
 
-Uma proposta só vence se atingir quorum **e** tiver mais `For` que `Against`. Quorum em produção: **4%** do supply total ao bloco do snapshot. Evita que uma minoria ativa passe algo radical enquanto a maioria está dormindo.
+Em dev (`dev.json`) os valores são reduzidos (votingDelay 1, votingPeriod 50, minDelay 3600 s) para iterar rápido — mas o threshold e o quorum de 4% são mantidos.
 
-### Delay total (janela de resposta)
+## Contagem de votos
 
-Do momento de propor ao momento de executar, passam-se aproximadamente:
+`GovernorCountingSimple` conta `For / Against / Abstain`. Para uma proposta **Standard**, sucede se `For > Against` **e** o quorum de 4% for atingido (Abstain conta para quorum, não para a razão For/Against).
 
-- `votingDelay` — 7200 blocos (~1 dia a 12s/bloco)
-- `votingPeriod` — 50400 blocos (~7 dias)
-- `timelockMinDelay` — 172800 segundos (2 dias)
+O poder de voto é lido por **snapshot** no bloco de referência da proposta:
 
-Soma ~10 dias. Durante esse tempo, qualquer holder pode:
+```solidity
+quorum(timepoint)  // usa getPastTotalSupply do ERC20Votes
+```
 
-- Examinar a proposta on-chain.
-- Delegar votos para reprovar.
-- Organizar resposta off-chain.
-- Sair da posição se desacordar.
+Como usa `getPastVotes`/`getPastTotalSupply`, o voto é **imune a flash loans** que movam GOV no mesmo bloco (invariante I5). Você precisa ter GOV delegado (a si mesmo ou a outra conta) **antes** do snapshot.
 
-Se uma proposta maliciosa passa, ainda há 2 dias após a aprovação para ação (retirar fundos, cancelar via minoria bloqueadora em proposta contrária, etc.).
+## Supermajoridade: 75% para gestão de roles
 
-## O que a DAO controla
+Alterar quem detém roles no [Treasury](../08-contracts-reference/08-Treasury.md) ou no próprio Timelock muda quem pode movimentar o cofre da DAO — é o vetor clássico de captura. Por isso o `propose` **escaneia** os targets/calldatas da proposta:
 
-**Tudo** que afeta o protocolo economicamente passa por proposta. Listagem completa em [Parâmetros](../07-governance/03-parameters.md). Resumo:
+```solidity
+// qualquer call de grantRole/revokeRole/renounceRole com
+// target == TREASURY  OU  target == timelock()
+// marca a proposta INTEIRA como Supermajority
+```
 
-| Contrato | Parâmetros controlados |
-|---|---|
-| `ProjectRegistry` | `registerProject`, `activateProject`, `setProbation`, `reactivate`, `removeProject`, `setMinCollateral`, `setProbationDuration` |
-| `Treasury` | `transfer`, `batchTransfer`, `payRebates`, `executeBuyback`, `sweepETH` |
-| `BurnTracker` | `closeRound`, `setRoundDuration`, `setMaxBurnPerRoundPerProject` |
-| `RewardDistributor` | `setAlpha`, `setCapMax` |
-| `FeeRouter` | `setDefaultSplit`, `setProjectSplit`, `clearProjectSplit` |
-| `UserSubsidy` | `createCampaign`, `closeCampaign` |
-| `GovernanceToken` | `mint` (via `Ownable2Step`, owner = Timelock) |
-| `TeamVesting` | `revoke` (owner = Timelock) |
+Quando marcada, `_voteSucceeded` passa a exigir:
 
-## O que a DAO **não** controla
+```solidity
+return forVotes > 0 && forVotes >= 3 * againstVotes;   // For >= 75% dos votos decisivos
+```
 
-Decisões que a DAO **não pode tomar** mesmo com 100% dos votos:
+Isto é, **For ≥ 75%** dos votos decisivos (For/Against; Abstain fora da razão). Um batch que **misture** gestão de roles do Treasury/Timelock com outras calls é contaminado **inteiro** pelo tipo Supermajority — de propósito: empacotar a call sensível junto de calls populares seria exatamente o vetor de diluição do requisito de 75%. O evento `ProposalTypeSet` sinaliza o tipo de toda proposta (inclusive Standard) para indexação off-chain.
 
-- **Aumentar o cap do GOV**. O cap (100M) é `immutable` no `GovernanceToken.CAP_SUPPLY`.
-- **Remover o `MIN_LOCK` do Staking** (14 dias). É `constant` e protege stakers contra a própria governança.
-- **Mudar a janela `[MIN_ROUND_DURATION, MAX_ROUND_DURATION]`** (1 dia a 30 dias).
-- **Mudar `[MIN_ALPHA, MAX_ALPHA]`** (0.5 a 0.99 — reduzido de 1.1 para garantir IE1 α<1 permanente por construção; ver `audit/economist/2026-04-22-consistency-audit.md` C2) ou `[MIN_CAPMAX, MAX_CAPMAX]` (1 a 100M CREDIT).
-- **Alterar `floorSchedule`**. Gravado no storage do `RewardDistributor` no deploy, sem função de write.
-- **Mudar o endereço de qualquer contrato econômico**. Se a DAO precisar "substituir" um contrato, precisa deployar novo e migrar roles — a arquitetura não prevê upgrade in-place.
+## Ciclo de uma proposta
 
-A imutabilidade dessas regras é um compromisso: **nem a DAO unânime pode quebrar os direitos que o usuário viu no deploy**. É a base de confiança que permite stakers imobilizarem capital.
+```
+Alice propoe      votingDelay      votingPeriod      Fila timelock    minDelay      Execucao
+(>= 10k GOV   ->  (7200 blocos, -> (50400 blocos, -> (enfileira,   -> (2 dias,   -> (qualquer
+ delegados)       ~1 dia)           ~7 dias;          Queued)          resposta)     um executa)
+                                    For > Against
+                                    + quorum 4%)
+```
 
-## Quem é o dono do quê
+Estados possíveis: `Pending → Active → Succeeded/Defeated → Queued → Executed` (ou `Canceled`/`Expired`). Só executa via Timelock após todos os delays.
 
-Pós-deploy, após todos os handoffs:
+## Por que a latência é intencional
 
-| Recurso | Owner/Admin |
-|---|---|
-| `GOVERNANCE_ROLE` em todos os contratos econômicos | `CommunityTimelock` |
-| `DEFAULT_ADMIN_ROLE` em todos os contratos com AccessControl | `CommunityTimelock` |
-| `owner` do `GovernanceToken` | `CommunityTimelock` (após `acceptOwnership`) |
-| `owner` de cada `TeamVesting` | `CommunityTimelock` |
-| `PROPOSER_ROLE` + `CANCELLER_ROLE` no `CommunityTimelock` | `CommunityGovernor` |
-| `EXECUTOR_ROLE` no `CommunityTimelock` | `address(0)` — qualquer um executa após o delay |
-| `DEFAULT_ADMIN_ROLE` no `CommunityTimelock` | **Self** (o próprio Timelock) |
-| `MINTER_ROLE` no `CreditToken` | `RewardDistributor` |
-| `BURNER_ROLE` no `CreditToken` | `BurnTracker` |
-| `RECORDER_ROLE` no `BurnTracker` | `FeeRouter` (e cada novo app listado recebe via proposta) |
+Propostas levam ~10 dias do início à execução. **A latência é o mecanismo de segurança**: nenhum ator isolado pode drenar fundos, trocar contratos ou mudar parâmetros unilateralmente. O custo é tempo de resposta; o ganho é que a comunidade tem uma janela para reagir a qualquer proposta maliciosa que passe.
 
-O deployer **renuncia todas as roles** no fim do deploy. Após isso, ele não tem mais poder que qualquer holder de GOV.
+## Deploy de roles (por que ninguém tem backdoor)
 
-## Papel do ERC20Votes
+No bootstrap de produção, o deployer:
 
-O `GovernanceToken` herda `ERC20Votes`. Isso adiciona duas funções críticas para a governança:
+1. concede `PROPOSER_ROLE` + `CANCELLER_ROLE` ao Governor no Timelock;
+2. concede `GOVERNANCE_ROLE` + `DEFAULT_ADMIN_ROLE` ao Timelock em cada contrato econômico e transfere o `owner` do GovernanceToken para ele;
+3. **renuncia** às próprias roles.
 
-- `delegate(delegatee)` — cada holder precisa **delegar** voting power, mesmo a si mesmo. Se ninguém delega, `getVotes` retorna zero e o Governor não conta.
-- `getPastVotes(account, blockNumber)` — retorna o voting power em um bloco passado. **Esta** é a função que o Governor usa para contar votos — imune a flash-loans.
-
-**Flash-loan ataque mitigado**: um atacante que faz flash-loan de GOV no bloco de abertura da votação não consegue votar, porque `getPastVotes` consulta o bloco `snapshot = proposalSnapshot(proposalId)` que fica no passado (`votingDelay` atrás).
-
-## Contratos-chave
-
-| Contrato | Papel |
-|---|---|
-| [GovernanceToken](../08-contracts-reference/01-GovernanceToken.md) | Fonte de voting power |
-| [CommunityGovernor](../08-contracts-reference/10-CommunityGovernor.md) | Urna |
-| [CommunityTimelock](../08-contracts-reference/09-CommunityTimelock.md) | Executor com delay |
+O `EXECUTOR_ROLE` é `address(0)` — qualquer um pode clicar "execute" numa proposta já vencida (o delay é o gate real). `CANCELLER_ROLE` fica só com o Governor (via `_cancel`), para que ninguém externo possa DoSar propostas válidas. Resultado: após o wiring, **nenhuma EOA retém poder unilateral** (invariante I4).
 
 ---
 
-**Próximo →** [Project whitelist](06-project-whitelist.md)
+**Próximo →** [Arquitetura do protocolo](../03-protocol-overview/01-architecture.md)

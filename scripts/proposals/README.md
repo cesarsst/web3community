@@ -15,9 +15,7 @@ de governança (Tally, Snapshot, `Governor` direto via Etherscan).
 
 | Script                        | Gera                                                                                                                      | Input (JSON)                        |
 | ----------------------------- | ------------------------------------------------------------------------------------------------------------------------- | ----------------------------------- |
-| `deploy-user-subsidy.ts`      | Deploy do singleton `UserSubsidy` (sem proposta — é um-time setup).                                                       | `configs/userSubsidy.json`          |
 | `propose-team-vesting.ts`     | Deploy de uma instância de `TeamVesting` (owner = Timelock) + proposta `gov.mint(vesting, alloc, "team:<nome>")`.         | `configs/teamVesting.<nome>.json`   |
-| `propose-subsidy-campaign.ts` | Proposta batch `[treasury.transfer(credit, subsidy, budget), subsidy.createCampaign(root, amount, maxClaims, deadline)]`. | `configs/subsidyCampaign.<id>.json` |
 
 ## Por que `TeamVesting` é deploy + proposta separadas
 
@@ -52,16 +50,9 @@ Fluxo típico (dev):
 # 1. bootstrap do DAO
 npm run deploy:local
 
-# 2. deploy do UserSubsidy (singleton, uma vez só)
-npx hardhat run scripts/proposals/deploy-user-subsidy.ts --network localhost
-
-# 3. criar uma proposta de vesting pra um membro do time
+# 2. criar uma proposta de vesting pra um membro do time
 npx hardhat run scripts/proposals/propose-team-vesting.ts --network localhost
 # (edita configs/teamVesting.alice.json antes — o script lê esse path)
-
-# 4. criar uma campanha de subsídio
-npx hardhat run scripts/proposals/propose-subsidy-campaign.ts --network localhost
-# (edita configs/subsidyCampaign.chatapp-launch.json antes)
 ```
 
 Cada script imprime ao final:

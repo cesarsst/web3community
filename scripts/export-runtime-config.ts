@@ -27,13 +27,11 @@ const FUTURE_ID_TO_NAME: Record<string, string> = {
   "CommunityDAOModule#phaseA_ProjectRegistry": "ProjectRegistry",
   "CommunityDAOModule#phaseA_Treasury": "Treasury",
   "CommunityDAOModule#phaseA_Staking": "Staking",
-  "CommunityDAOModule#phaseA_BurnTracker": "BurnTracker",
-  "CommunityDAOModule#phaseA_RewardDistributor": "RewardDistributor",
-  "CommunityDAOModule#phaseA_FeeRouter": "FeeRouter",
+  "CommunityDAOModule#phaseA_UsdcMock": "USDC",
+  "CommunityDAOModule#phaseA_CreditPSM": "CreditPSM",
+  "CommunityDAOModule#phaseA_ProjectFunding": "ProjectFunding",
+  "CommunityDAOModule#phaseA_FeeRouterV2": "FeeRouterV2",
   "CommunityDAOModule#phaseA_CommunityGovernor": "CommunityGovernor",
-  // Fase F (pivot CLP) — presentes quando o deploy rodou com DEPLOY_CLP_PHASE1.
-  "CommunityDAOModule#phaseF_LiquidityGauge": "LiquidityGauge",
-  "CommunityDAOModule#phaseF_RewardDistributorV2": "RewardDistributorV2",
 };
 
 const deployFile = resolve(
@@ -55,6 +53,21 @@ const addresses: Record<string, string> = {};
 for (const [futureId, addr] of Object.entries(raw)) {
   const name = FUTURE_ID_TO_NAME[futureId];
   if (name) addresses[name] = addr;
+}
+
+// Contratos dev deployados fora do Ignition pelo deploy-prod-sim (USDC mock,
+// DevFaucet) — mesclados quando existirem.
+const devFile = resolve(
+  __dirname,
+  "..",
+  "ignition",
+  "deployments",
+  `chain-${CHAIN_ID}`,
+  "dev_addresses.json",
+);
+if (existsSync(devFile)) {
+  const devRaw = JSON.parse(readFileSync(devFile, "utf8")) as Record<string, string>;
+  Object.assign(addresses, devRaw);
 }
 
 const body = {

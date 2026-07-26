@@ -1,213 +1,100 @@
 # Parâmetros ajustáveis pela DAO
 
-**Para quem é:** quem quer saber exatamente o que a DAO pode mudar e quais são as faixas permitidas.
+**Para quem é:** quem quer saber exatamente o que a DAO pode mudar e quais são as faixas permitidas on-chain.
 **Pré-requisitos:** [Ciclo de uma proposta](01-proposal-lifecycle.md).
 
-Esta página lista **todos** os parâmetros ajustáveis via governança, o valor em produção, o bound on-chain, e qual função é usada para alterar.
+Esta página lista **todos** os parâmetros ajustáveis via governança nos contratos de produção: o valor vigente, o bound on-chain (que nem a governança ultrapassa) e a função usada para alterar. Os valores citados vêm do código — constants nos `.sol` e defaults do `ignition/modules/Dao.ts`.
 
-## Contratos e funções de ajuste
+## FeeRouterV2 — o trilho de pagamento
 
-### GovernanceToken
+Setters `onlyRole(GOVERNANCE_ROLE)` (Timelock em produção), exceto `setAppRecipient` (owner do projeto).
 
-Owner em produção = `CommunityTimelock`. Propostas que chamem:
-
-| Função | O que faz | Bound on-chain |
-|---|---|---|
-| `mint(to, amount, tag)` | Cunha GOV para `to` até atingir `CAP_SUPPLY` | Reverte com `CapExceeded` se supply pós-mint > 100M |
-
-Sem setters de parâmetro — `CAP_SUPPLY` é imutável.
-
-### CreditToken
-
-Admin em produção = `CommunityTimelock`. Propostas:
-
-| Função | O que faz | Bound on-chain |
-|---|---|---|
-| `grantRole(MINTER_ROLE, addr)` | Concede poder de mint | — |
-| `revokeRole(MINTER_ROLE, addr)` | Revoga | — |
-| `grantRole(BURNER_ROLE, addr)` | Concede poder de burn role-gated | — |
-| `revokeRole(BURNER_ROLE, addr)` | Revoga | — |
-
-`mintGenesis` não é chamável após a primeira execução (flag `genesisMinted`).
-
-### ProjectRegistry
-
-| Função | O que faz | Bound on-chain | Valor em produção |
+| Parâmetro | Valor vigente | Bound on-chain | Função |
 |---|---|---|---|
-| `registerProject(owner, uri, collateral)` | Lista novo projeto | `collateral >= minCollateral` | — |
-| `activateProject(id)` | Pending → Active | status deve ser Pending | — |
-| `setProbation(id)` | Active → Probation | status deve ser Active | — |
-| `reactivate(id)` | Probation → Active | status deve ser Probation | — |
-| `removeProject(id, slash, treasury)` | → Removed | status != Removed | — |
-| `setMinCollateral(newMin)` | Ajusta colateral mínimo | `newMin > 0` | `10.000 GOV` |
-| `setProbationDuration(newDuration)` | Ajusta probation inicial | `newDuration > 0` | `2.592.000 seg` (30d) |
+| `feeBps` | `250` (2,5%) | teto duro `FEE_BPS_CAP = 500` (5%) — `FeeAboveCap` acima | `setFeeBps(newFeeBps)` |
+| `feeSplit` | `4000/4000/2000` (treasury/buyback/grants) | soma **exata** de 10.000 bps — `SplitDoesNotSumTo10000` | `setFeeSplit({treasuryBps, buybackBps, grantsBps})` |
+| recipients | treasury/buyback/grants (dev: os 3 = Treasury) | nenhum pode ser `address(0)` | `setRecipients(treasury, buyback, grants)` |
+| `appRecipientOf[id]` | fallback = owner do projeto | não pode ser `address(0)` | `setAppRecipient(projectId, recipient)` *(owner-gated)* |
 
-### Treasury
+O teto de 5% é o guardrail mais importante do router: **nem a governança consegue tornar o protocolo caro**. Os eventos `PaymentRouted` carregam o detalhamento por parcela mesmo quando os três recipients apontam para o mesmo endereço (transparência contábil on-chain).
 
-| Função | O que faz | Bound on-chain |
-|---|---|---|
-| `transfer(token, to, amount)` | Envia ERC-20 | `balance suficiente` |
-| `batchTransfer(token, recipients[], amounts[])` | Batch de transfers | arrays válidos, saldo total suficiente |
-| `payRebates(token, apps[], amounts[], round)` | Batch com evento semântico | idem |
-| `executeBuyback(stable, amountIn, minGovOut, swapData)` | Stub v1 — só emite evento | `stable != 0, amountIn > 0, minGovOut > 0` |
-| `sweepETH(to, amount)` | Saca ETH | `balance suficiente` |
+## ProjectFunding — captação e rev-share
 
-### Staking
+Setter `onlyRole(GOVERNANCE_ROLE)`. As faixas de rodada são **constants imutáveis** — não ajustáveis nem por governança.
 
-Sem parâmetros ajustáveis. `MIN_LOCK`, `MAX_LOCK`, `MULTIPLIER_PRECISION`, `MAX_MULTIPLIER` são `constant`.
-
-### BurnTracker
-
-| Função | O que faz | Bound on-chain | Valor em produção |
+| Parâmetro | Valor vigente | Ajustável? | Função |
 |---|---|---|---|
-| `closeRound()` | Fecha rodada atual, abre próxima | — | — |
-| `setRoundDuration(new)` | Ajusta duração alvo da rodada | `[MIN_ROUND_DURATION=1d, MAX_ROUND_DURATION=30d]` | `604.800 seg` (7d) |
-| `setMaxBurnPerRoundPerProject(new)` | Sanity cap; 0 = desabilita | — | `10M CREDIT` |
-| `grantRole(RECORDER_ROLE, app)` | Autoriza app a chamar `burnAndRecord` | — | — |
-| `revokeRole(RECORDER_ROLE, app)` | Desautoriza | — | — |
+| `minTarget` | `100e18` CREDIT | Sim (governança) | `setMinTarget(newMin)` |
+| `MIN_REV_SHARE_BPS` | `100` (1%) | Não — constant | — |
+| `MAX_REV_SHARE_BPS` | `3000` (30%) | Não — constant | — |
+| `MIN_ROUND_DURATION` | `1 days` | Não — constant | — |
+| `MAX_ROUND_DURATION` | `90 days` | Não — constant | — |
 
-### RewardDistributor
+## ProjectRegistry — whitelist de projetos
 
-| Função | O que faz | Bound on-chain | Valor em produção |
+Setters `onlyRole(GOVERNANCE_ROLE)`. O ciclo de vida do projeto (register/activate/probation/remove) também é governança — ver [Submeter um projeto](../05-for-developers/03-submitting-a-project.md).
+
+| Parâmetro | Valor vigente | Bound | Função |
 |---|---|---|---|
-| `finalizeRound(round)` | Grava emissão imutável da rodada | sequencial, rodada fechada no tracker | — |
-| `setAlpha(new)` | Ajusta alpha | `[MIN_ALPHA=0.5e18, MAX_ALPHA=0.99e18]` | `0.95e18` |
-| `setCapMax(new)` | Ajusta teto por rodada | `[MIN_CAPMAX=1e18, MAX_CAPMAX=100M*1e18]` | `5M CREDIT` |
-| `grantRole(GOVERNANCE_ROLE, addr)` | idem | — | — |
+| `minCollateral` | prod: `10_000e18` GOV (dev: `1_000e18`) | `> 0` — `ZeroAmount` | `setMinCollateral(newMin)` |
+| `probationDuration` | prod: `30 dias` (dev: `1 dia`) | `> 0` — `ZeroAmount` | `setProbationDuration(newDuration)` |
+| `OWNER_RECIPIENT_TIMELOCK` | `48 horas` | Não — constant | — |
 
-`floorSchedule` é **imutável** após deploy.
+Ambos afetam **só registros/ativações futuras** — projetos existentes não são retroativamente alterados.
 
-### FeeRouter
+## Treasury — o cofre
 
-| Função | O que faz | Bound on-chain | Valor em produção |
-|---|---|---|---|
-| `setDefaultSplit(split)` | Split global default | `burnBps + treasuryBps + rebateBps == 10.000` | `(9500, 0, 500)` |
-| `setProjectSplit(id, split)` | Override por projeto | idem | — |
-| `clearProjectSplit(id)` | Remove override | override precisa existir | — |
-
-`setAppRecipient(id, recipient)` é owner-gated (não governance).
-
-### UserSubsidy
-
-| Função | O que faz | Bound on-chain |
-|---|---|---|
-| `createCampaign(root, amountPerUser, maxClaims, deadline)` | Abre campanha Merkle | `root != 0, amount > 0, maxClaims > 0, deadline > now` |
-| `closeCampaign(id, returnTo)` | Fecha e devolve sobras | campanha existe e não fechada |
-
-### TeamVesting
-
-Uma instância por beneficiário. Owner = `CommunityTimelock`.
-
-| Função | O que faz | Bound on-chain |
-|---|---|---|
-| `revoke(returnTo)` | One-shot; congela fronteira | `!revoked, returnTo != 0` |
-
-Cronograma (`start`, `cliff`, `duration`) é imutável (setado no constructor).
-
-### CommunityTimelock
-
-Self-administered pós-handoff. Propostas:
+Sem parâmetros de configuração. As saídas de fundos são as únicas operações governáveis, ambas `onlyRole(GOVERNANCE_ROLE)`:
 
 | Função | O que faz |
 |---|---|
-| `updateDelay(newDelay)` | Ajusta `minDelay`. Novo valor aplicado a propostas futuras. |
-| `grantRole(PROPOSER_ROLE, addr)` | Adiciona proposer |
-| `revokeRole(PROPOSER_ROLE, addr)` | Remove |
-| `grantRole(CANCELLER_ROLE, addr)` | Adiciona canceller |
-| `revokeRole(CANCELLER_ROLE, addr)` | Remove |
-| `grantRole(EXECUTOR_ROLE, addr)` | Adiciona executor |
+| `transfer(token, to, amount)` | saída de ERC-20 (inclui execução de buyback de GOV) |
+| `transferETH(to, amount)` | saída de ETH |
 
-### CommunityGovernor
+> **Atenção — supermaioria (75%).** Alterar quem detém roles no Treasury (`grantRole`/`revokeRole`/`renounceRole`) muda quem pode esvaziar o cofre. Qualquer proposta com essas chamadas no Treasury **ou no próprio Timelock** é classificada como `Supermajority` e exige `For >= 75%`. Ver [Ciclo de uma proposta](01-proposal-lifecycle.md#supermaioria-para-gestão-de-roles).
 
-Todas as mudanças são `onlyGovernance` (precisam vir via proposta aprovada pelo próprio Governor). Valores em produção em `ignition/parameters/production.json`.
+## CreditPSM — sem parâmetros
 
-| Função | O que faz | Bound on-chain | Valor em produção |
-|---|---|---|---|
-| `setVotingDelay(new)` | Ajusta delay até abrir votação | `> 0` (uint48) | `7200` (~1d) |
-| `setVotingPeriod(new)` | Ajusta duração da votação | `> 0` (uint32) | `50400` (~7d) |
-| `setProposalThreshold(new)` | Ajusta threshold para propor | `>= 0` | `10.000 * 1e18 GOV` |
-| `updateQuorumNumerator(new)` | Ajusta numerador do quorum | `[0, 100]` | `4` |
-| `relay(target, value, data)` | Executa operação arbitrária como se fosse o governor (rara) | — | — |
+O PSM é **imutável por design**: sem owner, sem roles próprias, sem setters. Conversão 1:1, sem taxa, lastro sem função de saque. Para mudar qualquer coisa, deploya-se outro PSM e a governança migra as roles de mint/burn no CreditToken.
 
-## Parâmetros imutáveis
+## GovernanceToken — só mint até o cap
 
-A DAO **não pode** alterar:
+Owner em produção = Timelock. Não há setter de parâmetro — `CAP_SUPPLY` é imutável.
 
-| Parâmetro | Onde | Valor |
+| Função | O que faz | Bound |
 |---|---|---|
-| `CAP_SUPPLY` do GOV | `GovernanceToken` | 100.000.000 * 1e18 |
-| `MIN_LOCK` do Staking | `Staking` | 14 dias |
-| `MAX_LOCK` do Staking | `Staking` | 365 dias |
-| `MAX_MULTIPLIER` do Staking | `Staking` | 4e18 |
-| `MULTIPLIER_PRECISION` do Staking | `Staking` | 1e18 |
-| `MIN_ROUND_DURATION` | `BurnTracker` | 1 dia |
-| `MAX_ROUND_DURATION` | `BurnTracker` | 30 dias |
-| `MIN_ALPHA`, `MAX_ALPHA` | `RewardDistributor` | `0.5e18`, `0.99e18` (reduzido de `1.1e18` — ver `audit/economist/2026-04-22-consistency-audit.md` C2; garante IE1 α<1 permanente por construção) |
-| `MIN_CAPMAX`, `MAX_CAPMAX` | `RewardDistributor` | `1e18`, `100M*1e18` |
-| `FLOOR_SCHEDULE_LENGTH` | `RewardDistributor` | 24 |
-| `PROBATION_PENALTY_DENOM` | `RewardDistributor` | 4 (25%) |
-| `floorSchedule` (valores) | `RewardDistributor` | gravados no deploy |
-| `_BPS_DENOMINATOR` | `FeeRouter` | 10.000 |
-| Endereços dos contratos | deploy | fixos |
-| `CommunityGovernor` `name` (EIP-712) | `CommunityGovernor` | "CommunityGovernor" |
+| `mint(to, amount, tag)` | cunha GOV até o cap | `CapExceeded` se supply pós-mint > 100M |
 
-Esses valores são o **piso constitucional** do protocolo: nem a DAO unânime pode alterar.
+## CommunityGovernor — parâmetros da própria governança
 
-## Como propor uma mudança de parâmetro
+Setters `onlyGovernance` (só via proposta + Timelock). Valores em **blocos** (o clock é `block.number`).
 
-Exemplo: reduzir `alpha` de `0.95e18` para `0.90e18`.
+| Parâmetro | Produção | Dev | Função |
+|---|---|---|---|
+| `votingDelay` | `7200` (~1 dia) | `1` bloco | `setVotingDelay(newDelay)` |
+| `votingPeriod` | `50400` (~7 dias) | `50` blocos | `setVotingPeriod(newPeriod)` |
+| `proposalThreshold` | `10_000e18` GOV | idem | `setProposalThreshold(newThreshold)` |
+| quorum | `4%` | `4%` | `updateQuorumNumerator(newNumerator)` |
 
-```solidity
-targets   = [address(rewardDistributor)];
-values    = [0];
-calldatas = [
-    abi.encodeWithSelector(rewardDistributor.setAlpha.selector, 0.90e18)
-];
-description = "Reduce alpha to 0.90 to increase deflationary pressure";
+O `name` do Governor (`"CommunityGovernor"`) **não** é um parâmetro — trava o domain separator EIP-712 e nunca deve ser alterado (invalidaria assinaturas de voto por sig).
 
-governor.propose(targets, values, calldatas, description);
-```
+## CommunityTimelock — o delay
 
-Pré-requisitos:
+| Parâmetro | Produção | Dev |
+|---|---|---|
+| `minDelay` | `172800s` (2 dias) | `3600s` (1 hora) |
 
-- O proposer tem >= 10k GOV delegados.
-- O valor novo `0.90e18` está dentro de `[MIN_ALPHA=0.5e18, MAX_ALPHA=0.99e18]`. Se fora, a execução reverte (mesmo com voto aprovado).
+Ajustável via `updateDelay`, que é `onlyRole(DEFAULT_ADMIN_ROLE)` — em produção o próprio Timelock (self-administered), ou seja, só muda por proposta aprovada. A regra de supermaioria de 75% cobre a gestão de roles do Timelock.
 
-## Efeito temporal das mudanças
+## Resumo dos guardrails imutáveis
 
-Mudanças de parâmetro entram em vigor **no bloco da execução** e afetam apenas estado futuro:
+Estes limites **nenhuma** proposta ultrapassa:
 
-- `setAlpha` altera o cálculo de `finalizeRound` para rodadas **não-finalizadas**. Rodadas com `roundData[r].finalized == true` têm `totalEmission` imutável.
-- `setCapMax` idem.
-- `setRoundDuration` afeta rodadas futuras (rodadas já abertas não são truncadas).
-- `setMaxBurnPerRoundPerProject` afeta gatings em novos `burnAndRecord` — acumulados passados permanecem.
-- `setDefaultSplit` / `setProjectSplit` afetam `pay`s futuros.
-- `setMinCollateral` / `setProbationDuration` afetam **novos** registros; existentes não são grandfather-alterados.
-
-## Observabilidade
-
-Eventos de mudança de parâmetro:
-
-```
-# RewardDistributor
-event AlphaUpdated(uint256 oldAlpha, uint256 newAlpha);
-event CapMaxUpdated(uint256 oldCap, uint256 newCap);
-
-# BurnTracker
-event RoundDurationUpdated(uint64 oldDuration, uint64 newDuration);
-event MaxBurnPerRoundPerProjectUpdated(uint256 oldMax, uint256 newMax);
-
-# FeeRouter
-event DefaultSplitUpdated(Split oldSplit, Split newSplit);
-event ProjectSplitUpdated(uint256 indexed projectId, Split newSplit);
-event ProjectSplitCleared(uint256 indexed projectId);
-
-# ProjectRegistry
-event MinCollateralUpdated(uint256 oldMin, uint256 newMin);
-event ProbationDurationUpdated(uint64 oldDuration, uint64 newDuration);
-```
-
-Indexadores externos devem monitorar e mostrar histórico de parâmetros para transparência.
+- Fee ≤ 5% (`FEE_BPS_CAP`).
+- Supply de GOV ≤ 100M (`CAP_SUPPLY`).
+- Rev-share de rodada entre 1% e 30%; duração entre 1 e 90 dias.
+- Lastro do PSM sem função de saque.
+- Split da fee sempre soma 10.000 bps.
 
 ---
 

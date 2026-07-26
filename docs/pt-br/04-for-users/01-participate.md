@@ -1,117 +1,59 @@
 # Como participar
 
-**Para quem é:** usuário comum, pouca experiência com DAO, pouca paciência para teoria.
-**Pré-requisitos:** ter uma wallet EVM (MetaMask, Rabby, Coinbase Wallet, etc.).
+**Para quem é:** qualquer pessoa querendo entrar na web3community — do usuário casual ao investidor.
+**Pré-requisitos:** uma carteira EVM (MetaMask, Rabby, Coinbase Wallet) e um pouco de USDC na rede do protocolo.
 
-## As três formas de estar no sistema
+Esta página é o mapa das jornadas possíveis. Cada uma tem sua própria página com o passo a passo.
 
-Você pode participar de três maneiras, em ordem crescente de engajamento:
+## Os quatro caminhos
 
-1. **Usuário de app** — compra CREDIT na DEX externa, gasta nos apps. É o fluxo mais simples.
-2. **Staker** — trava GOV em projetos que suporta, recebe CREDIT emitido.
-3. **Votante** — delega voting power e vota em propostas do Governor.
+```
+   Tenho USDC
+      |
+      v
+   1. Comprar CREDIT no PSM  --->  usar os apps (pagar features)
+      |
+      +--> 2. Segurar/delegar GOV  --->  4. Votar em propostas
+      |
+      +--> 3. Stakar GOV num projeto  --->  investir na rodada  --->  5. Sacar rev-share
+```
 
-Você pode combinar as três. Muitos stakers também são usuários e votantes.
+| Quero... | Preciso de | Comece por |
+|---|---|---|
+| **Usar um app** (pagar features) | CREDIT | [Comprar CREDIT](#1-comprar-credit-o-primeiro-passo) abaixo |
+| **Participar da governança** | GOV delegado | [Ter GOV](02-holding-gov.md) |
+| **Investir em projetos** | GOV stakeado + CREDIT | [Staking em projetos](03-staking-in-projects.md) |
+| **Votar em propostas** | GOV delegado (a si) | [Votar](04-voting.md) |
+| **Receber rev-share** | ter investido + manter stake | [Sacar rev-share](05-claiming-revenue.md) |
 
-## Como usuário de app — passo a passo
+## 1. Comprar CREDIT: o primeiro passo
 
-**O que você precisa:**
+Tudo começa com CREDIT — a moeda de uso, estável **1:1 com USDC**. Você o compra no [`CreditPSM`](../08-contracts-reference/03-CreditPSM.md):
 
-- Uma wallet EVM conectada à rede do protocolo.
-- ETH (gas).
-- CREDIT — adquirido em DEX externa (Uniswap, PancakeSwap, etc., conforme integrações que aparecerem).
+1. **Aprove USDC** ao contrato do PSM (`USDC.approve(psm, valor)`).
+2. **Compre**: `CreditPSM.buy(usdcAmount)` — deposita USDC (6 decimais), recebe CREDIT (18 decimais) na proporção exata, **sem taxa**.
+3. Pronto: o CREDIT está na sua carteira, pronto para pagar em qualquer app listado.
 
-**O que você faz:**
+Para **sair**, é o inverso: `CreditPSM.sell(creditAmount)` devolve CREDIT (queimado) e te dá USDC 1:1, sem taxa. O lastro é 100% retido no PSM e resgatável a qualquer momento.
 
-1. Na UI do app, descubra o preço do serviço em CREDIT.
-2. Clica "pagar" — o app te direciona a assinar:
-   - `CREDIT.approve(feeRouter, amount)` (uma única vez — aprova o gasto).
-   - `FeeRouter.pay(projectId, you, amount)` (efetiva o pagamento).
-3. Você recebe o serviço do app. 95% do valor pago foi queimado, 5% foi para o app.
+> **CREDIT não é aposta.** Ele não valoriza nem desvaloriza — 10 CREDIT valem 10 USDC hoje, amanhã e daqui a um ano. Comprar CREDIT é carregar um cartão pré-pago, não investir. Quem quer exposição à valorização do ecossistema segura **GOV**.
 
-**O que não é necessário:**
+## 2. Pagar nos apps
 
-- Você **não** precisa ter GOV.
-- Você **não** precisa votar.
-- Você **não** precisa stakar.
+Com CREDIT na carteira, você usa os apps normalmente. Ao pagar por uma feature, o app chama (ou pede que você chame) `FeeRouterV2.pay(projectId, amount)`. Do valor, ~89,5–97,5% vai pro app na hora, 2,5% é fee do protocolo e, se o app captou investimento, uma fatia vira rev-share dos investidores. Detalhes em [Trilho de pagamento](../02-core-concepts/03-payment-rail.md).
 
-Alguns apps podem oferecer fluxo onde eles mesmos submetem a tx (você só assina meta-transação). Nesse caso, o `approve` basta.
+## 3. Ir além: GOV, stake e rev-share
 
-## Como staker — passo a passo
+Se você quer mais do que usar apps:
 
-**O que você precisa:**
+- **[Ter GOV](02-holding-gov.md)** — o token político. Segurar e **delegar** GOV te dá voto.
+- **[Staking em projetos](03-staking-in-projects.md)** — travar GOV num projeto específico. É o pré-requisito para investir na rodada dele e sacar rev-share.
+- **[Votar](04-voting.md)** — participar das decisões da DAO.
+- **[Sacar rev-share](05-claiming-revenue.md)** — colher a fatia da receita real dos projetos que você financiou.
 
-- GOV — adquirido em DEX externa ou recebido por alguma alocação.
-- Decisão consciente de qual `projectId` suportar.
-- Decisão de lock (14 a 365+ dias).
+## Em qual rede?
 
-**O que você faz:**
-
-1. Escolha o projeto. Consulte o Registry (`projects[projectId]`) para confirmar `status == Active` e ler `metadataURI`.
-2. Escolha o lock. Multiplier linear: 14d = 1x, 365d = 4x. Locks maiores que 365d são aceitos mas multiplier satura em 4x.
-3. `GOV.approve(staking, amount)`.
-4. `Staking.stake(projectId, amount, lockDuration)`.
-5. Aguarde rodadas fecharem e serem finalizadas.
-6. `RewardDistributor.claim(round, projectId)` ou `claimMany([rounds], [projectIds])` para sacar CREDIT.
-
-**Sair:**
-
-- Após o lock expirar: `Staking.unstake(projectId, amount)` ou `unstakeAll(projectId)`.
-- Se o projeto for `Removed` antes: unstake imediato (bypass de lock).
-- Durante o lock (e projeto não-Removed): **não pode sair**. Planeje.
-
-Mais detalhe em [Staking em projetos](03-staking-in-projects.md) e [Reivindicar rewards](05-claiming-rewards.md).
-
-## Como votante — passo a passo
-
-**O que você precisa:**
-
-- GOV (qualquer quantidade).
-- Delegar voting power a si mesmo (sem delegação = sem voto, mesmo com GOV).
-
-**O que você faz:**
-
-1. `GovernanceToken.delegate(yourAddress)` — uma única vez. Isso ativa seu voting power.
-2. Quando uma proposta abre, acesse a UI do Governor (hub).
-3. `CommunityGovernor.castVote(proposalId, support)` — `support` = 0 (Against), 1 (For), 2 (Abstain).
-4. Espere a votação fechar. Se a proposta vence, vai para o Timelock.
-5. Após o delay do Timelock (2d), qualquer um pode chamar `execute` — sua ação não é necessária, apenas bom sinal.
-
-Você **não** precisa stakar para votar. O voting power vem do GOV que você detém (via `getPastVotes`), não do stake.
-
-Mais detalhe em [Votar em propostas](04-voting.md).
-
-## Custos operacionais
-
-| Ação | Custo |
-|---|---|
-| `approve` (uma vez por allowance) | ~46k gas |
-| `FeeRouter.pay` (split default) | ~180-220k gas |
-| `Staking.stake` | ~250-300k gas |
-| `Staking.unstake` | ~150-200k gas |
-| `RewardDistributor.claim` (uma rodada/projeto) | ~180-220k gas |
-| `RewardDistributor.claimMany` (N pares) | ~180k + ~140k × N |
-| `CommunityGovernor.castVote` | ~90k gas |
-
-Valores aproximados em gas — custo em ETH depende da rede e do preço de gas no momento.
-
-## O que não fazer
-
-- **Não envie GOV direto para os contratos econômicos.** `Staking.stake` puxa via `transferFrom`. Transferência direta fica presa.
-- **Não tente `unstake` antes do lock** se o projeto está `Active` ou `Probation`. Reverte com `LockNotExpired`.
-- **Não pague em apps sem `approve`.** A função `pay` precisa de allowance.
-- **Não esqueça de `delegate`** se quer votar — ter GOV sem delegar = voting power 0.
-- **Não acredite em "yield garantido"**. O reward varia com o uso dos apps. Se o uso cai, reward cai junto.
-
-## FAQ rápido
-
-**Preciso saber programar?** Não. O hub do protocolo tem UI para todas as operações. Você assina transações na sua wallet.
-
-**Quanto custa participar?** O custo-base é gas da rede. Em Sepolia (testnet) é quase zero. Para stakar você precisa ter GOV. Para usar apps, CREDIT.
-
-**A DAO pode confiscar meu GOV stakado?** Não. O lock protege mesmo contra a própria governança. Enquanto o lock está vigente, nem proposta aprovada destrava seu stake (exceto se o projeto for removido — aí o destrave é pró-você, não contra).
-
-**E se o protocolo morrer?** Se o uso cair a quase zero, emissão colapsa, APR vai a quase zero, stakers tendem a sair. A DAO pode intervir (ajustar α, abrir subsídio via Treasury, contratar novos apps). Mas tokenomics não salva produto ruim.
+O protocolo roda em **hardhat local (31337)** para desenvolvimento e **Sepolia (11155111)** para testnet pública. Mainnet ainda não existe — depende de auditoria externa e de parecer jurídico sobre o rev-share (ver [Riscos e segurança](../06-for-investors/03-risk-and-security.md)). Em rede local, o [`DevFaucet`](../08-contracts-reference/12-DevFaucet.md) entrega ETH (gas) + USDC mock para você comprar CREDIT no PSM.
 
 ---
 

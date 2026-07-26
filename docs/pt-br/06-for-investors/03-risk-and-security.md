@@ -1,207 +1,79 @@
 # Riscos e segurança
 
-**Para quem é:** quem precisa avaliar vetores de risco antes de qualquer exposição.
+**Para quem é:** quem vai se expor ao protocolo e quer a lista honesta dos riscos.
 **Pré-requisitos:** [Value accrual](02-value-accrual.md).
 
-> **Aviso**: a lista abaixo descreve riscos **conhecidos** e mitigações implementadas. Nenhum protocolo é imune a bugs, ataques imprevistos ou mudanças regulatórias. Leia e tome decisão informada.
+Esta página não vende. Ela lista os riscos reais, o que os mitiga on-chain e o que **ainda bloqueia** o mainnet. Nenhum protocolo é sem risco; o objetivo é que você conheça os seus antes de qualquer exposição.
 
-## Riscos de protocolo
+## Riscos econômicos
 
-### Risco: bug em contrato
+### Risco de receita do app (o principal)
 
-**Descrição**: um bug em qualquer um dos 12 contratos pode resultar em perda de fundos, falha de governança ou quebra de invariantes econômicas.
+Uma posição de rev-share paga uma fatia da **receita real** do app. Se o app não vende, você não recebe.
 
-**Mitigação**:
+- Não há retorno garantido. `pendingRevenue` só cresce quando há `FeeRouterV2.pay` no projeto.
+- O rev-share é **por app específico**, não pela rede. Financiar um app que não engaja é o risco mais concreto e mais comum.
+- **Mitigação parcial (all-or-nothing):** a rodada só paga o owner se bater o alvo. Se falhar, você saca 100% via `refund`. Isso protege contra financiar pela metade um projeto que nem decolou — mas **não** protege contra um app financiado que depois não fatura.
 
-- Código baseado em OpenZeppelin 5.0.2 (pinado exato).
-- `ReentrancyGuard` em toda função state-changing que move valor.
-- SafeERC20 / SafeCast em todas as conversões.
-- Custom errors em todos os reverts (economia de gas + mensagens claras).
-- Slither 0.11.5 como análise estática (`audit/slither/`). Sem findings high/medium no código do projeto no momento do deploy.
-- 462+ testes com 100% stmts coverage e 99.84% lines.
-- **Auditoria externa obrigatória antes de mainnet** (Trail of Bits, OpenZeppelin ou similar).
+Este é o risco que você **assume conscientemente** ao investir: é participação em receita, não renda fixa.
 
-**Risco residual**: bugs sutis que testes + análise estática não pegam. Auditoria externa reduz mas não elimina.
+### Risco de peg / lastro do PSM
 
-### Risco: captura de governança
+O CREDIT vale 1 USDC porque o [`CreditPSM`](../08-contracts-reference/03-CreditPSM.md) guarda 1 USDC para cada CREDIT que mintou.
 
-**Descrição**: um ator acumula GOV suficiente para aprovar propostas maliciosas (drenar Treasury, mudar splits para benefício próprio, etc.).
+- **Mitigação forte:** não existe função de saque do lastro — **nem para governança** (invariante I-PSM1). O USDC é segregado no próprio PSM, fora do Treasury. Verificável a qualquer momento em `backing()` vs `mintedOutstanding`.
+- **Risco residual:** o peg depende da **solvência do próprio USDC**. Se o USDC de lastro perder o peg, o CREDIT herda esse risco — é um risco do ativo de reserva, externo ao protocolo, não do PSM.
 
-**Mitigações**:
+### Risco de valorização do GOV
 
-- `proposalThreshold = 10.000 GOV` (0.01% do cap) previne spam, não captura direta.
-- `quorum = 4%` do supply requer participação mínima real.
-- `timelockMinDelay = 2 dias` dá janela de resposta para holders verem proposta maliciosa e agirem.
-- `votingPeriod = 7 dias` permite discussão off-chain.
-- Execução é permissionless após delay — qualquer holder pode bloquear via proposta contrária antes da execução.
+A tese do GOV é buyback proporcional ao GMV sobre supply fixo. Se o GMV agregado for baixo, o buyback é pequeno e a demanda estrutural não se materializa. O GOV pode não valorizar se os apps não gerarem volume. Além disso, o buyback **não é automático** — sua execução depende de a governança agir (ver [Value accrual](02-value-accrual.md)).
 
-**Risco residual**: se um ator acumulou muito GOV (via venda pública mal distribuída ou via compra agressiva em DEX), pode forçar propostas mesmo com quorum. A mitigação é **distribuição inicial bem feita** (via propostas da DAO escolhendo buckets adequadamente — ver [Tokenomics](01-tokenomics.md)).
+## Risco regulatório (BLOQUEADOR de mainnet)
 
-### Risco: flash-loan attack no voto
+Uma posição de rev-share — "pague X, receba uma fatia da receita futura de um empreendimento tocado por terceiros" — tem forte semelhança econômica com um **valor mobiliário (security)** em várias jurisdições.
 
-**Descrição**: atacante toma empréstimo gigante de GOV, vota numa proposta favorável a si, devolve o empréstimo no mesmo bloco.
+> **Este é um bloqueador declarado e explícito de mainnet.** O deploy em mainnet depende de **parecer jurídico** sobre o enquadramento do rev-share. Enquanto esse parecer não existir, o protocolo permanece em rede local (31337) e Sepolia (11155111). Não é uma pendência menor — é condição para ir a produção, ao lado da auditoria externa.
 
-**Mitigação**:
+Não trate as rodadas de rev-share como um produto de investimento aprovado. Elas não são, hoje, oferecidas em mainnet exatamente por causa disso.
 
-- `GovernanceToken` herda `ERC20Votes`. Voting power é lida via `getPastVotes(account, snapshotBlock)` — bloco passado. Flash-loan devolve no mesmo bloco em que pegou, então **não afeta** bloco anterior.
-- `votingDelay = 1 dia` afasta o snapshot do bloco atual.
+## Superfície técnica
 
-**Risco residual**: muito baixo. O mecanismo é padrão da OZ e amplamente testado.
+O protocolo é composto de **11 contratos de núcleo** (Solidity 0.8.24, OpenZeppelin 5.0.2 pinado, `viaIR`). Quanto menor a superfície, menor o risco — o remodel 2026-07-08 removeu contratos econômicos complexos e concentrou o trilho em três peças: PSM, FeeRouterV2 e ProjectFunding.
 
-### Risco: flash-loan attack no reward
+### Invariantes que sustentam a segurança
 
-**Descrição**: atacante stake grande imediatamente antes de `finalizeRound` para capturar share.
+O que estas invariantes garantem é que classes inteiras de ataque econômico não são possíveis por construção:
 
-**Mitigação**:
+- **Lastro integral do PSM, sem saque (I-PSM1).** `USDC.balanceOf(PSM) >= mintedOutstanding` sempre. Não há qualquer função — nem governança — que retire o lastro. A DAO gasta da fee, nunca do lastro.
 
-- `Staking` mantém checkpoints históricos (`Checkpoints.Trace208`).
-- `RewardDistributor._calculateClaim` usa `Staking.getWeightAt(user, projectId, snapshotBlock)` — peso **antes** do `finalizeRound`.
-- Flash-loan não consegue manter posição em bloco anterior.
+- **Conservação no `pay`.** Cada pagamento reparte `amount` exatamente em `fee + revShare + toApp`, sem sobra nem criação de valor. A fee tem **teto duro** `FEE_BPS_CAP = 500` (5%): nem a governança consegue subir a fee acima disso.
 
-**Risco residual**: muito baixo. Análogo direto da proteção de governança, validado em testes.
+- **All-or-nothing no funding.** Uma rodada só transfere capital ao owner se `raised == target`. Falha → `refund` integral. O investidor nunca financia parcialmente um projeto que não atingiu a meta.
 
-### Risco: wash-burn para capturar share
+- **Gate de GOV stakeado.** Investir e sacar rev-share exigem `Staking.getWeight(investor, projectId) > 0`. Impede investimento sem skin in the game e alinha investidor e projeto.
 
-**Descrição**: um projeto malicioso queima volume grande de CREDIT que ele mesmo cunhou (via alguma via externa) para capturar share desproporcional na emissão.
+### Modelo de roles
 
-**Mitigação**:
+O poder é minimizado e concentrado no Timelock (ver [Modelo de segurança](../09-advanced/03-security-model.md)):
 
-- Sanity cap por `(rodada, projeto)` no `BurnTracker`. Default produção: 10M CREDIT por projeto por rodada. Tentativa acima reverte com `SanityCapExceeded`.
-- Cap total por rodada (`capMax` no `RewardDistributor`): 5M CREDIT em produção. Mesmo se o atacante queimar dentro do sanity cap, a emissão total fica clampada.
-- Probation penalty (25% da share) para projetos novos.
+- `MINTER_ROLE` / `BURNER_ROLE` do CREDIT: **só o PSM**. Nenhum outro contrato minta ou queima CREDIT.
+- `REVENUE_NOTIFIER_ROLE` do ProjectFunding: **só o FeeRouterV2**. Só o router contabiliza receita.
+- `GOVERNANCE_ROLE` dos contratos econômicos (Treasury, Registry, FeeRouterV2, ProjectFunding): **só o CommunityTimelock** em produção. Toda mudança de parâmetro passa por proposta + voto + delay.
+- Gestão de roles no Treasury/Timelock exige **supermaioria de 75%** — barreira anti-captura do cofre.
 
-**Risco residual**: um ator com **acesso a muito CREDIT real** (não auto-cunhado — ex.: comprou em DEX) pode gastar esse CREDIT para inflar o burn de um projeto cooptado. Mas isso **não é ataque** — é uso legítimo do protocolo (alguém pagou caro por aquilo).
+### Qualidade
 
-### Risco: projeto cooptado após listagem
+- 872 testes passando; slither sem findings high/medium.
+- Contratos imutáveis pós-deploy, exceto pelos parâmetros ajustáveis via governança (listados em [Parâmetros](../07-governance/03-parameters.md)).
 
-**Descrição**: projeto aprovado legitimamente é hackeado / owner comprometido / equipe some com colateral.
+## O que ainda falta para mainnet
 
-**Mitigações**:
+Dois bloqueadores explícitos, ambos necessários:
 
-- Colateral em GOV (10k) fica no Registry até `removeProject`. Se comprometido, DAO aprova `removeProject(id, slash=true, treasury)` — colateral vai para Treasury.
-- Apps perdem `RECORDER_ROLE` (se tinham) via `revokeRole` quando o projeto vira `Probation` ou `Removed` — via proposta.
-- `isActive(projectId)` no `FeeRouter.pay` e `BurnTracker.burnAndRecord` bloqueia novos pagamentos assim que status muda.
+1. **Auditoria externa** dos contratos.
+2. **Parecer jurídico** sobre o enquadramento do rev-share (risco regulatório acima).
 
-**Risco residual**: tempo entre o comprometimento e a execução da proposta (mínimo ~8 dias = votingDelay + period + minDelay). Durante esse tempo, usuários podem ainda pagar no projeto. Mitigação operacional: monitoramento ativo + propostas de emergência (meta-propostas com voto rápido via quorum reduzido não implementadas no v1, mas discutíveis em futuro).
-
-### Risco: ETH travado indevidamente no Treasury
-
-**Descrição**: ETH enviado ao Treasury para o qual não há proposta de uso.
-
-**Mitigação**: `sweepETH` é governance-gated. DAO pode sempre sacar via proposta.
-
-**Risco residual**: apenas tempo — se a DAO perde engajamento, fundos ficam presos.
-
-### Risco: CREDIT sem liquidez em DEX
-
-**Descrição**: usuário recebe CREDIT como reward mas não consegue converter (baixa liquidez em DEX externa).
-
-**Mitigação**: **fora do protocolo**. A DAO pode aprovar uso do Treasury para seed de liquidez em DEX. O próprio bucket "10% liquidity" da distribuição inicial é para isso.
-
-**Risco residual**: se DEXs abandonarem o pool, usuários ficam presos ao CREDIT. Solução depende de ação da DAO + mercado externo.
-
-## Riscos de operação
-
-### Risco: deployer comprometido antes do handoff
-
-**Descrição**: durante o deploy inicial, o deployer tem controle temporário de todos os contratos. Se comprometido antes de transferir roles ao Timelock, pode drenar fundos.
-
-**Mitigação**:
-
-- Deploy via Ignition em transação batched.
-- Handoff automatizado no módulo `Dao.ts` — transfere roles e renuncia admin na mesma sequência.
-- Documentação rigorosa em [Mainnet deployment](../09-advanced/02-mainnet-deployment.md).
-
-**Risco residual**: janela curta durante a execução do script. Mitigação operacional: deploy feito a partir de hardware seguro, com revisão do tx batch antes de submeter.
-
-### Risco: primeiro `acceptOwnership` não acontece
-
-**Descrição**: após o deploy, o Timelock é `pendingOwner` do GovernanceToken mas ainda não aceitou. Quem pode mintar GOV é o deployer. Se o deployer some sem mintar distribuição inicial via proposta aceita pelo Timelock, a DAO nasce morta.
-
-**Mitigação**:
-
-- Procedimento de bootstrap documentado em [Mainnet deployment](../09-advanced/02-mainnet-deployment.md).
-- Primeira proposta obrigatória deve ser `GovernanceToken.acceptOwnership()` pelo Timelock.
-
-**Risco residual**: erro humano. Mitigação: procedimento checklist + revisão multi-sig + teste end-to-end prévio em testnet.
-
-### Risco: má configuração de parâmetros
-
-**Descrição**: DAO aprova mudança de parâmetro (α, capMax, etc.) que causa patologia econômica.
-
-**Mitigação**:
-
-- Bounds hardcoded em todos os setters. Ex: `alpha` só aceita `[0.5, 0.99]` (reduzido de `[0.5, 1.1]` — ver `audit/economist/2026-04-22-consistency-audit.md` C2, para garantir IE1 α<1 permanente por construção); valores fora revertem com `InvalidAlpha`.
-- Mudanças passam por 7 dias de voto + 2 dias de delay — tempo para discussão e reversão.
-
-**Risco residual**: dentro dos bounds, a DAO pode fazer mudanças controversas. É característica de DAO, não bug.
-
-## Riscos externos
-
-### Risco regulatório
-
-**Descrição**: classificação de GOV ou CREDIT como security, stablecoin regulada ou outra categoria com requisitos que o protocolo não cumpre.
-
-**Mitigação**:
-
-- Tokens não prometem retorno financeiro.
-- Não há emissor central identificável pós-handoff da governança.
-- DAO pode evoluir termos ou aspectos não-contratuais conforme marcos regulatórios se consolidarem.
-
-**Risco residual**: significativo e não eliminável no nível do protocolo. Usuários devem avaliar suas próprias jurisdições.
-
-### Risco de integração DEX externa
-
-**Descrição**: o protocolo depende de DEX externas para liquidez do CREDIT (e eventualmente GOV). Se DEX sofre hack, listagem é removida, pool drenado, etc., usuários perdem acesso a conversão.
-
-**Mitigação**: diversificação de DEXs via ações da DAO. Não está implementado no v1.
-
-### Risco de oracle (aplicação futura)
-
-**Descrição**: quando integração DEX real do `executeBuyback` for implementada, haverá dependência de price oracle / TWAP / slippage protection.
-
-**Mitigação**: design detalhado será auditado antes da implementação. No v1, `executeBuyback` é stub — só emite evento, não executa swap.
-
-## Riscos para stakers especificamente
-
-- **Imobilização**: lock de 14-365+ dias. Se você precisar do GOV antes, só sai se o projeto virar `Removed`.
-- **Dependência do projeto escolhido**: se seu projeto não gera burn, seu reward = 0.
-- **Dependência do ecossistema**: mesmo stakando em um projeto exemplar, se o ecossistema agregado não gera uso, emissão cai.
-- **Volatilidade do CREDIT**: seu reward é em CREDIT. Se CREDIT não tem liquidez ou desvaloriza, reward em termos reais diminui.
-
-## Riscos para apps listados
-
-- **Colateral lockado**: 10.000 GOV no Registry. Só volta com `removeProject` sem slash.
-- **Suspensão por governança**: `Probation` punitiva bloqueia operação (mas não queima colateral).
-- **Slash**: se má conduta comprovada, `removeProject(id, slash=true)` envia colateral para Treasury.
-- **Dependência do split**: 95% de cada pagamento é queimado. Você recebe 5% direto + (opcional, via stake) fatia da emissão.
-- **Uso baixo**: se seu app não atrai usuários, burn do seu projeto é baixo, share da emissão também.
-
-## Auditoria e bounty
-
-Antes de mainnet:
-
-- Auditoria externa por firma reconhecida (Trail of Bits, OpenZeppelin, Certik ou similar).
-- Bug bounty via Immunefi logo após mainnet.
-- Monitoramento on-chain (Forta / Tenderly) para eventos críticos: `CapExceeded`, `SanityCapExceeded`, `RoundClosed.earlyClose=true`, saídas grandes do Treasury.
-
-Status atual no repositório:
-
-- Slither sem findings high/medium no código do projeto.
-- Suite de testes 462+ testes com cobertura extensiva.
-- **Auditoria externa ainda não realizada** no momento desta doc.
-
-## Resumo
-
-O protocolo tem múltiplas salvaguardas on-chain e off-chain. Nenhuma elimina risco totalmente. Exposição a GOV ou CREDIT implica:
-
-- Risco de contrato (bug).
-- Risco econômico (modelo pode não decolar).
-- Risco de governança (mudanças adversas via proposta).
-- Risco de mercado (liquidez, volatilidade).
-- Risco regulatório (jurisdição do usuário).
-
-Avalie antes de qualquer exposição. Comece pequeno. Entenda o lock antes de stakar.
+Até lá, toda exposição é em testnet/local. Considere isso ao avaliar qualquer participação.
 
 ---
 

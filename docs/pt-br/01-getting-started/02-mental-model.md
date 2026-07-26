@@ -10,23 +10,24 @@ Esta página dá os quatro modelos mentais que o protocolo usa. Se você interna
 A primeira armadilha é tratar GOV e CREDIT como "dois tokens de uma DAO". Eles **não são simétricos**. Cada um serve um papel que o outro não consegue servir.
 
 ```
-  GOV (Governance)                     CREDIT (Utility)
+  GOV (Governance)                     CREDIT (Payment rail)
   -----------------                    -----------------
   Supply FIXO 100M                     Supply ELASTICO
-  (cap imutavel)                       (mint/burn via roles)
+  (cap imutavel)                       (mint no buy, burn no sell
+                                        do CreditPSM, 1:1 USDC)
 
   Vota em propostas                    NAO vota
 
-  Colateral de staking                 Queimado quando usuario
-  (trava pra ganhar peso)              paga em um app
+  Colateral de staking                 Meio de pagamento nos apps
+  (trava pra ganhar peso e             (estavel: 1 CREDIT = 1 USDC,
+   direito de investir)                 lastro 100% retido no PSM)
 
-  Nao e queimado no uso                Cunhado como reward
-
-  Valoriza (se) por                    Desinflaciona por
-  apreciacao do ecossistema            formula burn > mint
+  Captura valorizacao via              NAO valoriza nem cai:
+  buyback financiado por               resgatavel a qualquer
+  40% da fee do FeeRouterV2            momento no PSM
 ```
 
-GOV é **direito político e peso econômico de longo prazo**. CREDIT é **dinheiro operacional da plataforma**. Nunca misture os dois no raciocínio — um erro comum é pensar "stakar mais CREDIT" (não existe — você staka GOV) ou "vender voto com CREDIT" (não existe — só GOV vota).
+GOV é **direito político, gate de investimento e peso econômico de longo prazo**. CREDIT é **dinheiro operacional estável da plataforma** — pense nele como "USDC com trilhos do ecossistema", não como aposta. Quem captura a valorização do ecossistema é o GOV (via buyback financiado pela fee); CREDIT não foi feito para valorizar. Um erro comum é pensar "stakar CREDIT" (não existe — você staka GOV e **investe** CREDIT) ou "vender voto com CREDIT" (não existe — só GOV vota).
 
 Referência: [Dual-token economy](../02-core-concepts/01-dual-token-economy.md). Contratos: [GovernanceToken](../08-contracts-reference/01-GovernanceToken.md), [CreditToken](../08-contracts-reference/02-CreditToken.md).
 
@@ -34,7 +35,10 @@ Referência: [Dual-token economy](../02-core-concepts/01-dual-token-economy.md).
 
 No Uniswap, Aave, Curve: você staka um token e recebe reward "do protocolo". Indefinido. Aqui é diferente.
 
-Quando você staka GOV, você **escolhe um projeto**. Seu peso de voto no rewards fica amarrado ao sucesso daquele projeto. Se o ChatApp é o projeto escolhido e o ChatApp gera muito burn, você captura muito reward. Se o ChatApp some do mapa, seu peso vira zero reward — mesmo que outros projetos estejam bombando.
+Quando você staka GOV, você **escolhe um projeto**. E o stake compra duas coisas amarradas àquele projeto:
+
+1. **Direito de investir**: só quem tem GOV stakeado no projeto pode entrar na rodada de captação dele no [ProjectFunding](../08-contracts-reference/07-ProjectFunding.md) — e precisa **manter** o stake para sacar o rev-share (skin in the game).
+2. **Curadoria com pele em jogo**: seu capital fica amarrado ao sucesso daquele projeto. Se o ChatApp gera receita, seu investimento rende; se some do mapa, não rende — mesmo que outros projetos estejam bombando.
 
 ```
   stake(projectId=ChatApp, amount=100 GOV, lock=180 dias)
@@ -43,45 +47,46 @@ Quando você staka GOV, você **escolhe um projeto**. Seu peso de voto no reward
   Voce gera peso SO no ChatApp. Peso = 100 * multiplier(180 dias).
   O multiplier varia de 1x (14 dias) a 4x (365 dias).
 
-  Quando a rodada fecha:
-     seu_reward = emissao_rodada
-                * (burn_do_ChatApp / burn_total)
-                * (seu_peso / peso_total_no_ChatApp)
+  Com GOV stakeado no ChatApp, voce pode:
+     invest(ChatApp, X CREDIT)   na rodada de captacao
+     claim(ChatApp)              sacar o rev-share acumulado
 ```
 
-**Consequência prática**: você precisa escolher projetos. A seleção ativa é parte do modelo — não é passivo. Ser staker aqui é como ser um "curador de apps": você aloca capital onde acha que vai gerar uso.
+**Consequência prática**: você precisa escolher projetos. A seleção ativa é parte do modelo — não é passivo. Ser staker aqui é como ser um "curador de apps": você aloca capital onde acha que vai gerar receita real.
 
-Referência: [Directed staking](../02-core-concepts/02-directed-staking.md). Contrato: [Staking](../08-contracts-reference/05-Staking.md).
+Referência: [Directed staking](../02-core-concepts/02-directed-staking.md). Contratos: [Staking](../08-contracts-reference/05-Staking.md), [ProjectFunding](../08-contracts-reference/07-ProjectFunding.md).
 
-## 3. Rewards vêm do burn — não do ar
+## 3. Renda vem de receita real — não de inflação
 
-Muitos protocolos cunham reward usando supply novo sem contrapartida ("dilui quem não stakou para pagar quem stakou"). Isso tende a criar espiral inflacionária.
-
-Aqui a fórmula é explicitamente **pós-paga**:
+Muitos protocolos cunham reward usando supply novo sem contrapartida ("dilui quem não stakou para pagar quem stakou"). Isso tende a criar espiral inflacionária. Aqui **não há inflação nenhuma como renda**: o que o investidor recebe é fatia da **receita bruta real** do projeto que ele financiou.
 
 ```
-  emissao da rodada R = min( max( alpha * burn_{R-1}, floor(R) ), capMax )
+  usuario paga 100 CREDIT no ChatApp (FeeRouterV2.pay)
+       |
+       +--> 2,5 CREDIT  fee do protocolo (40% treasury / 40% buyback GOV / 20% grants)
+       +--> 8,0 CREDIT  rev-share (se o ChatApp captou com rev-share de 8%)
+       |                 --> rateado pro-rata entre os investidores da rodada
+       +--> 89,5 CREDIT pro dono do ChatApp, na hora
 ```
 
 Traduzindo:
 
-- `burn_{R-1}` — quanto CREDIT foi queimado na rodada anterior. Fonte verificável on-chain no [`BurnTracker`](../08-contracts-reference/06-BurnTracker.md).
-- `alpha` — multiplicador. Em produção 0.95 (`950000000000000000` wei do arquivo `ignition/parameters/production.json`), ou seja, emite-se **levemente menos** do que foi queimado. O sistema é **levemente deflacionário se o uso for constante**.
-- `floor(R)` — piso de emissão da rodada R. Tabela decrescente com 24 entradas (~6 meses se `roundDuration = 7 dias`). Existe só para o bootstrap — garante algum reward enquanto o uso ainda não existe.
-- `capMax` — teto duro. Default 5M CREDIT por rodada em produção (`capMax: 5000000000000000000000000`).
+- O investidor financiou a rodada do ChatApp em CREDIT e recebe % de **cada pagamento**. Se o app não fatura, não há renda. Yield verificável on-chain (`totalRevenueDistributed`, `grossVolumeOf`).
+- O rev-share é escolhido pelo dono na abertura da rodada, entre **1% e 30%** (100–3000 bps), com prazo de 1 a 90 dias e regra all-or-nothing.
+- A fee de 2,5% (teto duro de 5%) financia o protocolo: 40% treasury, 40% buyback de GOV, 20% grants.
 
-**Implicação**: se ninguém usa os apps, não há burn, e depois do round 24 não há floor — logo, não há emissão. Stakers só ganham se o ecossistema gerar uso real. É uma ponte entre utilidade on-chain e reward, não um poço sem fundo.
+**Implicação**: se ninguém usa os apps, não há receita — logo, não há renda para ninguém. O protocolo é uma ponte entre utilidade real e retorno, sem inflar nem desvalorizar a moeda de pagamento.
 
-Referência: [Burn-to-mint](../02-core-concepts/03-burn-to-mint.md). Contrato: [RewardDistributor](../08-contracts-reference/07-RewardDistributor.md).
+Referência: [ProjectFunding](../08-contracts-reference/07-ProjectFunding.md), [FeeRouterV2](../08-contracts-reference/06-FeeRouterV2.md).
 
 ## 4. Toda mudança política passa por delay
 
 Nenhuma função privilegiada dos contratos econômicos aceita chamada direta. Todas exigem `GOVERNANCE_ROLE`, que em produção só o [`CommunityTimelock`](../08-contracts-reference/09-CommunityTimelock.md) detém. E o Timelock só executa o que foi antes aprovado pelo [`CommunityGovernor`](../08-contracts-reference/10-CommunityGovernor.md) e esperou o delay (em produção, 172800 segundos = 2 dias).
 
 ```
-  Alice propoe      Delay 1d      Votacao 7d      Fila timelock    Delay 2d      Execucao
-  (precisa de  ->  (anti-MEV)  -> (quorum 4%,  -> (enfileira no -> (tempo de  -> (qualquer
-   10k GOV                         >= 50% For)   timelock)        resposta)     um clica)
+  Alice propoe      Delay 1d      Votacao 7d       Fila timelock    Delay 2d      Execucao
+  (precisa de  ->  (anti-MEV)  -> (quorum 4%,   -> (enfileira no -> (tempo de  -> (qualquer
+   10k GOV                         For > Against)  timelock)        resposta)     um clica)
    delegados
    a si)
 ```
@@ -94,10 +99,11 @@ Referência: [Proposal lifecycle](../07-governance/01-proposal-lifecycle.md). Co
 
 Para evitar confusões comuns:
 
-- **Não é yield-farming.** Staking aqui trava GOV direcionado a um projeto. Rewards são em CREDIT e vêm de uso real, não de dilução.
-- **Não é AMM.** Não há pool de liquidez interna. Troca de CREDIT por stable acontece fora da web3community (DEX externa).
-- **Não é launchpad.** O Registry é whitelist de apps que aceitam CREDIT, não distribuidor de tokens novos.
-- **Não é ICO de CREDIT.** O genesis de 10M CREDIT é cunhado uma única vez para a tesouraria (`mintGenesis`, one-shot). Emissão subsequente vem só do `RewardDistributor`, atrelada a burn.
+- **Não é yield-farming.** Staking aqui trava GOV direcionado a um projeto e é o gate para investir. A renda do investidor é rev-share de receita real, não emissão nem diluição.
+- **CREDIT não é aposta.** É estável 1:1 com USDC via `CreditPSM` — não valoriza, não desvaloriza, resgata a qualquer momento. Quem quer exposição à valorização do ecossistema segura GOV.
+- **Não é launchpad de token.** O Registry é whitelist de apps que aceitam CREDIT; o `ProjectFunding` vende fatia de **receita**, não tokens novos.
+- **Não é banco.** O lastro do PSM é segregado e sem função de saque — nem a governança alcança. O treasury vive da fee (1% do GMV com os parâmetros default), nunca do lastro.
+- **Não é pirâmide.** Ninguém é pago com o dinheiro de quem entra depois: o CREDIT de cada usuário fica 100% lastreado no PSM, e a renda dos investidores sai da receita real dos apps — não de novos depósitos.
 
 ---
 

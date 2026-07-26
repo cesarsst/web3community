@@ -1,149 +1,61 @@
 # CommunityTimelock
 
-**Para quem é:** quem precisa auditar a camada executora da governança.
-**Pré-requisitos:** [Governance (conceito)](../02-core-concepts/05-governance.md).
+**Para quem é:** devs/auditores.
 
-## Visão rápida
+Contrato: `contracts/CommunityTimelock.sol` · Solidity 0.8.24 · OpenZeppelin 5.
 
-Wrapper identitário sobre `TimelockController` da OpenZeppelin 5.0.2. Executa, com delay, todas as decisões aprovadas pelo `CommunityGovernor`. Em produção é o único portador de `GOVERNANCE_ROLE` / `DEFAULT_ADMIN_ROLE` nos contratos econômicos (Treasury, Registry, Staking, BurnTracker, RewardDistributor, FeeRouter, UserSubsidy) e é `owner` do GovernanceToken.
+## Papel
 
-Sem código adicional — herda `TimelockController` inteiro. Razão: manter identidade on-chain (nome "CommunityTimelock" no Etherscan) sem introduzir superfície extra.
+Wrapper identitário sobre o `TimelockController` da OpenZeppelin 5. Executa, com delay, todas as decisões aprovadas pelo [CommunityGovernor](10-CommunityGovernor.md). Em produção é o único portador de `GOVERNANCE_ROLE` / `DEFAULT_ADMIN_ROLE` nos contratos econômicos (Treasury, ProjectRegistry, FeeRouterV2, ProjectFunding) e o único `owner` do [GovernanceToken](01-GovernanceToken.md) após o bootstrap.
 
-## Herança
+O wrapper é **propositalmente sem código adicional** — herda `TimelockController` integralmente. A motivação é identidade on-chain (nome do contrato no explorer) e concentrar a NatSpec de deploy num único lugar, sem introduzir superfície de bug extra.
 
-```
-TimelockController (OZ 5.0.2)
-  - AccessControl
-  - IERC721Receiver (para receber NFTs via transfer)
-  - IERC1155Receiver (idem)
-```
+Herança: `TimelockController`.
 
-## Parâmetros (via constructor, herdado)
+## Interface pública
+
+### Constructor
 
 ```solidity
-constructor(
-    uint256 minDelay,
-    address[] memory proposers,
-    address[] memory executors,
-    address admin
-)
+constructor(uint256 minDelay, address[] proposers, address[] executors, address admin)
 ```
+Repassa todos os parâmetros ao constructor do `TimelockController` sem alteração.
 
-### Valores em produção
+- `minDelay` — delay mínimo (segundos) entre `schedule` e `execute`. Sugestão produção: `172800` (2 dias); dev: `3600` (1h).
+- `proposers` — endereços iniciais com `PROPOSER_ROLE` + `CANCELLER_ROLE`. Deploy recomendado: `[]` (o Governor recebe ambas após seu deploy).
+- `executors` — endereços com `EXECUTOR_ROLE`. Recomendado: `[address(0)]` (execução pública após o delay).
+- `admin` — `DEFAULT_ADMIN_ROLE` inicial (deployer), que renuncia ao final para o Timelock ficar self-administered.
 
-| Parâmetro | Valor | Razão |
-|---|---|---|
-| `minDelay` | `172800` (2 dias) | Janela de reação a proposta maliciosa |
-| `proposers` | `[]` | Governor é concedido via `grantRole` no deploy |
-| `executors` | `[address(0)]` | Qualquer um pode executar após delay |
-| `admin` | deployer (bootstrap), renunciado após handoff | Timelock passa a ser self-administered |
+### Herdadas (TimelockController)
 
-## Roles (definidas em `TimelockController`)
+- **Agendamento/execução:** `schedule`, `scheduleBatch`, `execute`, `executeBatch`, `cancel`.
+- **Consulta:** `getMinDelay`, `getTimestamp`, `isOperation`, `isOperationPending`, `isOperationReady`, `isOperationDone`, `hashOperation`, `hashOperationBatch`.
+- **Config:** `updateDelay` (só via a própria execução do Timelock).
+- **Roles (AccessControl):** `PROPOSER_ROLE`, `EXECUTOR_ROLE`, `CANCELLER_ROLE`, `DEFAULT_ADMIN_ROLE`, mais `grantRole`/`revokeRole`/`renounceRole`/`hasRole`.
+- **Receiver:** `onERC721Received`, `onERC1155Received`, `onERC1155BatchReceived`, `receive()`.
 
-| Role | Em produção |
+## Eventos
+
+Herdados: `CallScheduled`, `CallExecuted`, `CallSalt`, `Cancelled`, `MinDelayChange`, mais os de `AccessControl`.
+
+## Roles
+
+| Role | Estratégia recomendada de deploy |
 |---|---|
-| `DEFAULT_ADMIN_ROLE` | **Self** (Timelock é admin de si) |
-| `PROPOSER_ROLE` | `CommunityGovernor` |
-| `CANCELLER_ROLE` | `CommunityGovernor` |
-| `EXECUTOR_ROLE` | `address(0)` — qualquer endereço executa |
+| `PROPOSER_ROLE` | Concedida ao Governor. |
+| `CANCELLER_ROLE` | Concedida ao Governor (usada por `GovernorTimelockControl._cancel`). Não concedida a mais ninguém. |
+| `EXECUTOR_ROLE` | `address(0)` — execução permissionless após o delay (o delay é o gate real). |
+| `DEFAULT_ADMIN_ROLE` | Deployer no bootstrap; renuncia ao final → Timelock self-administered. |
 
-## Funções externas (herdadas de TimelockController)
-
-### Proposta → agendamento
-
-#### `schedule(address target, uint256 value, bytes data, bytes32 predecessor, bytes32 salt, uint256 delay)`
-
-Agenda operação única. Requer `PROPOSER_ROLE`.
-
-#### `scheduleBatch(address[] targets, uint256[] values, bytes[] datas, bytes32 predecessor, bytes32 salt, uint256 delay)`
-
-Batch.
-
-### Execução
-
-#### `execute(address target, uint256 value, bytes data, bytes32 predecessor, bytes32 salt)`
-
-Executa operação única após `minDelay`. Requer `EXECUTOR_ROLE` — em produção é `address(0)`, então qualquer um chama.
-
-#### `executeBatch(address[] targets, uint256[] values, bytes[] datas, bytes32 predecessor, bytes32 salt)`
-
-Batch.
-
-### Cancelamento
-
-#### `cancel(bytes32 id)`
-
-Cancela operação pending. Requer `CANCELLER_ROLE`.
-
-### Views
-
-- `getMinDelay() → uint256`.
-- `hashOperation(target, value, data, predecessor, salt) → bytes32`.
-- `hashOperationBatch(...) → bytes32`.
-- `isOperation(id) → bool`.
-- `isOperationPending(id) → bool`.
-- `isOperationReady(id) → bool` — passou do delay.
-- `isOperationDone(id) → bool`.
-- `getTimestamp(id) → uint256` — timestamp em que vira ready.
-
-### Admin
-
-#### `updateDelay(uint256 newDelay)`
-
-Ajusta `minDelay`. Só pode ser chamado por `this` (auto-governance) — requer proposta aprovada.
-
-- **Eventos**: `MinDelayChange(oldDuration, newDuration)`.
-
-## Eventos (herdados)
-
-- `CallScheduled(id, index, target, value, data, predecessor, delay)`.
-- `CallExecuted(id, index, target, value, data)`.
-- `CallSalt(id, salt)`.
-- `Cancelled(id)`.
-- `MinDelayChange(oldDuration, newDuration)`.
+Alterar quem detém roles **no próprio Timelock** exige supermaioria de 75% no Governor.
 
 ## Invariantes
 
-- **Self-administered pós-handoff**: `DEFAULT_ADMIN_ROLE` é do próprio Timelock. Mudança de role exige proposta aprovada.
-- **Proposer = Governor**: único autorizado a `schedule`.
-- **Executor aberto**: qualquer endereço executa após delay (o delay já é o gate de segurança).
-- **Canceller = Governor**: apenas via `_cancel` em proposta contrária. Sem guardian unilateral no v1.
-- **Timelock não pode ser "bypass"**: todas as funções state-changing dos contratos econômicos exigem `GOVERNANCE_ROLE`, que é exclusivo do Timelock.
+- **I4 (governança):** contratos econômicos cedem `GOVERNANCE_ROLE` / `owner` ao Timelock; nenhuma EOA retém poder unilateral após o wiring de produção.
+- **I7 (projetos via Registry):** só o Timelock (após proposta aprovada) satisfaz o `GOVERNANCE_ROLE` do `ProjectRegistry`.
+- **Self-administered:** após a renúncia do deployer, roles do Timelock só mudam por proposta do Governor.
+- **Sem cancelador externo:** `CANCELLER_ROLE` fica só com o Governor — um cancelador externo poderia DoSar propostas válidas.
 
-## Observações importantes
+## Ver também
 
-### Por que `address(0)` como executor
-
-Os parâmetros e targets da operação já são imutáveis após `schedule`. O delay já expirou quando alguém chama `execute`. Exigir `EXECUTOR_ROLE` dedicado só adicionaria fricção operacional — precisaria sempre ter um executor EOA ativo. Qualquer parte pode clicar "execute" sem alterar o resultado.
-
-### `CANCELLER_ROLE` só com o Governor
-
-`GovernorTimelockControl._cancel` chama `Timelock.cancel` ao cancelar proposta via governança. Não concedemos `CANCELLER_ROLE` a ninguém mais (nem multisig guardian) — cancelador externo poderia DoSar propostas válidas, violando "o voto é a fonte de verdade".
-
-### Imutabilidade prática
-
-Apesar do Timelock ser `self-administered`, não há "upgrade" do contrato em si. Se a DAO precisar de Timelock v2, deve:
-
-1. Deployar novo Timelock.
-2. Propor via v1: grant `GOVERNANCE_ROLE` (novo) e revoke (v1) em todos os contratos econômicos.
-3. Similar para o GovernanceToken `transferOwnership`.
-4. Propor no Governor v1 para mudar `timelock` referência (se Governor suportar) ou deployar Governor novo.
-
-Esse caminho é complexo e exige múltiplas propostas — intencional.
-
-### Deploy estratégia recomendada
-
-1. Deploy Timelock com `proposers = []`, `executors = [0x0]`, `admin = deployer`.
-2. Deploy Governor apontando para Timelock.
-3. Deployer: `grantRole(PROPOSER_ROLE, governor)` + `grantRole(CANCELLER_ROLE, governor)`.
-4. Deployer: `renounceRole(DEFAULT_ADMIN_ROLE, deployer)`. Timelock vira self-administered.
-
-Documentado em [Mainnet deployment](../09-advanced/02-mainnet-deployment.md).
-
-### Sem `PAUSE`
-
-Não existe botão de pausa unilateral. Se for necessário parar alguma operação, a DAO aprova proposta específica — por exemplo, `Registry.setProbation` para suspender um projeto malicioso.
-
----
-
-**Ver também**: [CommunityGovernor](10-CommunityGovernor.md).
+[CommunityGovernor](10-CommunityGovernor.md) · [Treasury](08-Treasury.md) · [ProjectRegistry](04-ProjectRegistry.md)

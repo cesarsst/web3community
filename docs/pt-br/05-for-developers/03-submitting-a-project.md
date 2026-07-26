@@ -1,158 +1,114 @@
 # Submeter um projeto
 
-**Para quem é:** dev/equipe que quer listar um app novo no `ProjectRegistry`.
-**Pré-requisitos:** [Whitelist de projetos](../02-core-concepts/06-project-whitelist.md), [Visão geral de integração](01-integration-overview.md).
+**Para quem é:** dev que quer listar um app no ecossistema e (opcionalmente) captar capital numa rodada de rev-share.
+**Pré-requisitos:** [Visão geral de integração](01-integration-overview.md), entender [staking direcionado](../02-core-concepts/03-directed-staking.md).
 
-## O que significa "listar"
+Listar um app tem duas etapas independentes:
 
-Listar um projeto no Registry da web3community é:
+1. **Registrar o projeto** no [`ProjectRegistry`](../08-contracts-reference/04-ProjectRegistry.md) — trava colateral em GOV e, depois de aprovado pela governança, deixa o projeto `Active` (pronto para receber pagamentos via `FeeRouterV2.pay`).
+2. **Abrir uma rodada de captação** (opcional) no [`ProjectFunding`](../08-contracts-reference/07-ProjectFunding.md) — vende uma fatia da sua receita bruta futura (rev-share) em troca de capital antecipado.
 
-1. Registrar o par `(owner, metadataURI)` e travar colateral em GOV.
-2. Ativar o projeto (transitar de `Pending` para `Active`).
-3. Garantir que o `FeeRouter` (ou o futuro contrato do app) pode chamar `burnAndRecord` — isto é, que o app detém `RECORDER_ROLE` onde necessário.
+Você pode parar na etapa 1: um projeto `Active` já cobra pagamentos e fica com ~97,5% (fee de 2,5%, sem rev-share). A etapa 2 é só se você quiser capital adiantado.
 
-O resultado: seu app aparece no Registry, aceita pagamentos via `FeeRouter.pay`, e gera burn rastreável para o `RewardDistributor`.
+## Etapa 1 — Registrar no ProjectRegistry
 
-## O que você precisa antes
+### Quem pode registrar
 
-- **Ownership definido**: um endereço (EOA ou multisig) que será `owner` do projeto.
-- **Colateral em GOV**: em produção, pelo menos `10.000 GOV` (`minCollateral`, ajustável). Leia o valor atual do Registry.
-- **Metadata off-chain**: JSON estruturado, hospedado em IPFS/Arweave. O Registry armazena apenas o URI.
-- **Apoio político**: alguém com ≥ 10.000 GOV delegados para submeter a proposta.
+`registerProject` é `onlyRole(GOVERNANCE_ROLE)`. Em produção o único portador dessa role é o [`CommunityTimelock`](../08-contracts-reference/09-CommunityTimelock.md) — ou seja, **o registro passa por uma proposta de governança aprovada** (invariante I7: projetos entram só pela DAO). Você não chama `registerProject` diretamente; você submete uma proposta que o Timelock executa.
 
-## Formato de metadata
+### O colateral
 
-A metadata é off-chain. Convenção recomendada (não enforceada on-chain):
+O registro trava **colateral em GOV** (skin in the game) no Registry. O `owner` declarado precisa ter aprovado o Registry para o `transferFrom` antes da execução da proposta:
 
-```json
-{
-  "name": "ChatApp",
-  "description": "Mensageria end-to-end encrypted com pagamento por mensagem",
-  "icon": "ipfs://Qm...",
-  "website": "https://chatapp.example",
-  "contracts": {
-    "main": "0x...",
-    "frontend": "https://app.chatapp.example"
-  },
-  "contact": {
-    "email": "team@chatapp.example",
-    "discord": "..."
-  },
-  "pricing": [
-    { "service": "envio de msg", "costCREDIT": "0.01" }
-  ]
-}
+```ts
+// owner do projeto aprova o Registry a puxar o colateral
+await gov.approve(registryAddress, collateralAmount)
 ```
 
-Sua UI e exploradores podem ler. O Registry guarda só o `metadataURI` (ex: `ipfs://Qm...`).
+Regras on-chain do colateral:
 
-## Passo a passo completo
+- `collateralAmount >= minCollateral` (produção: `10_000e18` GOV; dev: `1_000e18`). Abaixo disso, `InsufficientCollateral`.
+- Allowance insuficiente reverte com `InsufficientAllowance` (mensagem explícita, antes do erro genérico do ERC-20).
+- O colateral só é liberado em `removeProject`: **devolvido ao owner** (remoção limpa) ou **enviado ao Treasury** (slash por má conduta). Não há saque parcial.
 
-### 1. Preparar metadata
+### Metadata
 
-- Suba o JSON para IPFS ou Arweave.
-- Anote o CID / URI.
+`metadataURI` é uma URI off-chain (IPFS/Arweave) com nome, descrição, ícone e os endereços de contrato do seu app. Não pode ser vazia. O owner pode atualizá-la depois sem passar por governança, via `updateMetadata(projectId, uri)`.
 
-### 2. Obter apoio político
+### A máquina de status
 
-- Encontre um holder de GOV (ou agregue vários via delegação) com ≥ `proposalThreshold` (10.000 GOV em produção).
-- O apoiante será o `proposer` no Governor.
-
-### 3. Montar a proposta
-
-A proposta deve incluir (no mínimo):
-
-```solidity
-targets   = [address(registry), address(registry)]
-values    = [0, 0]
-calldatas = [
-    abi.encode(registry.registerProject.selector, ownerAddress, metadataURI, collateralAmount),
-    abi.encode(registry.activateProject.selector, /* projectId sera atribuido dinamicamente */)
-]
+```
+Pending ──(governança: activateProject)──▶ Active ──┐
+                                             │       │
+              (governança: setProbation) ◀───┘       │
+                     │                                │
+                  Probation ──(reactivate)──▶ Active  │
+                     │                                │
+                     └──────(removeProject)──────────▶ Removed (terminal)
 ```
 
-Problema: a proposta **não sabe o `projectId` ainda** (ele é atribuído no `registerProject`). Duas estratégias:
+- **`registerProject`** cria o projeto em `Pending` (colateral já travado, mas ainda não operacional).
+- **`activateProject`** (governança) move para `Active`. É aqui que o projeto passa a receber pagamentos e a aceitar stake. Também inicia a **probation inicial por tempo** (`probationDuration`, 30 dias em produção): uma janela automática que só sinaliza "projeto novo" via `isInProbation` — pagamentos e stake funcionam normalmente.
+- **`setProbation`** (governança, punitiva) suspende um projeto por má conduta: `isActive` volta `false`, bloqueia pagamentos e stake novo, mas **nunca bloqueia unstake**.
+- **`removeProject`** é terminal e decide o destino do colateral (owner ou Treasury).
 
-**Estratégia A (duas propostas)**:
+Um pagamento só passa quando `REGISTRY.isActive(projectId) == true`. Enquanto `Pending` ou `Probation`, `FeeRouterV2.pay` reverte com `ProjectNotActive`.
 
-1. Primeira proposta: `registerProject(owner, metadataURI, collateral)`. Após executada, lê o `projectId` atribuído (via evento `ProjectRegistered`).
-2. Segunda proposta: `activateProject(projectId)`.
+### Definir o recipient de pagamento
 
-**Estratégia B (uma proposta com pré-approve)**:
+Por padrão a parcela `toApp` de cada pagamento vai para o `owner` do projeto. Para rotacionar (ex.: hot wallet operacional), o owner chama:
 
-1. Proposta inclui `activateProject` assumindo o `projectId` que **será** atribuído (ver `_nextProjectId` atual no Registry). Requer que nenhuma outra proposta de `registerProject` se intercale entre propor e executar — difícil de garantir em teoria, mas aceitável em prática se a volumetria de registros for baixa.
+```ts
+await feeRouterV2.setAppRecipient(projectId, operationalWallet)
+```
 
-Em ambas, a proposta deve também (provavelmente) incluir:
+Essa função é owner-gated (não passa por governança) — rotação operacional é responsabilidade sua.
 
-- `burnTracker.grantRole(RECORDER_ROLE, <contrato_que_vai_chamar_burnAndRecord>)` — se o app vai chamar direto. No bootstrap do v1, o `FeeRouter` já tem essa role, e apps chamam `FeeRouter.pay` — então este grant pode não ser necessário.
+## Etapa 2 — Abrir uma rodada de captação
 
-### 4. Approve do colateral
+Com o projeto `Active`, o **owner** abre uma rodada (única por projeto, no MVP) no `ProjectFunding`:
 
-O `owner` do projeto precisa ter feito `GovernanceToken.approve(registry, collateralAmount)` **antes** de a proposta executar. Pode ser feito a qualquer momento durante o ciclo da proposta, mas melhor antes para evitar falha de execução.
+```ts
+await funding.openRound(
+  projectId,
+  target,        // alvo em CREDIT (18 decimais), >= minTarget (default 100e18)
+  revShareBps,   // fatia da receita bruta oferecida: 100–3000 (1%–30%)
+  duration       // segundos: 1 dia a 90 dias
+)
+```
 
-### 5. Votação + execução
+Bounds on-chain (revertem fora da faixa):
 
-- Espera `votingDelay` (~1d em produção).
-- Votação `votingPeriod` (~7d).
-- Se vencer: `queue` no Timelock.
-- Espera `minDelay` (2d).
-- `execute` — a DAO chama `registerProject` (via Timelock), que puxa o GOV colateral e atribui `projectId`.
-- Segunda proposta similar para `activateProject`.
+| Parâmetro | Mínimo | Máximo | Erro |
+|---|---|---|---|
+| `revShareBps` | `100` (1%) | `3000` (30%) | `RevShareOutOfBounds` |
+| `target` | `minTarget` (100e18) | — | `TargetOutOfBounds` |
+| `duration` | `1 days` | `90 days` | `DurationOutOfBounds` |
 
-### 6. Pós-ativação
+`openRound` exige projeto `Active` e `msg.sender == owner`. Só uma rodada por projeto: uma segunda chamada reverte com `RoundAlreadyExists`.
 
-Após `activateProject`:
+### O que acontece na rodada
 
-- `activatedAt = now`, `probationEndsAt = now + probationDuration` (30d em produção).
-- `projectId` está `Active`.
-- `FeeRouter.pay` funciona para ele.
-- Stake é permitido.
-- **Durante 30 dias**, share de rewards é dividido por 4 (probation inicial por tempo).
+- **Investidores com GOV stakeado no seu projeto** depositam CREDIT via `invest(projectId, amount)`. O gate é `Staking.getWeight(investor, projectId) > 0` — quem não stakou GOV no projeto não pode investir (`NoGovStaked`).
+- **All-or-nothing.** Quando `raised == target`, a rodada finaliza automaticamente: o `ProjectFunding` transfere **todo o capital captado** para você (o owner) e ativa o rev-share (`RoundStatus.Funded`).
+- Se o prazo vence sem bater o alvo, qualquer um "carimba" a falha com `closeExpiredRound`, e cada investidor saca 100% do que aportou com `refund`. Você não recebe nada — protege o investidor de financiar pela metade um projeto inviável.
 
-Após 30 dias, a probation inicial expira automaticamente.
+### Depois de financiada
 
-## Operações do owner após listagem
+Com a rodada `Funded`, `revShareBpsOf(projectId)` passa a retornar o bps prometido, e o `FeeRouterV2` **desconta essa fatia automaticamente a cada `pay`**, encaminhando-a ao `ProjectFunding` para distribuição pro-rata aos investidores. Você não faz nada — o desconto é on-chain e atômico.
 
-Sem necessidade de governança:
+Consequência: com rev-share ativo, sua parcela `toApp` cai de ~97,5% para `100% - 2,5% - revShareBps%`. Ex.: rev-share de 8% → você fica com ~89,5% de cada pagamento. É o custo do capital antecipado.
 
-- `registry.updateMetadata(projectId, newURI)` — atualizar metadata.
-- `registry.transferProjectOwnership(projectId, newOwner)` — iniciar transferência 2-step.
-- `registry.acceptProjectOwnership(projectId)` — aceitar (chamado pelo novo owner).
-- `feeRouter.setAppRecipient(projectId, recipient)` — setar destino do rebate.
+## Resumo do fluxo
 
-Requer governança (proposta + execução):
-
-- Qualquer mudança de status (`setProbation`, `reactivate`, `removeProject`).
-- Qualquer override de split (`setProjectSplit`, `clearProjectSplit`).
-- `burnTracker.revokeRole(RECORDER_ROLE, ...)` — revogar role se necessário.
-
-## Custos totais
-
-- **GOV collateral**: 10.000 GOV imobilizado até `removeProject`.
-- **Gas de proposta**: pago pelo proposer.
-- **Gas de execução**: pago por quem chamar `execute` (qualquer um, 2 dias após queue).
-
-Custo total em gas: ~300-500k gas por proposta típica.
-
-## Problemas comuns
-
-### Proposta reverte com `InsufficientAllowance`
-
-O owner do projeto não aprovou o Registry, ou a allowance é menor que `collateralAmount`. Solução: chame `GOV.approve(registry, collateralAmount)` antes da execução.
-
-### Proposta reverte com `InsufficientCollateral`
-
-Você passou `collateralAmount < minCollateral`. Consulte `registry.minCollateral()` para o valor atual.
-
-### Proposta reverte com `EmptyMetadataURI`
-
-`metadataURI` string não pode estar vazia. Passe ao menos um CID placeholder.
-
-### Proposta não atinge quorum
-
-- Aumente engajamento off-chain (forum, Discord).
-- Aumente o tempo de campanha — proposte de novo se a primeira falhou.
-- Considere delegar voting power para aumentar o peso total apoiante.
+```
+1. owner aprova GOV pro Registry
+2. proposta de governança: registerProject(owner, uri, colateral)  -> Pending
+3. proposta de governança: activateProject(projectId)              -> Active
+4. (agora já cobra pagamentos: fee 2,5%, app fica com ~97,5%)
+5. (opcional) owner: openRound(projectId, alvo, revShareBps, prazo)
+6. investidores stakados investem CREDIT -> alvo batido -> capital pro owner + rev-share ativo
+```
 
 ---
 
