@@ -37,7 +37,10 @@
 | ❓ Suporte | 9 | Dúvidas gerais (34) · Problemas técnicos (35) · Ajuda com carteira / onboarding (36) |
 | DAO Ecosystem – General Discussion | 2 | *(legado em inglês, sem filhos, sem posição — não usar; candidata a remoção no painel admin)* |
 
-## 4. Conteúdo atual (2026-07-27)
+## 4. Conteúdo atual (2026-09-23)
+
+**Discussão #3 — "Governança: supermaioria de 75% para criar dinheiro ou mover o cofre"** (2026-09-23)
+Tags: 🏛️ Governança → Histórico de decisões (4+17). Post único: parecer 2026-09-23 #2/#3/#8 traduzido ("janelas do cofre abertas"), decisão do scan por selector + remoção do `mintGenesis`, efeito colateral (gastos do Treasury a 75%), o que segue em maioria simples, o que ficou aberto. Referencia PR #2 do backend.
 
 **Discussão #2 — "O fórum agora anda junto com o desenvolvimento"** (2026-07-27)
 Tags: 🏛️ Governança → Histórico de decisões. Post inaugural anunciando a regra de emparelhamento (§5) à comunidade.
@@ -52,6 +55,7 @@ Tags: 💰 Economia & Tokenomics → Modelo econômico da DAO. 5 posts:
 | 3 | 2026-07-12 | `✅ Medidas tomadas — D1 e D2 implementados` (anti-self-payment + uniquePayersOf, decisão "ignorar, não reverter") |
 | 4 | 2026-07-25 | `✅ Medida tomada — D3 implementado` (piso minInvestWeight, por que encarece o sybil) |
 | 5 | 2026-07-26 | `✅ Medida tomada — D4 implementado (vetor fechado)` (recentVolumeOf com decaimento, grossVolume vira auditoria) |
+| 6 | 2026-09-23 | `⚠️ Revisão 2026-09-23` — D1-D4 **encarecem, não fecham** (2ª carteira passa; auto-rodada com 1 carteira; UI lia `grossVolumeOf`); medidas: InvestView lê `recentVolumeOf`/`uniquePayersOf` (frontend PR #1), docs de investidor reescritas; pendências abertas (rev-share inexigível/sem teto, owner na própria rodada, stake não vota) |
 
 **Padrão que emerge daí (seguir):**
 - Thread abre com o problema/tema explicado para **qualquer pessoa** — conclusão em 1 frase logo no início.
