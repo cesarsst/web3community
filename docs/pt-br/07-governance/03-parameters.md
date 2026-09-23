@@ -51,7 +51,7 @@ Sem parâmetros de configuração. As saídas de fundos são as únicas operaç�
 | `transfer(token, to, amount)` | saída de ERC-20 (inclui execução de buyback de GOV) |
 | `transferETH(to, amount)` | saída de ETH |
 
-> **Atenção — supermaioria (75%).** Alterar quem detém roles no Treasury (`grantRole`/`revokeRole`/`renounceRole`) muda quem pode esvaziar o cofre. Qualquer proposta com essas chamadas no Treasury **ou no próprio Timelock** é classificada como `Supermajority` e exige `For >= 75%`. Ver [Ciclo de uma proposta](01-proposal-lifecycle.md#supermaioria-para-gestão-de-roles).
+> **Atenção — supermaioria (75%).** `transfer` e `transferETH` do Treasury, assim como `grantRole`/`revokeRole`/`renounceRole` em qualquer contrato, são **seletores sensíveis**: a proposta é classificada como `Supermajority` e exige `For >= 75%`. Decisão registrada em 2026-09-23 — gastos recorrentes (grants) passam a exigir 75% até existir um mecanismo de orçamento por época. Ver [Ciclo de uma proposta](01-proposal-lifecycle.md#supermaioria-para-chamadas-sensíveis).
 
 ## CreditPSM — sem parâmetros
 
@@ -84,7 +84,7 @@ O `name` do Governor (`"CommunityGovernor"`) **não** é um parâmetro — trava
 |---|---|---|
 | `minDelay` | `172800s` (2 dias) | `3600s` (1 hora) |
 
-Ajustável via `updateDelay`, que é `onlyRole(DEFAULT_ADMIN_ROLE)` — em produção o próprio Timelock (self-administered), ou seja, só muda por proposta aprovada. A regra de supermaioria de 75% cobre a gestão de roles do Timelock.
+Ajustável via `updateDelay`, que é `onlyRole(DEFAULT_ADMIN_ROLE)` — em produção o próprio Timelock (self-administered), ou seja, só muda por proposta aprovada. A regra de supermaioria de 75% cobre a gestão de roles do Timelock **e o próprio `updateDelay`** — zerar o delay anularia a última defesa.
 
 ## Resumo dos guardrails imutáveis
 

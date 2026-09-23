@@ -25,11 +25,12 @@ import {AccessControl} from "@openzeppelin/contracts/access/AccessControl.sol";
  *        que devolve USDC — em vez de queimar sem contrapartida).
  *      Nao herda {ERC20Votes}: CREDIT nao vota (so GOV vota). Nao herda
  *      {ERC20Permit}: superficie minima.
- *      {mintGenesis} existe como capacidade one-shot de bootstrap (flag
- *      {genesisMinted}) mas NAO e usada no deploy padrao — o peg exige que
- *      todo CREDIT tenha lastro, entao a via normal e o PSM. Mantida para
- *      cenarios de migracao/testes onde o admin precise semear um saldo
- *      controlado antes do PSM assumir.
+ *      NAO existe caminho de mint fora de `MINTER_ROLE` (o antigo
+ *      `mintGenesis` one-shot do admin foi removido em 2026-09-23, parecer
+ *      `audit/economist/2026-09-23-conceptual-gaming-review.md` #2): qualquer
+ *      CREDIT sem USDC correspondente quebraria o peg, e a unica forma de
+ *      criar um novo minter e `grantRole`, que o {CommunityGovernor} sujeita a
+ *      supermaioria de 75%.
  * @custom:security-contact security@web3community.example
  */
 contract CreditToken is ERC20, ERC20Burnable, AccessControl {
@@ -41,16 +42,6 @@ contract CreditToken is ERC20, ERC20Burnable, AccessControl {
     ///         allowance. Concedida pelo admin ao {CreditPSM} (queima o saldo
     ///         recolhido no resgate). Revogavel pelo Timelock.
     bytes32 public constant BURNER_ROLE = keccak256("BURNER_ROLE");
-
-    /// @notice `true` apos a primeira execucao bem-sucedida de {mintGenesis}.
-    ///         Flag one-shot que impede o admin de re-executar o genesis mint
-    ///         mesmo que detenha `DEFAULT_ADMIN_ROLE`.
-    bool public genesisMinted;
-
-    /// @notice Emitido no mint inicial (genesis) pre-cunhado para a tesouraria.
-    /// @param to Destinatario do genesis (geralmente a tesouraria da DAO).
-    /// @param amount Quantidade cunhada (em unidades minimas, 1e18 precision).
-    event GenesisMinted(address indexed to, uint256 amount);
 
     /// @notice Emitido em todo {mint} bem-sucedido feito por um `MINTER_ROLE`.
     /// @param to Destinatario dos tokens cunhados.
@@ -73,15 +64,12 @@ contract CreditToken is ERC20, ERC20Burnable, AccessControl {
     /// @notice Valor zero nao e permitido em operacoes que exigem amount > 0.
     error ZeroAmount();
 
-    /// @notice {mintGenesis} so pode ser executado uma unica vez.
-    error GenesisAlreadyMinted();
-
     /**
      * @notice Cria o token de credito da Web3Community.
      * @dev O admin inicial recebe `DEFAULT_ADMIN_ROLE` e pode conceder
      *      `MINTER_ROLE` / `BURNER_ROLE` posteriormente. Nenhum token e
-     *      cunhado no constructor — `totalSupply()` comeca em 0. Para o
-     *      genesis de 10M, o deploy script chama {mintGenesis} em seguida.
+     *      cunhado no constructor — `totalSupply()` comeca em 0 e so cresce
+     *      via {mint} pelo {CreditPSM}.
      *      O admin inicial deve ser o deployer em local/testnet e o
      *      TimelockController em producao (invariante I4 aplicada fora
      *      deste contrato, via `grantRole` + `renounceRole` no script de
@@ -95,34 +83,6 @@ contract CreditToken is ERC20, ERC20Burnable, AccessControl {
             revert ZeroAddress();
         }
         _grantRole(DEFAULT_ADMIN_ROLE, initialAdmin);
-    }
-
-    /**
-     * @notice Cunha o supply de genesis (10M) para `to`. Pode ser executado UMA
-     *         UNICA VEZ; chamadas subsequentes revertem com {GenesisAlreadyMinted}.
-     * @dev Restrita a `DEFAULT_ADMIN_ROLE`. Intencionalmente o amount e parametro
-     *      (nao hardcoded) para que o script de deploy tenha controle explicito
-     *      do numero exato e para facilitar auditoria em chain — a quantidade
-     *      real e assinada no evento {GenesisMinted} e visivel off-chain antes
-     *      de qualquer outra operacao do token.
-     *      NAO consome `MINTER_ROLE` — o caminho do genesis e separado do
-     *      caminho operacional para nao exigir que o admin tambem seja minter.
-     * @param to Destinatario do genesis (tesouraria da DAO).
-     * @param amount Quantidade a cunhar (em unidades minimas).
-     */
-    function mintGenesis(address to, uint256 amount) external onlyRole(DEFAULT_ADMIN_ROLE) {
-        if (genesisMinted) {
-            revert GenesisAlreadyMinted();
-        }
-        if (to == address(0)) {
-            revert ZeroAddress();
-        }
-        if (amount == 0) {
-            revert ZeroAmount();
-        }
-        genesisMinted = true;
-        _mint(to, amount);
-        emit GenesisMinted(to, amount);
     }
 
     /**

@@ -39,7 +39,10 @@ struct FeeSplit {        // bps DA PRÓPRIA fee; soma obrigatória = 10000
 | `feeSplit` | `FeeSplit public` | Repartição da fee. |
 | `treasuryRecipient` / `buybackRecipient` / `grantsRecipient` | `address public` | Destinos da fee. |
 | `appRecipientOf` | `mapping(uint256 => address) public` | Recipient por projeto (fallback: owner). |
-| `grossVolumeOf` | `mapping(uint256 => uint256) public` | Volume bruto acumulado por projeto (métrica on-chain). |
+| `grossVolumeOf` | `mapping(uint256 => uint256) public` | Volume bruto acumulado por projeto, **sem** self-payments. Soma eterna — só auditoria; UI/automação leem `recentVolumeOf`. |
+| `uniquePayersOf` | `mapping(uint256 => uint256) public` | Pagadores **distintos** por projeto (D2). Sybil-inflável por gas — sinal, não prova. |
+| `hasPaid` | `mapping(uint256 => mapping(address => bool)) public` | Se a carteira já pagou o projeto (suporte a `uniquePayersOf`). |
+| `volumeHalfLife` | `uint256 public` | Meia-vida do decaimento de `recentVolumeOf` (default `30 days`, governável). |
 
 ### Constructor
 
@@ -55,14 +58,17 @@ Concede `DEFAULT_ADMIN_ROLE` + `GOVERNANCE_ROLE` a `admin`. Reverte `ZeroAddress
 ```solidity
 function pay(uint256 projectId, uint256 amount) external nonReentrant
 ```
-Puxa `amount` de CREDIT do pagador, calcula e distribui fee → rev-share → app (nesta ordem, tudo atômico). O rev-share é transferido ao `ProjectFunding` **antes** de `notifyRevenue` (o funding só contabiliza, não puxa). Incrementa `grossVolumeOf`. Reverte `ZeroAmount`, `ProjectNotActive`. Emite `PaymentRouted`.
+Puxa `amount` de CREDIT do pagador, calcula e distribui fee → rev-share → app (nesta ordem, tudo atômico). O rev-share é transferido ao `ProjectFunding` **antes** de `notifyRevenue` (o funding só contabiliza, não puxa). Reverte `ZeroAmount`, `ProjectNotActive`. Emite `PaymentRouted`.
+
+**Self-payment (D1):** se `msg.sender` é o owner do projeto ou o `appRecipient`, o pagamento é marcado `selfPayment = true`: o split de valor acontece normalmente, mas `grossVolumeOf`, `uniquePayersOf` e `recentVolumeOf` **não** são creditados. Isso bloqueia só o caso literal de mesma carteira — pagar de uma segunda carteira do próprio owner passa pelo gate e custa 2,5% do valor (fee) por ciclo. Ou seja: os contadores são **sinais encarecidos, não prova de uso real** ({REVIEW} #4).
 
 ### Governança (`onlyRole(GOVERNANCE_ROLE)`)
 
 ```solidity
 function setFeeBps(uint16 newFeeBps) external           // reverte FeeAboveCap; emite FeeUpdated
 function setFeeSplit(FeeSplit calldata newSplit) external // reverte SplitDoesNotSumTo10000; emite FeeSplitUpdated
-function setRecipients(address treasury_, address buyback_, address grants_) external // reverte ZeroAddress; emite RecipientsUpdated
+function setRecipients(address treasury_, address buyback_, address grants_) external // reverte ZeroAddress; emite RecipientsUpdated — SUPERMAIORIA (75%) no Governor
+function setVolumeHalfLife(uint256 newHalfLifeSeconds) external // reverte ZeroHalfLife; emite VolumeHalfLifeUpdated
 ```
 
 ### Owner do projeto
@@ -75,13 +81,16 @@ function setAppRecipient(uint256 projectId, address recipient) external // só o
 
 ```solidity
 function previewPay(uint256 projectId, uint256 amount) external view returns (uint256 fee, uint256 revShare, uint256 toApp)
+function recentVolumeOf(uint256 projectId) external view returns (uint256)  // volume com decaimento exponencial (D4)
 ```
+`recentVolumeOf` = volume não-self acumulado com meia-vida `volumeHalfLife` (aproximação: meias-vidas inteiras por shift + interpolação linear, erro máx ~6%, zera após 64 meias-vidas). Um wash em rajada evapora em poucas meias-vidas; sustentar um número falso exige pagar 2,5% dele a cada meia-vida.
 
 ## Eventos
 
 | Evento | Emitido em |
 |---|---|
-| `PaymentRouted(projectId, payer, amount, feeToTreasury, feeToBuyback, feeToGrants, revShare, toApp)` | `pay` (`projectId`, `payer` indexados) |
+| `PaymentRouted(projectId, payer, amount, feeToTreasury, feeToBuyback, feeToGrants, revShare, toApp, selfPayment)` | `pay` (`projectId`, `payer` indexados) |
+| `VolumeHalfLifeUpdated(previous, current)` | `setVolumeHalfLife` |
 | `FeeUpdated(previousBps, currentBps)` | `setFeeBps` |
 | `FeeSplitUpdated(treasuryBps, buybackBps, grantsBps)` | `setFeeSplit` |
 | `RecipientsUpdated(treasury, buyback, grants)` | `setRecipients` |
@@ -89,16 +98,16 @@ function previewPay(uint256 projectId, uint256 amount) external view returns (ui
 
 ## Erros
 
-`ZeroAddress`, `ZeroAmount`, `ProjectNotActive(projectId)`, `NotProjectOwner(projectId, caller)`, `FeeAboveCap(provided, cap)`, `SplitDoesNotSumTo10000(sum)`.
+`ZeroAddress`, `ZeroAmount`, `ProjectNotActive(projectId)`, `NotProjectOwner(projectId, caller)`, `FeeAboveCap(provided, cap)`, `SplitDoesNotSumTo10000(sum)`, `ZeroHalfLife`.
 
 ## Roles
 
 | Role | Produção |
 |---|---|
 | `DEFAULT_ADMIN_ROLE` | `CommunityTimelock`. |
-| `GOVERNANCE_ROLE` | `CommunityTimelock` — `setFeeBps`, `setFeeSplit`, `setRecipients`. |
+| `GOVERNANCE_ROLE` | `CommunityTimelock` — `setFeeBps`, `setFeeSplit`, `setVolumeHalfLife` (maioria simples); `setRecipients` (supermaioria 75% — redireciona 100% da fee). |
 
-`setAppRecipient` é gated pelo owner do projeto (rotação operacional), sem role.
+`setAppRecipient` é gated pelo owner do projeto (rotação operacional), sem role e **sem timelock** — o `ownerRecipient` de 48h do `ProjectRegistry` não é consultado pelo router (`audit/economist/2026-09-23-conceptual-gaming-review.md` #12, pendente).
 
 ## Invariantes
 

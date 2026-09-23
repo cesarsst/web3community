@@ -53,13 +53,13 @@ Percentual de cada pagamento cobrado pelo [`FeeRouterV2`](../08-contracts-refere
 
 Trilho de pagamento do protocolo. `pay(projectId, amount)` cobra a fee de 2,5%, desconta o rev-share do projeto (se houver rodada financiada) e transfere o resto (~89,5–97,5%) pro `appRecipient` na hora. Acumula `grossVolumeOf[projectId]` (GMV on-chain). Ver [FeeRouterV2](../08-contracts-reference/06-FeeRouterV2.md).
 
-## Genesis mint
+## Genesis mint (removido)
 
-Capacidade one-shot do `CreditToken` (`mintGenesis(to, amount)`, flag `genesisMinted`). Existe por flexibilidade de deploy; no modelo vigente **a via canônica de emissão de CREDIT é o PSM** — todo CREDIT circulante deve nascer de `buy()` para preservar o lastro 1:1.
+O `CreditToken` já teve um `mintGenesis(to, amount)` one-shot do admin. Foi **removido em 2026-09-23**: qualquer CREDIT sem USDC correspondente quebra o peg, e a governança por maioria simples podia acioná-lo. Hoje **todo CREDIT nasce em `CreditPSM.buy()`**; criar outro minter exige `grantRole` com supermaioria de 75%.
 
 ## GMV (Gross Merchandise Volume)
 
-Volume bruto de pagamentos processados. On-chain por projeto em `FeeRouterV2.grossVolumeOf[projectId]`. Métrica central para avaliar rodadas de investimento.
+Volume bruto de pagamentos processados. O `FeeRouterV2` expõe três leituras por projeto: `grossVolumeOf` (soma histórica, **só auditoria** — inflável por wash-payment), `recentVolumeOf` (volume com decaimento exponencial, meia-vida 30 dias — o número que a UI mostra) e `uniquePayersOf` (carteiras distintas que já pagaram). Nenhum dos três é prova de tração: são **sinais**, forjáveis a ~2,5% do valor exibido por ciclo (ver [Métricas que importam](../06-for-investors/04-metrics-that-matter.md)).
 
 ## GOV
 

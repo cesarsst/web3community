@@ -11,6 +11,49 @@ de segurança (invariantes, access control, static analysis) ficam em `Security`
 
 ### Security
 
+- **Governança — supermaioria (75%) para chamadas sensíveis em QUALQUER target
+  + remoção do `mintGenesis`.** Parecer
+  `audit/economist/2026-09-23-conceptual-gaming-review.md` (#2/#3/#8): o scan
+  do `CommunityGovernor.propose` so cobria gestao de roles com target
+  Treasury/Timelock, deixando em maioria simples `grantRole(MINTER_ROLE)` no
+  CreditToken (CREDIT sem lastro -> `PSM.sell` drena o USDC, quebrando I-PSM1 no
+  nivel do sistema), `GovernanceToken.mint` ate o cap (captura por diluicao),
+  `Treasury.transfer`/`transferETH` (esvaziar o cofre), `updateDelay(0)`,
+  `setRecipients` (desvio de 100% da fee) e `removeProject(slash, destino
+  arbitrario)`. **Novo:** `isSensitiveSelector(bytes4)` publico — scan por
+  SELECTOR, target-agnostico: gestao de roles em qualquer contrato +
+  `updateDelay` + `mint(address,uint256,string)` (GOV e CREDIT, mesma
+  assinatura) + `transferOwnership` + `transfer(address,address,uint256)` +
+  `transferETH` + `setRecipients` + `removeProject`. Novas constantes
+  `UPDATE_DELAY_SELECTOR`, `MINT_SELECTOR`, `TRANSFER_OWNERSHIP_SELECTOR`,
+  `TREASURY_TRANSFER_SELECTOR`, `TREASURY_TRANSFER_ETH_SELECTOR`,
+  `SET_RECIPIENTS_SELECTOR`, `REMOVE_PROJECT_SELECTOR`. `TREASURY` imutavel
+  mantido (address(0) segue desligando o scan). **Decisao registrada:** saida
+  de fundos do Treasury passa a exigir 75% — gastos recorrentes (grants) ficam
+  mais caros ate existir orcamento por epoca. **CreditToken:** `mintGenesis`,
+  `genesisMinted`, `GenesisMinted`, `GenesisAlreadyMinted` REMOVIDOS — era um
+  mint one-shot de valor arbitrario, armado (`genesisMinted == false`) e nas
+  maos do Timelock por maioria simples. Unico caminho de mint agora e
+  `MINTER_ROLE` (PSM), e criar outro minter exige `grantRole` com 75%. **ABI
+  mudou** (CreditToken -1 funcao/-1 view/-1 evento/-1 erro; Governor +7
+  constantes +1 view) -> resync frontend/SDK. Testes: supermajority suite
+  reescrita (2 casos invertidos: `grantRole` em terceiro e `Treasury.transfer`
+  agora Supermajority) + 9 novos (cada selector, setters neutros permanecem
+  Standard, conjunto exato de `isSensitiveSelector`); CreditToken sem genesis;
+  Remodel usa MINTER_ROLE avulso p/ CREDIT sem lastro. Suite 392 passing;
+  slither sem high/medium novo.
+
+- **Docs pt-br sincronizadas com D1-D4 e com o parecer 2026-09-23.** Referencia
+  de FeeRouterV2 (`uniquePayersOf`, `hasPaid`, `recentVolumeOf`,
+  `volumeHalfLife`/`setVolumeHalfLife`, `selfPayment` no evento, limite do
+  D1), ProjectFunding (`minInvestWeight`/`setMinInvestWeight`,
+  `InsufficientStakeWeight`, gate assimetrico, auto-rodada, rev-share
+  inexigivel, rodada terminal), CreditToken/glossario (genesis removido, GMV =
+  tres leituras), governanca (supermaioria por selector), investidores
+  (`recentVolumeOf`/`uniquePayersOf` no lugar de `grossVolumeOf`; novos riscos
+  "fuga do trilho" e "sinal falso"; "872 testes" -> 392; "nunca expira"
+  qualificado).
+
 - **Integridade de sinal no `FeeRouterV2` — mitigações D1+D2 (wash-payment).**
   Parecer `audit/economist/2026-07-10-wash-signal-integrity.md`: o modelo era
   a prova de roubo, mas os sinais derivados (GMV, rev-share, pressao de buyback)

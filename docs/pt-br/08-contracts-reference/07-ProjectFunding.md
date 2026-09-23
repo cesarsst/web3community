@@ -11,7 +11,7 @@ Captação + redistribuição de receita por projeto (remodel 2026-07-08). Quem 
 Ciclo:
 
 1. Dono do projeto abre rodada: alvo em CREDIT, rev-share oferecido (bps) e prazo.
-2. Investidores com GOV stakeado **no projeto** (`Staking.getWeight > 0`) depositam CREDIT até o alvo.
+2. Investidores com GOV stakeado **no projeto** (`Staking.getWeight >= minInvestWeight`, default 100 GOV-peso) depositam CREDIT até o alvo.
 3. Alvo batido → finaliza automaticamente (paga o dono, ativa o rev-share). Prazo vencido sem alvo → rodada falha, `refund` devolve 100%.
 4. `FeeRouterV2` chama `notifyRevenue` a cada pagamento; investidor saca com `claim` (exige manter GOV stakeado no projeto).
 
@@ -43,6 +43,8 @@ struct Round {
 | `GOVERNANCE_ROLE` | `keccak256("GOVERNANCE_ROLE")`. Ajusta bounds. Produção: Timelock. |
 | `MIN_REV_SHARE_BPS` / `MAX_REV_SHARE_BPS` | `100` (1%) / `3000` (30%). |
 | `MIN_ROUND_DURATION` / `MAX_ROUND_DURATION` | `1 days` / `90 days`. |
+| `minTarget` | `100e18` (governável). |
+| `minInvestWeight` | `100e18` (governável, D3). Piso de peso de stake para **investir**; `claim` mantém `> 0`. |
 | `ACC_PRECISION` | `1e18`. |
 | `CREDIT` / `REGISTRY` / `STAKING` | immutables. |
 | `minTarget` | `uint256 public` (default `100e18`) — alvo mínimo anti-spam, ajustável. |
@@ -67,7 +69,9 @@ Só o dono (Registry) de projeto `Active`, uma vez por projeto. Reverte `Project
 ```solidity
 function invest(uint256 projectId, uint256 amount) external
 ```
-Investe CREDIT na rodada aberta. Exige `Staking.getWeight(msg.sender, projectId) > 0`. Alvo batido finaliza automaticamente (paga o dono, status `Funded`). Reverte `RoundNotOpen`, `ZeroAmount`, `NoGovStaked`, `ExceedsTarget`. Emite `Invested` (e `RoundFunded` se completar).
+Investe CREDIT na rodada aberta. Exige `Staking.getWeight(msg.sender, projectId) >= minInvestWeight`. Alvo batido finaliza automaticamente (paga o dono, status `Funded`). Reverte `RoundNotOpen`, `ZeroAmount`, `InsufficientStakeWeight`, `ExceedsTarget`. Emite `Invested` (e `RoundFunded` se completar).
+
+> **Limitação conhecida (`audit/economist/2026-09-23-conceptual-gaming-review.md` #5):** o owner (ou uma carteira dele com stake) pode investir na própria rodada. Com `minTarget = 100 CREDIT`, uma auto-rodada `Funded` custa ≈ gas + 100 GOV-peso por 14 dias — o selo "Financiado" **não** prova terceiros. Correção proposta: bloquear owner/appRecipient no `invest` e exigir N investidores distintos.
 
 ```solidity
 function closeExpiredRound(uint256 projectId) external
@@ -94,33 +98,35 @@ Saca a receita acumulada. Exige GOV ainda stakeado no projeto (o valor nunca exp
 ### Governança / views
 
 ```solidity
-function setMinTarget(uint256 newMin) external onlyRole(GOVERNANCE_ROLE)  // emite MinTargetUpdated
+function setMinTarget(uint256 newMin) external onlyRole(GOVERNANCE_ROLE)        // emite MinTargetUpdated
+function setMinInvestWeight(uint256 newMin) external onlyRole(GOVERNANCE_ROLE)  // emite MinInvestWeightUpdated
 function revShareBpsOf(uint256 projectId) external view returns (uint16)  // 0 se não Funded — consumido pelo router
 function pendingRevenue(uint256 projectId, address investor) external view returns (uint256)
 ```
 
 ## Eventos
 
-`RoundOpened(projectId, target, revShareBps, deadline)`, `Invested(projectId, investor, amount, totalRaised)`, `RoundFunded(projectId, raised, paidTo)`, `RoundFailed(projectId, raised)`, `Refunded(projectId, investor, amount)`, `RevenueNotified(projectId, amount)`, `RevenueClaimed(projectId, investor, amount)`, `MinTargetUpdated(previous, current)`.
+`RoundOpened(projectId, target, revShareBps, deadline)`, `Invested(projectId, investor, amount, totalRaised)`, `RoundFunded(projectId, raised, paidTo)`, `RoundFailed(projectId, raised)`, `Refunded(projectId, investor, amount)`, `RevenueNotified(projectId, amount)`, `RevenueClaimed(projectId, investor, amount)`, `MinTargetUpdated(previous, current)`, `MinInvestWeightUpdated(previous, current)`.
 
 ## Erros
 
-`ZeroAmount`, `ZeroAddress`, `ProjectNotActive`, `NotProjectOwner`, `RoundAlreadyExists`, `RoundNotFound`, `RoundNotOpen`, `RoundStillOpen`, `RoundNotFailed`, `RevShareOutOfBounds(provided, min, max)`, `TargetOutOfBounds(provided, min)`, `DurationOutOfBounds(provided, min, max)`, `NoGovStaked(projectId, investor)`, `ExceedsTarget(requested, remaining)`, `NothingToRefund(projectId, investor)`, `NothingToClaim(projectId, investor)`, `NoActiveShares(projectId)`.
+`ZeroAmount`, `ZeroAddress`, `ProjectNotActive`, `NotProjectOwner`, `RoundAlreadyExists`, `RoundNotFound`, `RoundNotOpen`, `RoundStillOpen`, `RoundNotFailed`, `RevShareOutOfBounds(provided, min, max)`, `TargetOutOfBounds(provided, min)`, `DurationOutOfBounds(provided, min, max)`, `NoGovStaked(projectId, investor)`, `InsufficientStakeWeight(projectId, investor, have, required)`, `ExceedsTarget(requested, remaining)`, `NothingToRefund(projectId, investor)`, `NothingToClaim(projectId, investor)`, `NoActiveShares(projectId)`.
 
 ## Roles
 
 | Role | Produção |
 |---|---|
 | `DEFAULT_ADMIN_ROLE` | `CommunityTimelock`. |
-| `GOVERNANCE_ROLE` | `CommunityTimelock` — `setMinTarget`. |
+| `GOVERNANCE_ROLE` | `CommunityTimelock` — `setMinTarget`, `setMinInvestWeight`. |
 | `REVENUE_NOTIFIER_ROLE` | Apenas o `FeeRouterV2` — `notifyRevenue`. |
 
 ## Invariantes
 
 - **All-or-nothing:** a rodada só paga o dono se bater o alvo exato; senão vira `Failed` e permite refund integral. Protege o investidor de financiar pela metade.
-- **Gate de stake:** `invest` e `claim` exigem `Staking.getWeight(msg.sender, projectId) > 0` (skin in the game).
-- **Receita não expira:** sem stake, o valor acruado fica retido (não é perdido) até re-stake.
-- **Uma rodada por projeto:** `openRound` reverte `RoundAlreadyExists` se status != `None`.
+- **Gate de stake (assimétrico):** `invest` exige `getWeight >= minInvestWeight` (barreira de entrada anti-sybil); `claim` exige só `getWeight > 0` (não pune quem reduziu o stake depois).
+- **Receita não expira, mas exige stake para sacar:** sem stake, o valor acruado fica retido até re-stake. Se o projeto for `Removed`, `stake()` reverte e o pendente fica **inacessível** (`audit/economist/2026-09-23-conceptual-gaming-review.md` #15).
+- **Rev-share depende do trilho:** o desconto só acontece em `FeeRouterV2.pay`. Nada obriga o app a receber por ali após `_fund` — o rev-share é **inexigível on-chain** (`audit/economist/2026-09-23-conceptual-gaming-review.md` #1). Slash de colateral vai ao Treasury, não aos investidores.
+- **Uma rodada por projeto, para sempre:** `openRound` reverte `RoundAlreadyExists` se status != `None` — `Failed` e `Funded` são terminais (sem 2ª rodada, sem reabertura).
 - **Shares imutáveis pós-finalize:** shares = CREDIT investido, 1:1.
 - **Acumulador MasterChef:** `pending = shares * accRevenuePerShare / 1e18 - rewardDebt`; distribuição O(1).
 - **CEI:** effects antes das interações em `invest`/`refund`/`claim` (dentro de `nonReentrant`).

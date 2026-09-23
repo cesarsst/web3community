@@ -40,7 +40,7 @@ O `state(proposalId)` do Governor percorre:
 `propose(targets, values, calldatas, description)` cria a proposta. Uma proposta é uma lista de chamadas que o Timelock executará se ela passar — por exemplo, "chame `FeeRouterV2.setFeeBps(300)`".
 
 - **Threshold.** O proposer precisa ter, delegado a si, ao menos o `proposalThreshold` de voting power (produção: `10.000 GOV`, 0,01% do cap). Baixo o suficiente para não calcificar a governança, mas > 0 para bloquear spam de contas sem skin in the game.
-- **Classificação automática de tipo.** No `propose`, o Governor **escaneia** os targets e calldatas. Se qualquer chamada for gestão de roles (`grantRole`/`revokeRole`/`renounceRole`) no **Treasury** ou no **próprio Timelock**, a proposta inteira é marcada como `Supermajority` (ver [Ciclo de uma proposta → supermaioria](#supermaioria-para-gestão-de-roles)). Emite `ProposalTypeSet` sempre — o frontend sinaliza o requisito de 75% antes da votação abrir.
+- **Classificação automática de tipo.** No `propose`, o Governor **escaneia** os calldatas. Se qualquer chamada tiver um selector sensível — gestão de roles (`grantRole`/`revokeRole`/`renounceRole`) em **qualquer** contrato, `updateDelay` do Timelock, `mint` de GOV ou CREDIT, `transferOwnership` do GOV, `transfer`/`transferETH` do Treasury, `setRecipients` do FeeRouterV2 e `removeProject` do Registry — a proposta inteira é marcada como `Supermajority` (ver [Ciclo de uma proposta → supermaioria](#supermaioria-para-gestão-de-roles)). Emite `ProposalTypeSet` sempre — o frontend sinaliza o requisito de 75% antes da votação abrir.
 
 ## 2. Delay + votação
 
@@ -71,13 +71,15 @@ O Timelock executa **exatamente** os calldatas registrados. Não há como injeta
 
 O `CANCELLER_ROLE` fica só com o Governor (usado por `GovernorTimelockControl._cancel` quando uma proposta é cancelada via fluxo de governança). **Ninguém mais** recebe essa role — nem um guardian multisig no v1. Motivo: um cancelador externo poderia fazer DoS de propostas válidas, violando o princípio "o voto é a fonte de verdade".
 
-## Supermaioria para gestão de roles
+## Supermaioria para chamadas sensíveis
 
-Alterar quem detém roles no Treasury ou no Timelock muda **quem pode movimentar o cofre da DAO** — o vetor clássico de captura. Por isso qualquer proposta que contenha gestão de roles nesses dois contratos exige `For >= 75%`, não maioria simples.
+Algumas chamadas decidem quem controla o dinheiro do protocolo, não só um parâmetro: gestão de roles (`grantRole`/`revokeRole`/`renounceRole`) em **qualquer** contrato, `updateDelay` do Timelock, `mint` de GOV ou CREDIT, `transferOwnership` do GOV, `transfer`/`transferETH` do Treasury, `setRecipients` do FeeRouterV2 e `removeProject` do Registry. Qualquer proposta que contenha uma delas exige `For >= 75%`, não maioria simples.
+
+A lista é por **selector**, não por contrato-alvo. Até 2026-09-23 só gestão de roles no Treasury/Timelock era protegida — e uma maioria simples podia, por exemplo, conceder `MINTER_ROLE` do CREDIT a si mesma (criando CREDIT sem lastro e sacando o USDC do PSM), mintar GOV até o cap ou transferir o Treasury inteiro (`audit/economist/2026-09-23-conceptual-gaming-review.md`).
 
 Anti-bypass (por que empacotar a chamada sensível não contorna a regra):
 
-- **Batch misto contamina a proposta inteira.** Uma proposta que mistura gestão de roles do Treasury/Timelock com outras chamadas populares vira `Supermajority` por completo — não dá para diluir o requisito de 75% escondendo a chamada sensível entre outras.
+- **Batch misto contamina a proposta inteira.** Uma proposta que mistura uma chamada sensível com outras chamadas populares vira `Supermajority` por completo — não dá para diluir o requisito de 75% escondendo a chamada sensível entre outras.
 - **Chamadas aninhadas falham no AccessControl.** Um contrato intermediário chamado pela proposta nunca é o Timelock, então a indireção não satisfaz o gate de role.
 
 Detalhes de parâmetros em [Parâmetros](03-parameters.md).

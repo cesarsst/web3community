@@ -74,17 +74,22 @@ import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol"
  *      - {supportsInterface}: nao e necessario override composto aqui — no OZ
  *        5.0.2 apenas {Governor} define; deixamos como herdado.
  *
- *      PROPOSAL TYPES (supermajoridade para gestao de roles):
- *      Alterar quem detem roles no Treasury ou no proprio Timelock muda quem
- *      pode movimentar o cofre da DAO — e o vetor classico de captura.
- *      {propose} escaneia targets+calldatas: qualquer call de gestao de
- *      roles ({IAccessControl.grantRole}, {IAccessControl.revokeRole},
- *      {IAccessControl.renounceRole}) com `target == TREASURY` ou target no
- *      proprio Timelock ({timelock()}) marca a proposta como
+ *      PROPOSAL TYPES (supermajoridade para chamadas sensiveis):
+ *      {propose} escaneia os calldatas: qualquer call cujo selector esteja em
+ *      {isSensitiveSelector} — gestao de roles em QUALQUER contrato,
+ *      `updateDelay` do Timelock, `mint` de GOV/CREDIT, `transferOwnership`
+ *      do GOV, `transfer`/`transferETH` do Treasury, `setRecipients` do
+ *      FeeRouterV2, `removeProject` do Registry — marca a proposta como
  *      {ProposalType.Supermajority}, e {_voteSucceeded} passa a exigir
  *      `forVotes >= 3 * againstVotes` (For >= 75% dos votos decisivos
  *      For/Against; Abstain fora da razao, coerente com o COUNTING_MODE do
- *      {GovernorCountingSimple}).
+ *      {GovernorCountingSimple}). Ate 2026-09-23 o scan era restrito a
+ *      gestao de roles com target Treasury/Timelock, o que deixava em
+ *      maioria simples o mint de CREDIT sem lastro (via grantRole no
+ *      CreditToken), a diluicao de GOV e o esvaziamento direto do cofre
+ *      (parecer `audit/economist/2026-09-23-conceptual-gaming-review.md`).
+ *      `TREASURY` continua imutavel e exposto; `address(0)` desliga o scan
+ *      (deploy dev sem treasury).
  *
  *      Anti-bypass (por que chamadas aninhadas nao contornam a regra):
  *      - O Timelock so executa exatamente os calldatas registrados na
@@ -138,6 +143,31 @@ contract CommunityGovernor is
     /// @notice Selector de {IAccessControl.renounceRole}
     ///         (`renounceRole(bytes32,address)` = 0x36568abe).
     bytes4 public constant RENOUNCE_ROLE_SELECTOR = IAccessControl.renounceRole.selector;
+
+    /// @notice `TimelockController.updateDelay(uint256)` — zerar o delay
+    ///         torna toda proposta seguinte de execucao imediata.
+    bytes4 public constant UPDATE_DELAY_SELECTOR = TimelockController.updateDelay.selector;
+
+    /// @notice `mint(address,uint256,string)` — assinatura compartilhada por
+    ///         {GovernanceToken.mint} (dilui GOV ate o cap) e
+    ///         {CreditToken.mint} (CREDIT sem lastro).
+    bytes4 public constant MINT_SELECTOR = bytes4(keccak256("mint(address,uint256,string)"));
+
+    /// @notice `Ownable.transferOwnership(address)` — muda quem pode mintar GOV.
+    bytes4 public constant TRANSFER_OWNERSHIP_SELECTOR = bytes4(keccak256("transferOwnership(address)"));
+
+    /// @notice `Treasury.transfer(IERC20,address,uint256)` — saida de tokens do cofre.
+    bytes4 public constant TREASURY_TRANSFER_SELECTOR = bytes4(keccak256("transfer(address,address,uint256)"));
+
+    /// @notice `Treasury.transferETH(address,uint256)` — saida de ETH do cofre.
+    bytes4 public constant TREASURY_TRANSFER_ETH_SELECTOR = bytes4(keccak256("transferETH(address,uint256)"));
+
+    /// @notice `FeeRouterV2.setRecipients(address,address,address)` — redireciona 100% da fee.
+    bytes4 public constant SET_RECIPIENTS_SELECTOR = bytes4(keccak256("setRecipients(address,address,address)"));
+
+    /// @notice `ProjectRegistry.removeProject(uint256,bool,address)` — slash de
+    ///         colateral para endereco arbitrario.
+    bytes4 public constant REMOVE_PROJECT_SELECTOR = bytes4(keccak256("removeProject(uint256,bool,address)"));
 
     /// @notice Endereco do {Treasury} cuja remocao de POL exige
     ///         supermaioria. Imutavel — em deploy dev sem treasury pode ser
@@ -208,20 +238,15 @@ contract CommunityGovernor is
 
     /**
      * @notice Cria uma proposta e classifica seu {ProposalType}. Se qualquer
-     *         call do batch tem `target == TREASURY` com selector de
-     *         gestao de roles (grantRole/revokeRole/renounceRole)
-     *         (grantRole/revokeRole/renounceRole), ou `target == timelock()`
-     *         com selector de gestao de roles, a proposta INTEIRA e marcada
-     *         como Supermajority (75%). Emite {ProposalTypeSet} sempre
-     *         (tambem para Standard), para indexacao off-chain.
-     * @dev Decisao de design: a fracao ">25% do POL" nao e mensuravel no
-     *      momento do propose (a liquidez da posicao muda entre propose e
-     *      execute), entao TODA proposta de gestao de roles no Treasury/Timelock exige 75% —
-     *      conservador por design. Gestao de roles do Treasury/Timelock
-     *      entra no mesmo gate porque re-autoriza quem pode mover o cofre
-     *      (grant de GOVERNANCE_ROLE/DEFAULT_ADMIN_ROLE do Treasury, grant
-     *      de PROPOSER_ROLE do Timelock) — sem isso uma proposta de maioria
-     *      simples contornaria o requisito de 75%. Ver NatSpec do contrato
+     *         call do batch tem selector em {isSensitiveSelector} (em
+     *         qualquer target), a proposta INTEIRA e marcada como
+     *         Supermajority (75%). Emite {ProposalTypeSet} sempre (tambem
+     *         para Standard), para indexacao off-chain.
+     * @dev Decisao de design: o scan e por SELECTOR, nao por (target,
+     *      selector). Filtrar por target exigiria conhecer no constructor
+     *      todos os contratos economicos (e qualquer contrato futuro com
+     *      GOVERNANCE_ROLE ficaria de fora); o custo do falso-positivo e so
+     *      exigir 75% de uma call inocente. Ver NatSpec do contrato
      *      para a analise anti-bypass completa (timelock so executa os
      *      calldatas da proposta; Treasury so aceita GOVERNANCE_ROLE =
      *      timelock; nested calls falham no AccessControl; batch misto
@@ -247,16 +272,12 @@ contract CommunityGovernor is
 
         ProposalType proposalType = ProposalType.Standard;
         if (TREASURY != address(0)) {
-            address timelockAddr = timelock();
-            uint256 len = targets.length;
+            uint256 len = calldatas.length;
             for (uint256 i = 0; i < len; ++i) {
                 if (calldatas[i].length < 4) {
                     continue;
                 }
-                bytes4 selector = bytes4(calldatas[i]);
-                bool sensitiveTreasuryCall = targets[i] == TREASURY && _isRoleManagementSelector(selector);
-                bool sensitiveTimelockCall = targets[i] == timelockAddr && _isRoleManagementSelector(selector);
-                if (sensitiveTreasuryCall || sensitiveTimelockCall) {
+                if (isSensitiveSelector(bytes4(calldatas[i]))) {
                     proposalType = ProposalType.Supermajority;
                     proposalRequiresSupermajority[proposalId] = true;
                     break;
@@ -280,6 +301,38 @@ contract CommunityGovernor is
             selector == GRANT_ROLE_SELECTOR ||
             selector == REVOKE_ROLE_SELECTOR ||
             selector == RENOUNCE_ROLE_SELECTOR;
+    }
+
+    /**
+     * @notice `true` se `selector` pertence ao conjunto de chamadas que exigem
+     *         supermaioria (75%) em QUALQUER target.
+     * @dev Conjunto (parecer `audit/economist/2026-09-23-conceptual-gaming-review.md`
+     *      #2/#3/#8):
+     *      - gestao de roles (`grantRole`/`revokeRole`/`renounceRole`) em
+     *        qualquer contrato: unico caminho para criar um novo minter de
+     *        CREDIT, um novo GOVERNANCE_ROLE no FeeRouter/Registry/Funding ou
+     *        um novo PROPOSER no Timelock;
+     *      - `updateDelay` — zerar o delay do Timelock anula a ultima defesa;
+     *      - `mint(address,uint256,string)` — GOV (diluicao) e CREDIT (sem lastro);
+     *      - `transferOwnership` — muda o owner do GOV (quem minta);
+     *      - `transfer`/`transferETH` do Treasury — saida do cofre;
+     *      - `setRecipients` — redireciona 100% da fee;
+     *      - `removeProject` — slash de colateral para endereco arbitrario.
+     *      Target-agnostico de proposito: a lista antiga (so Treasury/Timelock)
+     *      deixava `grantRole(MINTER_ROLE)` no CreditToken em maioria simples.
+     *      Falso-positivo (call inocente com um desses selectors em outro
+     *      contrato) so encarece a proposta para 75% — conservador por design.
+     */
+    function isSensitiveSelector(bytes4 selector) public pure returns (bool) {
+        return
+            _isRoleManagementSelector(selector) ||
+            selector == UPDATE_DELAY_SELECTOR ||
+            selector == MINT_SELECTOR ||
+            selector == TRANSFER_OWNERSHIP_SELECTOR ||
+            selector == TREASURY_TRANSFER_SELECTOR ||
+            selector == TREASURY_TRANSFER_ETH_SELECTOR ||
+            selector == SET_RECIPIENTS_SELECTOR ||
+            selector == REMOVE_PROJECT_SELECTOR;
     }
 
     /**
