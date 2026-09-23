@@ -17,6 +17,14 @@ Uma posição de rev-share paga uma fatia da **receita real** do app. Se o app n
 
 Este é o risco que você **assume conscientemente** ao investir: é participação em receita, não renda fixa.
 
+### Risco de fuga do trilho (rev-share inexigível)
+
+O rev-share é descontado **só** quando o app recebe via `FeeRouterV2.pay`. Depois que a rodada financia e o dono recebe o capital, nada o obriga a continuar recebendo por ali: pode aceitar pagamentos direto na carteira, transferir a propriedade do projeto ou registrar o mesmo app sob outro `projectId` (rev-share zero). Como o rev-share é perpétuo e sem teto, o incentivo de sair do trilho **cresce** com o sucesso do app. Se a governança punir o projeto (`removeProject` com slash), o colateral vai ao **Treasury**, não aos investidores. Não há refund após `Funded`. Este é o risco estrutural mais importante depois do de receita, e está registrado como pendência de desenho ([parecer 2026-09-23](../../../audit/economist/2026-09-23-conceptual-gaming-review.md) #1/#9).
+
+### Risco de sinal falso (wash-payment e auto-rodada)
+
+Os números que você lê (`recentVolumeOf`, `uniquePayersOf`, `totalRevenueDistributed`, o selo "Financiado") são **sinais encarecidos, não prova**. Um dono com duas carteiras paga a si mesmo pelo router a 2,5% do valor exibido por ciclo; `uniquePayersOf` cresce com carteiras novas ao custo de gas; a própria rodada pode ser preenchida pelo dono com uma carteira e ~100 GOV stakeados (o capital volta para ele no mesmo bloco). Use os sinais para comparar tendências, nunca como evidência isolada — e desconfie de volume sem pagadores distintos com histórico fora do projeto.
+
 ### Risco de peg / lastro do PSM
 
 O CREDIT vale 1 USDC porque o [`CreditPSM`](../08-contracts-reference/03-CreditPSM.md) guarda 1 USDC para cada CREDIT que mintou.
@@ -50,7 +58,7 @@ O que estas invariantes garantem é que classes inteiras de ataque econômico n�
 
 - **All-or-nothing no funding.** Uma rodada só transfere capital ao owner se `raised == target`. Falha → `refund` integral. O investidor nunca financia parcialmente um projeto que não atingiu a meta.
 
-- **Gate de GOV stakeado.** Investir e sacar rev-share exigem `Staking.getWeight(investor, projectId) > 0`. Impede investimento sem skin in the game e alinha investidor e projeto.
+- **Gate de GOV stakeado.** Investir exige `Staking.getWeight(investor, projectId) >= minInvestWeight` (default 100 GOV-peso); sacar exige `> 0`. Encarece investimento sem skin in the game — mas o peso não decai quando o lock expira, e o dono pode stakear e investir na própria rodada.
 
 ### Modelo de roles
 
@@ -59,11 +67,11 @@ O poder é minimizado e concentrado no Timelock (ver [Modelo de segurança](../0
 - `MINTER_ROLE` / `BURNER_ROLE` do CREDIT: **só o PSM**. Nenhum outro contrato minta ou queima CREDIT.
 - `REVENUE_NOTIFIER_ROLE` do ProjectFunding: **só o FeeRouterV2**. Só o router contabiliza receita.
 - `GOVERNANCE_ROLE` dos contratos econômicos (Treasury, Registry, FeeRouterV2, ProjectFunding): **só o CommunityTimelock** em produção. Toda mudança de parâmetro passa por proposta + voto + delay.
-- Gestão de roles no Treasury/Timelock exige **supermaioria de 75%** — barreira anti-captura do cofre.
+- Gestão de roles em qualquer contrato, mint de GOV/CREDIT, saída de fundos do Treasury, `updateDelay`, `setRecipients` e `removeProject` exigem **supermaioria de 75%** (desde 2026-09-23 — antes só roles do Treasury/Timelock, e uma maioria simples podia criar CREDIT sem lastro ou mintar GOV para si). O `mintGenesis` do CreditToken foi removido. **Ainda pendente:** cronograma on-chain de emissão de GOV — 75% encarece a diluição, não a impede.
 
 ### Qualidade
 
-- 872 testes passando; slither sem findings high/medium.
+- 392 testes passando; slither sem findings high/medium novos.
 - Contratos imutáveis pós-deploy, exceto pelos parâmetros ajustáveis via governança (listados em [Parâmetros](../07-governance/03-parameters.md)).
 
 ## O que ainda falta para mainnet

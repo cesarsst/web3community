@@ -33,11 +33,13 @@ O GOV não paga dividendo. A tese de valor dele é: demanda estrutural crescente
 
 Quem financia uma rodada no [`ProjectFunding`](../08-contracts-reference/07-ProjectFunding.md) compra uma **posição de rev-share**: o direito a uma fatia (`revShareBps`, 1%–30%) da **receita bruta futura** daquele app específico.
 
-O mecanismo é 100% on-chain e automático:
+O mecanismo é on-chain e automático **enquanto o app receber pelo trilho `FeeRouterV2.pay`**. Nada no protocolo obriga o app a continuar recebendo por ali depois de captar: um dono que aceite pagamentos direto na carteira, ou registre o mesmo app sob um novo `projectId`, para de gerar rev-share — e o investidor não tem recurso on-chain (o colateral slashado vai ao Treasury, não a você). Trate a posição como **participação em receita roteada**, não como direito exigível. Detalhes no [parecer 2026-09-23](../../../audit/economist/2026-09-23-conceptual-gaming-review.md) (#1).
+
+O fluxo:
 
 1. A rodada bate o alvo → status `Funded` → `revShareBpsOf(projectId)` passa a retornar o bps prometido.
 2. A cada `FeeRouterV2.pay`, o router **desconta o rev-share antes de pagar o app** e o encaminha ao `ProjectFunding`, que atualiza um acumulador pro-rata (padrão MasterChef).
-3. O investidor saca sua parte acumulada com `claim(projectId)` — exige manter GOV stakeado no projeto (skin in the game); o valor **nunca expira**.
+3. O investidor saca sua parte acumulada com `claim(projectId)` — exige ter GOV stakeado no projeto no momento do saque (qualquer peso > 0); o valor acruado não expira, mas fica **retido** enquanto você não tiver stake — e fica inacessível se o projeto for removido do Registry.
 
 Suas shares = CREDIT investido (1:1, imutável após a rodada financiar). Sua fatia da receita distribuída é `suas shares / total captado`.
 
@@ -66,7 +68,7 @@ A consequência honesta disso: **tokenomics não salva produto ruim.** Se os app
 
 Todas as fontes de valor são observáveis on-chain — ver [Métricas que importam](04-metrics-that-matter.md):
 
-- `FeeRouterV2.grossVolumeOf(projectId)` — GMV por projeto (dirige buyback e rev-share).
+- `FeeRouterV2.recentVolumeOf(projectId)` — volume recente (decaimento, meia-vida 30d) por projeto; `uniquePayersOf` — pagadores distintos; `grossVolumeOf` — soma histórica, só auditoria. Os três são **sinais** (forjáveis a ~2,5% do valor por ciclo), não prova.
 - `ProjectFunding.totalRevenueDistributed(projectId)` — receita real já paga aos investidores.
 - `ProjectFunding.pendingRevenue(investor, projectId)` — quanto você tem a sacar.
 - `CreditPSM.backing()` / `mintedOutstanding` — integridade do lastro.

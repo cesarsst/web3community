@@ -56,7 +56,7 @@ Uma rodada só transfere capital ao owner quando `raised == target` (finaliza au
 
 ### Gate de GOV stakeado
 
-`ProjectFunding.invest` e `claim` exigem `Staking.getWeight(msg.sender, projectId) > 0`. Materializa "quem tem GOV em stake no projeto participa da rodada e recebe a redistribuição". Sem stake, o rev-share não é perdido — fica acruado até o investidor voltar a stakear.
+`ProjectFunding.invest` exige `Staking.getWeight(msg.sender, projectId) >= minInvestWeight` (default 100 GOV-peso; barreira de entrada anti-sybil) e `claim` exige `> 0`. Materializa "quem tem GOV em stake no projeto participa da rodada e recebe a redistribuição". Sem stake, o rev-share não é perdido — fica acruado até o investidor voltar a stakear (exceto se o projeto for `Removed`: `stake()` reverte e o pendente fica preso — `audit/economist/2026-09-23-conceptual-gaming-review.md` #15). **Limite do gate:** `getWeight` não decai quando o lock expira, e o owner pode stakear e investir na própria rodada (`audit/economist/2026-09-23-conceptual-gaming-review.md` #5/#11).
 
 ### Anti-flashloan (staking e voto)
 
@@ -73,12 +73,13 @@ Toda mudança governável percorre `Governor` (voto) → `Timelock` (execução 
 
 ## Supermaioria anti-captura
 
-Alterar quem detém roles no **Treasury** ou no **Timelock** decide quem pode esvaziar o cofre — o vetor clássico de captura de uma DAO. O `CommunityGovernor` fecha esse vetor:
+Uma maioria simples de GOV não deve conseguir criar dinheiro nem esvaziar o cofre. O `CommunityGovernor` marca como `Supermajority` qualquer proposta com selector sensível — gestão de roles (`grantRole`/`revokeRole`/`renounceRole`) em **qualquer** contrato, `updateDelay` do Timelock, `mint` de GOV ou CREDIT, `transferOwnership` do GOV, `transfer`/`transferETH` do Treasury, `setRecipients` do FeeRouterV2 e `removeProject` do Registry:
 
-- No `propose`, escaneia targets+calldatas. Qualquer `grantRole`/`revokeRole`/`renounceRole` com `target == TREASURY` ou `target == timelock()` marca a proposta inteira como `Supermajority`.
+- No `propose`, escaneia os calldatas por selector (`isSensitiveSelector`), em **qualquer** target. Até 2026-09-23 o scan era só Treasury/Timelock, e deixava em maioria simples `grantRole(MINTER_ROLE)` no CreditToken (CREDIT sem lastro → `PSM.sell` drena o USDC, quebrando I-PSM1 no nível do sistema), `GovernanceToken.mint` até o cap e `Treasury.transfer` (`audit/economist/2026-09-23-conceptual-gaming-review.md` #2/#3/#8). O `mintGenesis` do CreditToken foi removido pelo mesmo motivo.
 - `_voteSucceeded` passa a exigir `forVotes >= 3 * againstVotes` **e** `forVotes > 0` (For ≥ 75% dos votos decisivos).
 - **Batch misto contamina tudo:** empacotar a chamada sensível junto de chamadas populares não dilui o requisito — a proposta inteira vira `Supermajority`.
-- **Chamadas aninhadas falham:** um contrato intermediário chamado pela proposta nunca é o Timelock, então a indireção não passa no AccessControl do Treasury/Timelock.
+- **Chamadas aninhadas falham:** um contrato intermediário chamado pela proposta nunca é o Timelock, então a indireção não passa no AccessControl dos contratos gated.
+- **O que continua em maioria simples (deliberado):** setters de parâmetro com faixa (`setFeeBps` ≤ 5%, `setFeeSplit`, `setMinInvestWeight`, `setMinTarget`, `setVolumeHalfLife`, `setProbation`, `registerProject`/`activateProject`, parâmetros do próprio Governor). **Pendente ({REVIEW} #3):** o `GovernanceToken.mint` ainda não tem cronograma on-chain — a supermaioria encarece, não impede, a diluição.
 
 ## Padrões de implementação
 
@@ -90,7 +91,7 @@ Alterar quem detém roles no **Treasury** ou no **Timelock** decide quem pode es
 
 ## Estado de verificação
 
-- 872 testes passando; slither sem findings high/medium.
+- 392 testes passando; slither sem findings high/medium novos (os existentes — `registerProject` pull de colateral, `transferETH`, divide-before-multiply no router — são intencionais e documentados).
 - **Pendências de mainnet:** auditoria externa + parecer jurídico sobre o rev-share (ver [Riscos e segurança](../06-for-investors/03-risk-and-security.md)). Até lá, só testnet/local.
 
 ---

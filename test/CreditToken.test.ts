@@ -7,7 +7,7 @@ import { loadFixture } from "@nomicfoundation/hardhat-network-helpers";
  *
  * Cobre:
  *  - Construção (metadata, admin inicial, supply zero, roles configuradas).
- *  - mintGenesis one-shot (segunda chamada reverte com GenesisAlreadyMinted).
+ *  - Sem caminho de mint fora de MINTER_ROLE (mintGenesis removido 2026-09-23).
  *  - MINTER_ROLE mint (happy + unauthorized + zero guards).
  *  - ERC20Burnable self-burn (holder queima o próprio saldo).
  *  - ERC20Burnable burnFrom (terceiros queimam com allowance — fluxo padrão).
@@ -20,7 +20,6 @@ import { loadFixture } from "@nomicfoundation/hardhat-network-helpers";
 describe("CreditToken", function () {
   const NAME = "Web3Community Credit";
   const SYMBOL = "CREDIT";
-  const GENESIS_AMOUNT = 10_000_000n * 10n ** 18n; // 10M
 
   async function deployFixture() {
     const [admin, minter, burner, treasury, alice, bob, carol, dave] = await ethers.getSigners();
@@ -57,10 +56,15 @@ describe("CreditToken", function () {
       expect(await credit.decimals()).to.equal(18);
     });
 
-    it("starts with zero total supply (genesis not yet minted)", async function () {
+    it("starts with zero total supply", async function () {
       const { credit } = await loadFixture(deployFixture);
       expect(await credit.totalSupply()).to.equal(0n);
-      expect(await credit.genesisMinted()).to.equal(false);
+    });
+
+    it("exposes no mint path outside MINTER_ROLE (mintGenesis removed)", async function () {
+      const { credit } = await loadFixture(deployFixture);
+      expect(credit.interface.getFunction("mintGenesis")).to.equal(null);
+      expect(credit.interface.getFunction("genesisMinted")).to.equal(null);
     });
 
     it("grants DEFAULT_ADMIN_ROLE to the initial admin", async function () {
@@ -95,54 +99,6 @@ describe("CreditToken", function () {
       expect(await credit.supportsInterface("0x01ffc9a7")).to.equal(true);
       // Random interfaceId -> false
       expect(await credit.supportsInterface("0xffffffff")).to.equal(false);
-    });
-  });
-
-  describe("mintGenesis (one-shot)", function () {
-    it("admin can mint the genesis supply and flips the flag", async function () {
-      const { credit, admin, treasury } = await loadFixture(deployFixture);
-
-      await expect(credit.connect(admin).mintGenesis(treasury.address, GENESIS_AMOUNT))
-        .to.emit(credit, "GenesisMinted")
-        .withArgs(treasury.address, GENESIS_AMOUNT);
-
-      expect(await credit.balanceOf(treasury.address)).to.equal(GENESIS_AMOUNT);
-      expect(await credit.totalSupply()).to.equal(GENESIS_AMOUNT);
-      expect(await credit.genesisMinted()).to.equal(true);
-    });
-
-    it("reverts on second call with GenesisAlreadyMinted", async function () {
-      const { credit, admin, treasury } = await loadFixture(deployFixture);
-
-      await credit.connect(admin).mintGenesis(treasury.address, GENESIS_AMOUNT);
-
-      await expect(
-        credit.connect(admin).mintGenesis(treasury.address, 1n),
-      ).to.be.revertedWithCustomError(credit, "GenesisAlreadyMinted");
-    });
-
-    it("reverts when non-admin calls mintGenesis", async function () {
-      const { credit, alice, treasury, DEFAULT_ADMIN_ROLE } = await loadFixture(deployFixture);
-
-      await expect(credit.connect(alice).mintGenesis(treasury.address, GENESIS_AMOUNT))
-        .to.be.revertedWithCustomError(credit, "AccessControlUnauthorizedAccount")
-        .withArgs(alice.address, DEFAULT_ADMIN_ROLE);
-    });
-
-    it("reverts when genesis recipient is zero address", async function () {
-      const { credit, admin } = await loadFixture(deployFixture);
-
-      await expect(
-        credit.connect(admin).mintGenesis(ethers.ZeroAddress, GENESIS_AMOUNT),
-      ).to.be.revertedWithCustomError(credit, "ZeroAddress");
-    });
-
-    it("reverts when genesis amount is zero", async function () {
-      const { credit, admin, treasury } = await loadFixture(deployFixture);
-
-      await expect(
-        credit.connect(admin).mintGenesis(treasury.address, 0n),
-      ).to.be.revertedWithCustomError(credit, "ZeroAmount");
     });
   });
 

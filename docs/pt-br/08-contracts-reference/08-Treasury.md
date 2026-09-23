@@ -75,7 +75,7 @@ function ethBalance() external view returns (uint256)             // saldo de ET
 | `DEFAULT_ADMIN_ROLE` | `CommunityTimelock` — existe só para gerir roles (padrão OZ). |
 | `GOVERNANCE_ROLE` | `CommunityTimelock` — única capaz de movimentar fundos. |
 
-No deploy o admin é transferido ao Timelock e o deployer renuncia. Alterar quem detém essas roles no Treasury exige **supermaioria de 75%** no [CommunityGovernor](10-CommunityGovernor.md).
+No deploy o admin é transferido ao Timelock e o deployer renuncia. Alterar quem detém essas roles **e qualquer saída de fundos** (`transfer`/`transferETH`) exige **supermaioria de 75%** no [CommunityGovernor](10-CommunityGovernor.md) — desde 2026-09-23 a supermaioria protege o cofre, não só as chaves.
 
 ## Invariantes
 

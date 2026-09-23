@@ -47,7 +47,7 @@ Herdados: `CallScheduled`, `CallExecuted`, `CallSalt`, `Cancelled`, `MinDelayCha
 | `EXECUTOR_ROLE` | `address(0)` — execução permissionless após o delay (o delay é o gate real). |
 | `DEFAULT_ADMIN_ROLE` | Deployer no bootstrap; renuncia ao final → Timelock self-administered. |
 
-Alterar quem detém roles **no próprio Timelock** exige supermaioria de 75% no Governor.
+Alterar quem detém roles **no próprio Timelock** e mudar o `minDelay` (`updateDelay`) exigem supermaioria de 75% no Governor.
 
 ## Invariantes
 

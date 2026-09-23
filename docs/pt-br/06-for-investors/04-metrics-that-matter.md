@@ -5,19 +5,27 @@
 
 Tudo aqui é **verificável on-chain** — nenhuma métrica depende de dashboard fechado ou de números autorreportados. Esta página mapeia cada métrica à função que a expõe.
 
-## Volume: a métrica-mãe
+## Volume: a métrica-mãe (e a mais fácil de forjar)
 
-Todo o resto (buyback, rev-share) deriva do volume bruto processado.
+Todo o resto (buyback, rev-share) deriva do volume processado. Leia-o com três funções, na ordem:
 
-### `FeeRouterV2.grossVolumeOf(projectId)`
+### `FeeRouterV2.recentVolumeOf(projectId)` — o número que a UI mostra
 
-Volume bruto acumulado (GMV) de um projeto, em CREDIT (18 decimais). Cada `pay` soma `amount` a esse contador.
+Volume **não-self** com decaimento exponencial (meia-vida `volumeHalfLife`, default 30 dias). Um wash em rajada evapora; sustentar um número falso custa ~2,5% dele a cada meia-vida.
 
 ```ts
-const gmv = await sdk.feeRouterV2.grossVolumeOf(1n)
+const recent = await sdk.feeRouterV2.recentVolumeOf(1n)
 ```
 
-Por que importa: é o denominador da tese. O buyback de GOV é ~1% desse volume; o rev-share do investidor é `revShareBps` desse volume. Um projeto com GMV estagnado não vai render, por melhor que seja a narrativa. Acompanhe a **tendência**, não o valor absoluto — GMV crescente é o sinal de saúde.
+### `FeeRouterV2.uniquePayersOf(projectId)` — quantas carteiras distintas pagaram
+
+Cresce uma vez por carteira. Inflável com carteiras novas ao custo de gas — por isso vale mais **cruzado** com o volume: 10.000 CREDIT de 3 pagadores é um sinal diferente de 10.000 CREDIT de 300.
+
+### `FeeRouterV2.grossVolumeOf(projectId)` — auditoria
+
+Soma histórica sem decaimento. Serve para reconciliar eventos `PaymentRouted`, não para avaliar tração: nunca cai, e um wash de um ano atrás ainda está lá.
+
+**O que nenhum dos três prova:** que os pagadores são terceiros. O router só descarta pagamentos da carteira do owner/`appRecipient` (`selfPayment`); uma segunda carteira do dono passa. Por isso a régua é **tendência + pagadores distintos com histórico em outros projetos**, não o valor absoluto. O buyback de GOV é ~1% do volume real; o rev-share é `revShareBps` dele — se o volume for circular, o rev-share também é (e volta para quem o gerou).
 
 ### `FeeRouterV2.feeBps`
 
@@ -33,7 +41,7 @@ Receita bruta total já **distribuída** aos investidores daquele projeto, em CR
 const distributed = await funding.totalRevenueDistributed(1n)
 ```
 
-Por que importa: é a prova concreta de que a posição de rev-share está pagando. Compare com o alvo captado (`target`) para estimar o retorno percentual já realizado da rodada.
+Por que importa: mostra que a posição de rev-share está pagando. Compare com o alvo captado (`target`) para estimar o retorno percentual já realizado da rodada. **Atenção:** este contador **inclui** self-payments (o rev-share de um pagamento do próprio owner também é notificado) — um dono que detenha as shares da própria rodada infla o "% retornado" pagando a si mesmo.
 
 ### `ProjectFunding.pendingRevenue(projectId, investor)`
 
@@ -43,7 +51,7 @@ Quanto **você** especificamente tem a sacar agora, dado suas shares e o acumula
 const claimable = await funding.pendingRevenue(1n, minhaCarteira)
 ```
 
-Lembre: sacar (`claim`) exige manter GOV stakeado no projeto; o valor nunca expira.
+Lembre: sacar (`claim`) exige ter GOV stakeado no projeto (peso > 0) no momento do saque; o valor acruado fica retido, não expira — salvo se o projeto for removido do Registry (aí `stake()` reverte e o pendente fica preso).
 
 ## Lastro: a integridade do CREDIT
 
@@ -70,7 +78,7 @@ yield realizado da rodada ≈ totalRevenueDistributed(projectId) / target
 sua fatia estimada        ≈ suas shares / raised  (== CREDIT investido / total captado)
 ```
 
-Para projetar yield futuro, o driver é a **taxa de crescimento do GMV** (`grossVolumeOf`) e o `revShareBps` da rodada. Modelo honesto: `rev-share por período ≈ revShareBps * ΔGMV do período`. Nenhuma dessas contas é garantida — todas dependem de o app faturar.
+Para projetar yield futuro, o driver é a **taxa de crescimento do volume recente** (`recentVolumeOf`) e o `revShareBps` da rodada. Modelo honesto: `rev-share por período ≈ revShareBps * ΔGMV do período`. Nenhuma dessas contas é garantida — todas dependem de o app faturar.
 
 ## Dados da rodada (para avaliar antes de entrar)
 
@@ -90,11 +98,13 @@ Consulte o mapping `rounds(projectId)` do `ProjectFunding` para os termos:
 
 Antes de entrar numa rodada, leia diretamente da chain:
 
-1. `grossVolumeOf(projectId)` — o app tem tração real? Cresce?
+1. `recentVolumeOf(projectId)` + `uniquePayersOf(projectId)` — o app tem tração recente **de carteiras distintas**? Cresce? (`grossVolumeOf` só para reconciliar histórico.)
+1b. `rounds(projectId).raised` vs. `Invested` events — a rodada foi preenchida por várias carteiras ou por uma só (auto-rodada)?
 2. `rounds(projectId)` — os termos (alvo, rev-share, prazo) fazem sentido?
 3. `totalRevenueDistributed(projectId)` — se já financiou antes, está pagando?
 4. `Registry.getProject(projectId)` — status `Active`? Colateral do owner condizente?
 5. `backing()` vs `mintedOutstanding` — o CREDIT que você vai aportar está lastreado?
+6. `Registry.getProject(projectId).owner` e `FeeRouterV2.appRecipientOf(projectId)` — quem recebe? O `appRecipient` pode ser trocado pelo owner **sem timelock**; o rev-share só existe enquanto o app receber pelo router (ver [Riscos](03-risk-and-security.md#risco-de-fuga-do-trilho-rev-share-inexigível)).
 
 ---
 

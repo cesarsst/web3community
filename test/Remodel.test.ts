@@ -167,8 +167,9 @@ describe("Remodel (PSM + ProjectFunding + FeeRouterV2)", function () {
 
     it("sell acima do lastro reverte (CREDIT de origem externa)", async function () {
       const { admin, alice, credit, psm } = await loadFixture(deployFixture);
-      // CREDIT vindo de fora do PSM (genesis) — sem lastro correspondente.
-      await credit.connect(admin).mintGenesis(alice.address, 1_000n * E18);
+      // CREDIT vindo de fora do PSM (minter avulso) — sem lastro correspondente.
+      await credit.connect(admin).grantRole(await credit.MINTER_ROLE(), admin.address);
+      await credit.connect(admin).mint(alice.address, 1_000n * E18, "test:unbacked");
       await credit.connect(alice).approve(await psm.getAddress(), ethers.MaxUint256);
       await expect(psm.connect(alice).sell(1_000n * E18)).to.be.revertedWithCustomError(
         psm,

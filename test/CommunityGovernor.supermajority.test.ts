@@ -499,9 +499,11 @@ describe("CommunityGovernor — supermajority proposal types", function () {
       expect(await governor.proposalRequiresSupermajority(pid)).to.equal(true);
     });
 
-    it("grantRole em contrato TERCEIRO permanece Standard (scan e target-scoped)", async function () {
-      const { governor, gov, admin, proposer, attacker } = await loadFixture(deployFixture);
-      // Outro Treasury qualquer, NAO wired ao Governor.
+    it("grantRole em contrato TERCEIRO tambem e Supermajority (scan por selector, target-agnostico)", async function () {
+      const { governor, admin, proposer, attacker } = await loadFixture(deployFixture);
+      // Outro contrato com AccessControl, NAO wired ao Governor — ex.: o
+      // CreditToken. grantRole(MINTER_ROLE) nele = CREDIT sem lastro
+      // (parecer 2026-09-23 #2); por isso o scan deixou de ser target-scoped.
       const Treasury = await ethers.getContractFactory("Treasury");
       const otherTreasury = await Treasury.deploy(admin.address);
       await otherTreasury.waitForDeployment();
@@ -517,7 +519,7 @@ describe("CommunityGovernor — supermajority proposal types", function () {
         [calldata],
         "role mgmt on unrelated contract",
       );
-      expect(await governor.proposalRequiresSupermajority(pid)).to.equal(false);
+      expect(await governor.proposalRequiresSupermajority(pid)).to.equal(true);
     });
   });
 
@@ -574,8 +576,8 @@ describe("CommunityGovernor — supermajority proposal types", function () {
     });
   });
 
-  describe("treasury com outro selector permanece Standard", function () {
-    it("Treasury.transfer com 74% For / 26% Against -> Succeeded (maioria simples)", async function () {
+  describe("saida do cofre (Treasury.transfer) exige supermaioria", function () {
+    it("Treasury.transfer com 74% For / 26% Against -> Defeated", async function () {
       const { governor, treasury, usdc, proposer, voter74, voter26, recipient } =
         await loadFixture(deployFixture);
 
@@ -584,17 +586,140 @@ describe("CommunityGovernor — supermajority proposal types", function () {
         proposer,
         [await treasury.getAddress()],
         [transferCalldata(treasury, await usdc.getAddress(), recipient.address)],
-        "standard: treasury transfer (74/26)",
+        "supermajority: treasury transfer (74/26)",
       );
-      // Mesmo target == treasury, o selector nao e gestao de roles -> Standard.
-      expect(await governor.proposalRequiresSupermajority(pid)).to.equal(false);
+      // Parecer 2026-09-23 #8: a supermaioria protegia as chaves, nao o cofre.
+      expect(await governor.proposalRequiresSupermajority(pid)).to.equal(true);
 
       await mine(VOTING_DELAY + 1);
       await governor.connect(voter74).castVote(pid, 1);
       await governor.connect(voter26).castVote(pid, 0);
       await mine(VOTING_PERIOD + 1);
 
+      expect(await governor.state(pid)).to.equal(STATE_DEFEATED);
+    });
+
+    it("Treasury.transfer com 76% For / 24% Against -> Succeeded", async function () {
+      const { governor, treasury, usdc, proposer, voter76, voter24, recipient } =
+        await loadFixture(deployFixture);
+
+      const pid = await propose(
+        governor,
+        proposer,
+        [await treasury.getAddress()],
+        [transferCalldata(treasury, await usdc.getAddress(), recipient.address)],
+        "supermajority: treasury transfer (76/24)",
+      );
+      await mine(VOTING_DELAY + 1);
+      await governor.connect(voter76).castVote(pid, 1);
+      await governor.connect(voter24).castVote(pid, 0);
+      await mine(VOTING_PERIOD + 1);
+
       expect(await governor.state(pid)).to.equal(STATE_SUCCEEDED);
+    });
+  });
+
+  describe("selectors criticos fora de gestao de roles (parecer 2026-09-23 #2/#3/#8)", function () {
+    // Interfaces minimas: so o selector importa para o scan de {propose}.
+    const feeRouterIface = new ethers.Interface([
+      "function setRecipients(address treasury_, address buyback_, address grants_)",
+      "function setFeeBps(uint16 newFeeBps)",
+    ]);
+    const registryIface = new ethers.Interface([
+      "function removeProject(uint256 projectId, bool slash, address treasury)",
+      "function setProbation(uint256 projectId)",
+    ]);
+
+    async function typeOf(
+      governor: any,
+      proposer: any,
+      target: string,
+      calldata: string,
+      desc: string,
+    ): Promise<boolean> {
+      const pid = await propose(governor, proposer, [target], [calldata], desc);
+      return governor.proposalRequiresSupermajority(pid);
+    }
+
+    it("GovernanceToken.mint (diluicao de GOV) e Supermajority", async function () {
+      const { governor, gov, proposer, attacker } = await loadFixture(deployFixture);
+      const calldata = gov.interface.encodeFunctionData("mint", [attacker.address, 1n, "capture"]);
+      expect(await typeOf(governor, proposer, await gov.getAddress(), calldata, "gov mint")).to.equal(true);
+    });
+
+    it("CreditToken.mint (CREDIT sem lastro) e Supermajority — mesma assinatura do GOV", async function () {
+      const { governor, admin, proposer, attacker } = await loadFixture(deployFixture);
+      const CreditToken = await ethers.getContractFactory("CreditToken");
+      const credit = await CreditToken.deploy("CREDIT", "CREDIT", admin.address);
+      await credit.waitForDeployment();
+      const calldata = credit.interface.encodeFunctionData("mint", [attacker.address, 1n, "unbacked"]);
+      expect(await typeOf(governor, proposer, await credit.getAddress(), calldata, "credit mint")).to.equal(true);
+    });
+
+    it("GovernanceToken.transferOwnership (novo minter de GOV) e Supermajority", async function () {
+      const { governor, gov, proposer, attacker } = await loadFixture(deployFixture);
+      const calldata = gov.interface.encodeFunctionData("transferOwnership", [attacker.address]);
+      expect(await typeOf(governor, proposer, await gov.getAddress(), calldata, "gov owner")).to.equal(true);
+    });
+
+    it("Timelock.updateDelay (zerar a ultima defesa) e Supermajority", async function () {
+      const { governor, timelock, proposer } = await loadFixture(deployFixture);
+      const calldata = timelock.interface.encodeFunctionData("updateDelay", [0n]);
+      expect(await typeOf(governor, proposer, await timelock.getAddress(), calldata, "delay 0")).to.equal(true);
+    });
+
+    it("Treasury.transferETH e Supermajority", async function () {
+      const { governor, treasury, proposer, attacker } = await loadFixture(deployFixture);
+      const calldata = treasury.interface.encodeFunctionData("transferETH", [attacker.address, 1n]);
+      expect(await typeOf(governor, proposer, await treasury.getAddress(), calldata, "eth out")).to.equal(true);
+    });
+
+    it("FeeRouterV2.setRecipients (desvio de 100% da fee) e Supermajority", async function () {
+      const { governor, proposer, attacker } = await loadFixture(deployFixture);
+      const calldata = feeRouterIface.encodeFunctionData("setRecipients", [
+        attacker.address,
+        attacker.address,
+        attacker.address,
+      ]);
+      expect(await typeOf(governor, proposer, attacker.address, calldata, "recipients")).to.equal(true);
+    });
+
+    it("ProjectRegistry.removeProject (slash p/ endereco arbitrario) e Supermajority", async function () {
+      const { governor, proposer, attacker } = await loadFixture(deployFixture);
+      const calldata = registryIface.encodeFunctionData("removeProject", [1n, true, attacker.address]);
+      expect(await typeOf(governor, proposer, attacker.address, calldata, "remove")).to.equal(true);
+    });
+
+    it("setters de parametro (setFeeBps, setProbation) permanecem Standard", async function () {
+      const { governor, proposer, attacker } = await loadFixture(deployFixture);
+      const fee = feeRouterIface.encodeFunctionData("setFeeBps", [300]);
+      expect(await typeOf(governor, proposer, attacker.address, fee, "fee")).to.equal(false);
+      const prob = registryIface.encodeFunctionData("setProbation", [1n]);
+      expect(await typeOf(governor, proposer, attacker.address, prob, "probation")).to.equal(false);
+    });
+
+    it("isSensitiveSelector expoe o conjunto exato", async function () {
+      const { governor } = await loadFixture(deployFixture);
+      const sel = (sig: string) => ethers.id(sig).slice(0, 10);
+      for (const sig of [
+        "grantRole(bytes32,address)",
+        "revokeRole(bytes32,address)",
+        "renounceRole(bytes32,address)",
+        "updateDelay(uint256)",
+        "mint(address,uint256,string)",
+        "transferOwnership(address)",
+        "transfer(address,address,uint256)",
+        "transferETH(address,uint256)",
+        "setRecipients(address,address,address)",
+        "removeProject(uint256,bool,address)",
+      ]) {
+        expect(await governor.isSensitiveSelector(sel(sig)), sig).to.equal(true);
+      }
+      for (const sig of ["setFeeBps(uint16)", "pay(uint256,uint256)", "transfer(address,uint256)"]) {
+        expect(await governor.isSensitiveSelector(sel(sig)), sig).to.equal(false);
+      }
+      expect(await governor.UPDATE_DELAY_SELECTOR()).to.equal(sel("updateDelay(uint256)"));
+      expect(await governor.MINT_SELECTOR()).to.equal(sel("mint(address,uint256,string)"));
     });
   });
 
@@ -613,13 +738,14 @@ describe("CommunityGovernor — supermajority proposal types", function () {
         .withArgs(pid, TYPE_SUPERMAJORITY);
     });
 
-    it("emite Standard (0) para proposta sem gestao de roles", async function () {
-      const { governor, treasury, usdc, proposer, recipient } = await loadFixture(deployFixture);
+    it("emite Standard (0) para proposta sem selector sensivel", async function () {
+      const { governor, proposer } = await loadFixture(deployFixture);
 
-      const targets = [await treasury.getAddress()];
+      // Setter de parametro do proprio Governor: fora do conjunto sensivel.
+      const targets = [await governor.getAddress()];
       const values = [0n];
-      const calldatas = [transferCalldata(treasury, await usdc.getAddress(), recipient.address)];
-      const desc = "event: treasury transfer";
+      const calldatas = [governor.interface.encodeFunctionData("setVotingDelay", [2])];
+      const desc = "event: bump voting delay";
       const pid = await governor.hashProposal(targets, values, calldatas, ethers.id(desc));
 
       await expect(governor.connect(proposer).propose(targets, values, calldatas, desc))

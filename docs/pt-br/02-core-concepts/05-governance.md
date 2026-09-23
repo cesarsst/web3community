@@ -47,15 +47,23 @@ quorum(timepoint)  // usa getPastTotalSupply do ERC20Votes
 
 Como usa `getPastVotes`/`getPastTotalSupply`, o voto é **imune a flash loans** que movam GOV no mesmo bloco (invariante I5). Você precisa ter GOV delegado (a si mesmo ou a outra conta) **antes** do snapshot.
 
-## Supermajoridade: 75% para gestão de roles
+## Supermajoridade: 75% para chamadas sensíveis
 
-Alterar quem detém roles no [Treasury](../08-contracts-reference/08-Treasury.md) ou no próprio Timelock muda quem pode movimentar o cofre da DAO — é o vetor clássico de captura. Por isso o `propose` **escaneia** os targets/calldatas da proposta:
+Algumas chamadas mudam quem controla o dinheiro — não um parâmetro. O `propose` **escaneia** os calldatas da proposta:
 
 ```solidity
-// qualquer call de grantRole/revokeRole/renounceRole com
-// target == TREASURY  OU  target == timelock()
+// qualquer call cujo selector esteja em isSensitiveSelector():
+//   grantRole / revokeRole / renounceRole   (em QUALQUER contrato)
+//   updateDelay                             (Timelock)
+//   mint(address,uint256,string)            (GOV e CREDIT)
+//   transferOwnership                       (owner do GOV)
+//   transfer / transferETH                  (Treasury)
+//   setRecipients                           (FeeRouterV2)
+//   removeProject                           (ProjectRegistry)
 // marca a proposta INTEIRA como Supermajority
 ```
+
+Por que a lista é essa: cada item é um caminho para criar CREDIT sem lastro, diluir GOV, esvaziar o Treasury, desviar a fee ou zerar o delay — coisas que uma maioria simples de 50%+1 não deveria conseguir (`audit/economist/2026-09-23-conceptual-gaming-review.md`).
 
 Quando marcada, `_voteSucceeded` passa a exigir:
 
@@ -63,7 +71,7 @@ Quando marcada, `_voteSucceeded` passa a exigir:
 return forVotes > 0 && forVotes >= 3 * againstVotes;   // For >= 75% dos votos decisivos
 ```
 
-Isto é, **For ≥ 75%** dos votos decisivos (For/Against; Abstain fora da razão). Um batch que **misture** gestão de roles do Treasury/Timelock com outras calls é contaminado **inteiro** pelo tipo Supermajority — de propósito: empacotar a call sensível junto de calls populares seria exatamente o vetor de diluição do requisito de 75%. O evento `ProposalTypeSet` sinaliza o tipo de toda proposta (inclusive Standard) para indexação off-chain.
+Isto é, **For ≥ 75%** dos votos decisivos (For/Against; Abstain fora da razão). Um batch que **misture** uma chamada sensível com outras calls é contaminado **inteiro** pelo tipo Supermajority — de propósito: empacotar a call sensível junto de calls populares seria exatamente o vetor de diluição do requisito de 75%. O evento `ProposalTypeSet` sinaliza o tipo de toda proposta (inclusive Standard) para indexação off-chain.
 
 ## Ciclo de uma proposta
 

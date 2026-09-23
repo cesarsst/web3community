@@ -15,6 +15,6 @@ Cada página segue o estilo código-primeiro: cabeçalho, Papel, Interface públ
 | 07 | [ProjectFunding](07-ProjectFunding.md) | Rodadas de captação all-or-nothing com rev-share 1%–30% e redistribuição de receita via acumulador MasterChef. |
 | 08 | [Treasury](08-Treasury.md) | Cofre simples multi-ativo: saídas de ERC20/ETH gated por `GOVERNANCE_ROLE` (Timelock). Sem POL/oracle/buyback. |
 | 09 | [CommunityTimelock](09-CommunityTimelock.md) | `TimelockController` da OZ: executa com delay as decisões aprovadas pelo Governor. |
-| 10 | [CommunityGovernor](10-CommunityGovernor.md) | Governor da OZ com supermaioria de 75% para gestão de roles no Treasury/Timelock. |
+| 10 | [CommunityGovernor](10-CommunityGovernor.md) | Governor da OZ com supermaioria de 75% para chamadas sensíveis (roles em qualquer contrato, mint GOV/CREDIT, saída do Treasury, `updateDelay`, `setRecipients`, `removeProject`). |
 | 11 | [TeamVesting](11-TeamVesting.md) | Vesting linear de GOV com cliff, revogável pelo Timelock (uma instância por membro). |
 | 12 | [DevFaucet](12-DevFaucet.md) | Faucet dev-only (rede local): drip de ETH + USDC; CREDIT compra-se no PSM. |

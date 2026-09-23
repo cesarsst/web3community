@@ -50,7 +50,7 @@ O CREDIT é resgatável 1:1 no PSM enquanto houver lastro — e o lastro é **in
 
 ## Quem controla os contratos?
 
-A DAO, via [`CommunityGovernor`](../08-contracts-reference/10-CommunityGovernor.md) + [`CommunityTimelock`](../08-contracts-reference/09-CommunityTimelock.md). Toda mudança governável passa por proposta + voto + delay de 2 dias. Nenhuma EOA tem poder unilateral em produção; gestão de roles do cofre exige supermaioria de 75%. Ver [Modelo de segurança](../09-advanced/03-security-model.md).
+A DAO, via [`CommunityGovernor`](../08-contracts-reference/10-CommunityGovernor.md) + [`CommunityTimelock`](../08-contracts-reference/09-CommunityTimelock.md). Toda mudança governável passa por proposta + voto + delay de 2 dias. Nenhuma EOA tem poder unilateral em produção; gestão de roles (em qualquer contrato), mint de GOV/CREDIT, saída de fundos do cofre e mudança do delay exigem supermaioria de 75%. Ver [Modelo de segurança](../09-advanced/03-security-model.md).
 
 ## Já dá para usar em mainnet?
 
